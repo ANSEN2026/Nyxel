@@ -1,0 +1,58 @@
+{
+  "name": "nyxel",
+  "productName": "Nyxel",
+  "version": "0.2.0-alpha.8",
+  "description": "Nyxel - texture and FBX model preview",
+  "author": "Nyxel",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 node scripts/run-electron.cjs\"",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p electron/tsconfig.json",
+    "build": "npm run build:renderer && npm run build:electron",
+    "start": "npm run build && node scripts/run-electron.cjs",
+    "dist": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/three": "^0.187.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "com.nyxel.app",
+    "productName": "Nyxel",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "electron/selector.html",
+      "electron/editor.html",
+      "resources/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

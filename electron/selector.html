@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nyxel 截图</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+        user-select: none;
+        cursor: crosshair;
+      }
+      #screen {
+        position: fixed;
+        inset: 0;
+        background-color: #000;
+        background-repeat: no-repeat;
+        background-size: 100% 100%;
+      }
+      .shade {
+        position: fixed;
+        background: rgba(0, 0, 0, 0.46);
+        pointer-events: none;
+      }
+      #shade-full { inset: 0; }
+      #shade-top, #shade-bottom, #shade-left, #shade-right { display: none; }
+      #selection {
+        position: fixed;
+        display: none;
+        border: 1px solid #00e676;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65), inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+        pointer-events: none;
+        z-index: 2;
+      }
+      #hint {
+        position: fixed;
+        top: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 7px 13px;
+        border-radius: 999px;
+        background: rgba(15, 17, 20, 0.76);
+        color: #e8ebf2;
+        font-size: 12px;
+        letter-spacing: 0.2px;
+        white-space: nowrap;
+        pointer-events: none;
+        z-index: 4;
+      }
+      #toolbar {
+        position: fixed;
+        left: 50%;
+        bottom: 26px;
+        transform: translateX(-50%);
+        display: none;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 10px;
+        background: rgba(15, 17, 20, 0.9);
+        color: #e8ebf2;
+        font-size: 12px;
+        box-shadow: 0 10px 36px rgba(0, 0, 0, 0.36);
+        z-index: 5;
+      }
+      #size {
+        min-width: 84px;
+        color: #aab2bf;
+        font-variant-numeric: tabular-nums;
+      }
+      #toolbar button {
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 7px;
+        padding: 6px 12px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #e8ebf2;
+        font: inherit;
+        cursor: pointer;
+      }
+      #toolbar button:hover { background: rgba(255, 255, 255, 0.16); }
+      #toolbar button.primary {
+        background: #00b85c;
+        border-color: #00b85c;
+        color: #fff;
+      }
+      #toolbar button.primary:hover { background: #00a552; }
+      #toolbar button.cancel { color: #fca5a5; }
+    </style>
+  </head>
+  <body>
+    <div id="screen"></div>
+    <div id="shade-full" class="shade"></div>
+    <div id="shade-top" class="shade"></div>
+    <div id="shade-bottom" class="shade"></div>
+    <div id="shade-left" class="shade"></div>
+    <div id="shade-right" class="shade"></div>
+    <div id="selection"></div>
+    <div id="hint">拖动选择区域 · 双击 / Enter 下一步 · Esc 取消</div>
+    <div id="toolbar">
+      <span id="size">0 × 0</span>
+      <button id="save" class="primary">下一步</button>
+      <button id="cancel" class="cancel">取消</button>
+    </div>
+
+    <script>
+      (() => {
+        const screenEl = document.getElementById('screen');
+        const shadeFull = document.getElementById('shade-full');
+        const shadeTop = document.getElementById('shade-top');
+        const shadeBottom = document.getElementById('shade-bottom');
+        const shadeLeft = document.getElementById('shade-left');
+        const shadeRight = document.getElementById('shade-right');
+        const selection = document.getElementById('selection');
+        const toolbar = document.getElementById('toolbar');
+        const sizeEl = document.getElementById('size');
+        const hint = document.getElementById('hint');
+        const saveButton = document.getElementById('save');
+        const cancelButton = document.getElementById('cancel');
+
+        let dragging = false;
+        let startX = 0;
+        let startY = 0;
+        let rect = null;
+
+        window.selector.onImage((dataUrl) => {
+          screenEl.style.backgroundImage = `url("${dataUrl}")`;
+        });
+
+        function clampRect(x, y, width, height) {
+          const left = Math.max(0, Math.min(window.innerWidth, x));
+          const top = Math.max(0, Math.min(window.innerHeight, y));
+          const right = Math.max(left, Math.min(window.innerWidth, x + width));
+          const bottom = Math.max(top, Math.min(window.innerHeight, y + height));
+          return { x: left, y: top, width: right - left, height: bottom - top };
+        }
+
+        function updateSelection(x, y, width, height) {
+          rect = clampRect(x, y, width, height);
+          const { x: left, y: top, width: w, height: h } = rect;
+          shadeFull.style.display = 'none';
+          shadeTop.style.display = 'block';
+          shadeBottom.style.display = 'block';
+          shadeLeft.style.display = 'block';
+          shadeRight.style.display = 'block';
+          shadeTop.style.cssText = `left:0;top:0;width:100%;height:${top}px;`;
+          shadeBottom.style.cssText = `left:0;top:${top + h}px;width:100%;height:${Math.max(0, window.innerHeight - top - h)}px;`;
+          shadeLeft.style.cssText = `left:0;top:${top}px;width:${left}px;height:${h}px;`;
+          shadeRight.style.cssText = `left:${left + w}px;top:${top}px;width:${Math.max(0, window.innerWidth - left - w)}px;height:${h}px;`;
+          selection.style.display = 'block';
+          selection.style.left = `${left}px`;
+          selection.style.top = `${top}px`;
+          selection.style.width = `${w}px`;
+          selection.style.height = `${h}px`;
+          sizeEl.textContent = `${Math.round(w)} × ${Math.round(h)}`;
+          toolbar.style.display = 'flex';
+          hint.style.opacity = '0.45';
+        }
+
+        function resetSelection() {
+          rect = null;
+          selection.style.display = 'none';
+          toolbar.style.display = 'none';
+          shadeFull.style.display = 'block';
+          shadeTop.style.display = 'none';
+          shadeBottom.style.display = 'none';
+          shadeLeft.style.display = 'none';
+          shadeRight.style.display = 'none';
+          hint.style.opacity = '1';
+        }
+
+        function contains(x, y) {
+          return rect && x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+        }
+
+        function confirm() {
+          if (!rect || rect.width < 3 || rect.height < 3) return;
+          window.selector.confirm({
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height)
+          });
+        }
+
+        document.addEventListener('pointerdown', (event) => {
+          if (event.target instanceof Element && event.target.closest('#toolbar')) return;
+          if (event.button === 2) {
+            window.selector.cancel();
+            return;
+          }
+          if (event.button !== 0) return;
+          dragging = true;
+          startX = event.clientX;
+          startY = event.clientY;
+          resetSelection();
+        });
+
+        document.addEventListener('pointermove', (event) => {
+          if (!dragging) return;
+          const x = Math.min(startX, event.clientX);
+          const y = Math.min(startY, event.clientY);
+          const width = Math.abs(event.clientX - startX);
+          const height = Math.abs(event.clientY - startY);
+          updateSelection(x, y, width, height);
+        });
+
+        document.addEventListener('pointerup', () => {
+          if (!dragging) return;
+          dragging = false;
+          if (!rect || rect.width < 3 || rect.height < 3) resetSelection();
+        });
+
+        document.addEventListener('dblclick', (event) => {
+          if (contains(event.clientX, event.clientY)) confirm();
+        });
+
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            window.selector.cancel();
+          } else if (event.key === 'Enter') {
+            event.preventDefault();
+            confirm();
+          }
+        });
+
+        document.addEventListener('contextmenu', (event) => event.preventDefault());
+        saveButton.addEventListener('click', confirm);
+        cancelButton.addEventListener('click', () => window.selector.cancel());
+        window.addEventListener('resize', () => {
+          if (rect) updateSelection(rect.x, rect.y, rect.width, rect.height);
+        });
+      })();
+    </script>
+  </body>
+</html>

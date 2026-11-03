@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nyxel 截图</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --panel: #11151c;
+        --panel-2: #161b24;
+        --panel-3: #1c222d;
+        --border: #232a36;
+        --border-strong: #313a4a;
+        --text: #e8ebf2;
+        --muted: #8a93a3;
+        --accent: #a6d0b5;
+        --accent-strong: #8fc3a2;
+        --accent-soft: rgba(166, 208, 181, 0.15);
+        --accent-ink: #0c3626;
+      }
+
+      * { box-sizing: border-box; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+        user-select: none;
+      }
+
+      body {
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--border);
+      }
+
+      .titlebar {
+        flex: none;
+        height: 46px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px 0 16px;
+        background: linear-gradient(90deg, #173d2d, #10261d);
+        border-bottom: 1px solid rgba(166, 208, 181, 0.14);
+        -webkit-app-region: drag;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+      }
+
+      .brand-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 12px rgba(166, 208, 181, 0.65);
+      }
+
+      .title-hint {
+        color: rgba(226, 241, 233, 0.62);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .window-actions {
+        margin-left: auto;
+        display: flex;
+        gap: 2px;
+        -webkit-app-region: no-drag;
+      }
+
+      .window-actions button {
+        width: 34px;
+        height: 30px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: rgba(235, 245, 239, 0.72);
+        font: inherit;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .window-actions button:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
+      }
+
+      .window-actions button.close:hover {
+        background: #b91c1c;
+      }
+
+      .stage {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 18px;
+        overflow: hidden;
+        background-color: #141821;
+        background-image:
+          linear-gradient(45deg, #202633 25%, transparent 25%),
+          linear-gradient(-45deg, #202633 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, #202633 75%),
+          linear-gradient(-45deg, transparent 75%, #202633 75%);
+        background-size: 22px 22px;
+        background-position: 0 0, 0 11px, 11px -11px, -11px 0;
+      }
+
+      .canvas-wrap {
+        position: relative;
+        line-height: 0;
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
+        border-radius: 3px;
+        overflow: hidden;
+        background: #0b0d12;
+      }
+
+      #canvas {
+        display: block;
+        max-width: 100%;
+        max-height: 100%;
+        cursor: crosshair;
+        touch-action: none;
+      }
+
+      .toolbar {
+        flex: none;
+        display: grid;
+        grid-template-columns: auto auto 1fr;
+        grid-template-areas:
+          "tools history colors"
+          "size size actions";
+        align-items: center;
+        gap: 8px 12px;
+        padding: 9px 12px;
+        background: var(--panel);
+        border-top: 1px solid var(--border);
+      }
+
+      .tools { grid-area: tools; }
+      .history { grid-area: history; }
+
+      .group {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--panel-2);
+        flex: none;
+      }
+
+      .toolbar button {
+        flex: none;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 6px 9px;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .toolbar button:hover {
+        background: var(--panel-3);
+        color: var(--text);
+      }
+
+      .toolbar button.active {
+        background: var(--accent);
+        color: var(--accent-ink);
+        border-color: var(--accent);
+      }
+
+      .toolbar button:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      .sep {
+        width: 1px;
+        height: 22px;
+        margin: 0 3px;
+        background: var(--border);
+      }
+
+      .colors {
+        grid-area: colors;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0 4px;
+        flex: none;
+        justify-self: start;
+      }
+
+      .toolbar .swatch {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        background: var(--swatch);
+        cursor: pointer;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+      }
+
+      .toolbar .swatch:hover {
+        background: var(--swatch);
+      }
+
+      .toolbar .swatch.active,
+      .toolbar .swatch.active:hover {
+        background: var(--swatch);
+        border-color: #fff;
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25);
+      }
+
+      .size-control {
+        grid-area: size;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+        flex: none;
+        justify-self: start;
+      }
+
+      .size-control input {
+        width: 88px;
+        accent-color: var(--accent);
+      }
+
+      #size-value {
+        min-width: 18px;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+
+      .actions {
+        grid-area: actions;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        flex: none;
+        justify-self: end;
+      }
+
+      .actions button {
+        padding: 7px 12px;
+        border: 1px solid var(--border-strong);
+        border-radius: 7px;
+        background: var(--panel-2);
+        color: var(--text);
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+      }
+
+      .actions button:hover {
+        background: var(--panel-3);
+      }
+
+      .actions button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-ink);
+        font-weight: 600;
+      }
+
+      .actions button.primary:hover {
+        background: var(--accent-strong);
+      }
+
+      .actions button.ghost {
+        background: transparent;
+        border-color: transparent;
+        color: var(--muted);
+      }
+
+      .actions button.ghost:hover {
+        color: var(--text);
+        background: var(--panel-2);
+      }
+
+      .status {
+        flex: none;
+        min-height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px 12px 7px;
+        color: var(--muted);
+        background: var(--panel);
+        font-size: 10px;
+        letter-spacing: 0.2px;
+      }
+
+      @media (max-width: 760px) {
+        .title-hint { display: none; }
+        .toolbar { gap: 7px; }
+        .actions { margin-left: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="titlebar">
+      <div class="brand"><span class="brand-dot"></span>Nyxel 截图</div>
+      <div class="title-hint">标记后保存 · 保存位置可自选</div>
+      <div class="window-actions">
+        <button id="minimize" type="button" title="最小化">─</button>
+        <button id="close" class="close" type="button" title="取消截图">×</button>
+      </div>
+    </header>
+
+    <main class="stage">
+      <div class="canvas-wrap">
+        <canvas id="canvas"></canvas>
+      </div>
+    </main>
+
+    <footer class="toolbar">
+      <div class="group tools">
+        <button data-tool="pen" class="active" type="button">画笔</button>
+        <button data-tool="highlighter" type="button">荧光笔</button>
+        <button data-tool="rect" type="button">矩形</button>
+        <button data-tool="arrow" type="button">箭头</button>
+      </div>
+      <div class="group history">
+        <button id="undo" type="button" disabled>撤销</button>
+        <button id="redo" type="button" disabled>重做</button>
+        <button id="clear" type="button">清空</button>
+      </div>
+      <div class="colors">
+        <button class="swatch active" data-color="#ef4444" style="--swatch:#ef4444" type="button" title="红色"></button>
+        <button class="swatch" data-color="#fbbf24" style="--swatch:#fbbf24" type="button" title="黄色"></button>
+        <button class="swatch" data-color="#34d399" style="--swatch:#34d399" type="button" title="绿色"></button>
+        <button class="swatch" data-color="#60a5fa" style="--swatch:#60a5fa" type="button" title="蓝色"></button>
+        <button class="swatch" data-color="#f8fafc" style="--swatch:#f8fafc" type="button" title="白色"></button>
+      </div>
+      <label class="size-control">粗细 <input id="brush" type="range" min="2" max="18" step="1" value="5"><span id="size-value">5</span></label>
+      <div class="actions">
+        <button id="copy" type="button">复制</button>
+        <button id="save" class="primary" type="button">批准并保存</button>
+        <button id="cancel" class="ghost" type="button">取消</button>
+      </div>
+    </footer>
+    <div id="status" class="status">拖动选择标记 · Ctrl+S 保存 · Esc 取消</div>
+
+    <script>
+      (() => {
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const stage = document.querySelector('.stage');
+        const statusEl = document.getElementById('status');
+        const saveButton = document.getElementById('save');
+        const copyButton = document.getElementById('copy');
+        const undoButton = document.getElementById('undo');
+        const redoButton = document.getElementById('redo');
+        const clearButton = document.getElementById('clear');
+        const brushInput = document.getElementById('brush');
+        const sizeValue = document.getElementById('size-value');
+        const toolButtons = Array.from(document.querySelectorAll('[data-tool]'));
+        const swatches = Array.from(document.querySelectorAll('.swatch'));
+
+        let image = null;
+        let annotations = [];
+        let redoStack = [];
+        let current = null;
+        let drawing = false;
+        let tool = 'pen';
+        let color = '#ef4444';
+        let brushSize = 5;
+        let renderQueued = false;
+        let busy = false;
+
+        function setStatus(text) {
+          statusEl.textContent = text;
+        }
+
+        function layout() {
+          if (!image) return;
+          const pad = 36;
+          const availableWidth = Math.max(1, stage.clientWidth - pad);
+          const availableHeight = Math.max(1, stage.clientHeight - pad);
+          const scale = Math.min(1, availableWidth / canvas.width, availableHeight / canvas.height);
+          canvas.style.width = `${Math.max(1, Math.round(canvas.width * scale))}px`;
+          canvas.style.height = `${Math.max(1, Math.round(canvas.height * scale))}px`;
+        }
+
+        function drawArrow(annotation) {
+          const { start, end, width } = annotation;
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const length = Math.hypot(dx, dy);
+          if (length < 2) return;
+          const angle = Math.atan2(dy, dx);
+          const head = Math.max(10, width * 4);
+          ctx.beginPath();
+          ctx.moveTo(start.x, start.y);
+          ctx.lineTo(end.x, end.y);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(end.x, end.y);
+          ctx.lineTo(end.x - head * Math.cos(angle - Math.PI / 6), end.y - head * Math.sin(angle - Math.PI / 6));
+          ctx.moveTo(end.x, end.y);
+          ctx.lineTo(end.x - head * Math.cos(angle + Math.PI / 6), end.y - head * Math.sin(angle + Math.PI / 6));
+          ctx.stroke();
+        }
+
+        function drawAnnotation(annotation) {
+          if (!annotation) return;
+          ctx.save();
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = annotation.color;
+          ctx.fillStyle = annotation.color;
+          ctx.globalAlpha = annotation.tool === 'highlighter' ? 0.32 : 1;
+          ctx.lineWidth = annotation.tool === 'highlighter' ? Math.max(10, annotation.width * 5) : annotation.width;
+
+          if (annotation.tool === 'pen' || annotation.tool === 'highlighter') {
+            const points = annotation.points;
+            if (!points.length) {
+              ctx.restore();
+              return;
+            }
+            if (points.length === 1) {
+              ctx.beginPath();
+              ctx.arc(points[0].x, points[0].y, ctx.lineWidth / 2, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.restore();
+              return;
+            }
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let index = 1; index < points.length; index += 1) {
+              ctx.lineTo(points[index].x, points[index].y);
+            }
+            ctx.stroke();
+          } else if (annotation.tool === 'rect') {
+            const x = Math.min(annotation.start.x, annotation.end.x);
+            const y = Math.min(annotation.start.y, annotation.end.y);
+            const width = Math.abs(annotation.end.x - annotation.start.x);
+            const height = Math.abs(annotation.end.y - annotation.start.y);
+            if (width >= 2 && height >= 2) ctx.strokeRect(x, y, width, height);
+          } else if (annotation.tool === 'arrow') {
+            drawArrow(annotation);
+          }
+          ctx.restore();
+        }
+
+        function render() {
+          if (!image) return;
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(image, 0, 0);
+          for (const annotation of annotations) drawAnnotation(annotation);
+          drawAnnotation(current);
+          updateButtons();
+        }
+
+        function requestRender() {
+          if (renderQueued) return;
+          renderQueued = true;
+          requestAnimationFrame(() => {
+            renderQueued = false;
+            render();
+          });
+        }
+
+        function updateButtons() {
+          undoButton.disabled = annotations.length === 0;
+          redoButton.disabled = redoStack.length === 0;
+          clearButton.disabled = annotations.length === 0;
+          saveButton.disabled = busy || !image;
+          copyButton.disabled = busy || !image;
+        }
+
+        function pointFromEvent(event) {
+          const rect = canvas.getBoundingClientRect();
+          return {
+            x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width,
+            y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height
+          };
+        }
+
+        function beginStroke(event) {
+          if (!image || busy || event.button !== 0) return;
+          event.preventDefault();
+          const point = pointFromEvent(event);
+          drawing = true;
+          redoStack = [];
+          if (tool === 'pen' || tool === 'highlighter') {
+            current = { tool, color, width: brushSize, points: [point, point] };
+          } else {
+            current = { tool, color, width: brushSize, start: point, end: point };
+          }
+          try {
+            canvas.setPointerCapture(event.pointerId);
+          } catch {
+            // ignore synthetic pointer events
+          }
+          requestRender();
+        }
+
+        function moveStroke(event) {
+          if (!drawing || !current) return;
+          event.preventDefault();
+          const point = pointFromEvent(event);
+          if (current.points) {
+            const last = current.points[current.points.length - 1];
+            if (!last || Math.hypot(point.x - last.x, point.y - last.y) >= 1.5) {
+              current.points.push(point);
+            }
+          } else {
+            current.end = point;
+          }
+          requestRender();
+        }
+
+        function endStroke(event) {
+          if (!drawing || !current) return;
+          drawing = false;
+          try {
+            if (event) canvas.releasePointerCapture(event.pointerId);
+          } catch {
+            // ignore
+          }
+          const annotation = current;
+          current = null;
+          let keep = true;
+          if (annotation.points) {
+            keep = annotation.points.length > 0;
+          } else {
+            keep = Math.hypot(annotation.end.x - annotation.start.x, annotation.end.y - annotation.start.y) >= 2;
+          }
+          if (keep) annotations.push(annotation);
+          render();
+        }
+
+        function undo() {
+          if (busy || !annotations.length) return;
+          redoStack.push(annotations.pop());
+          render();
+        }
+
+        function redo() {
+          if (busy || !redoStack.length) return;
+          annotations.push(redoStack.pop());
+          render();
+        }
+
+        function clearAll() {
+          if (busy || !annotations.length) return;
+          annotations = [];
+          redoStack = [];
+          render();
+        }
+
+        async function save() {
+          if (!image || busy) return;
+          busy = true;
+          updateButtons();
+          setStatus('正在打开保存位置…');
+          try {
+            const result = await window.editor.save(canvas.toDataURL('image/png'));
+            if (result.ok) {
+              setStatus('已保存');
+            } else if (result.cancelled) {
+              setStatus('已取消保存，可继续标记');
+            } else {
+              setStatus(`保存失败：${result.error || '未知错误'}`);
+            }
+          } catch (error) {
+            setStatus(`保存失败：${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            busy = false;
+            updateButtons();
+          }
+        }
+
+        async function copy() {
+          if (!image || busy) return;
+          busy = true;
+          updateButtons();
+          setStatus('正在复制…');
+          try {
+            const result = await window.editor.copy(canvas.toDataURL('image/png'));
+            if (result.ok) {
+              setStatus('已复制到剪贴板');
+            } else {
+              setStatus(`复制失败：${result.error || '未知错误'}`);
+            }
+          } catch (error) {
+            setStatus(`复制失败：${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            busy = false;
+            updateButtons();
+          }
+        }
+
+        function cancel() {
+          window.editor.cancel();
+        }
+
+        function setTool(nextTool) {
+          tool = nextTool;
+          toolButtons.forEach((button) => button.classList.toggle('active', button.dataset.tool === nextTool));
+        }
+
+        function setColor(nextColor) {
+          color = nextColor;
+          swatches.forEach((swatch) => swatch.classList.toggle('active', swatch.dataset.color === nextColor));
+        }
+
+        window.editor.onImage((payload) => {
+          const loaded = new Image();
+          loaded.onload = () => {
+            image = loaded;
+            canvas.width = loaded.naturalWidth;
+            canvas.height = loaded.naturalHeight;
+            annotations = [];
+            redoStack = [];
+            current = null;
+            drawing = false;
+            layout();
+            render();
+            setStatus(`${loaded.naturalWidth} × ${loaded.naturalHeight} · 标记后点“批准并保存”`);
+          };
+          loaded.onerror = () => setStatus('截图加载失败，请重新截图');
+          loaded.src = payload.dataUrl;
+        });
+
+        canvas.addEventListener('pointerdown', beginStroke);
+        canvas.addEventListener('pointermove', moveStroke);
+        canvas.addEventListener('pointerup', endStroke);
+        canvas.addEventListener('pointercancel', endStroke);
+        canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+        toolButtons.forEach((button) => {
+          button.addEventListener('click', () => setTool(button.dataset.tool));
+        });
+        swatches.forEach((swatch) => {
+          swatch.addEventListener('click', () => setColor(swatch.dataset.color));
+        });
+        brushInput.addEventListener('input', () => {
+          brushSize = Number(brushInput.value) || 5;
+          sizeValue.textContent = String(brushSize);
+        });
+        undoButton.addEventListener('click', undo);
+        redoButton.addEventListener('click', redo);
+        clearButton.addEventListener('click', clearAll);
+        saveButton.addEventListener('click', () => void save());
+        copyButton.addEventListener('click', () => void copy());
+        document.getElementById('cancel').addEventListener('click', cancel);
+        document.getElementById('close').addEventListener('click', cancel);
+        document.getElementById('minimize').addEventListener('click', () => window.editor.minimize());
+
+        window.addEventListener('resize', layout);
+        window.addEventListener('keydown', (event) => {
+          const key = event.key.toLowerCase();
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            cancel();
+            return;
+          }
+          if ((event.ctrlKey || event.metaKey) && key === 's') {
+            event.preventDefault();
+            void save();
+            return;
+          }
+          if ((event.ctrlKey || event.metaKey) && key === 'c') {
+            event.preventDefault();
+            void copy();
+            return;
+          }
+          if ((event.ctrlKey || event.metaKey) && key === 'z') {
+            event.preventDefault();
+            if (event.shiftKey) redo();
+            else undo();
+          }
+          if ((event.ctrlKey || event.metaKey) && key === 'y') {
+            event.preventDefault();
+            redo();
+          }
+        });
+
+        updateButtons();
+      })();
+    </script>
+  </body>
+</html>
