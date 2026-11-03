@@ -2,6 +2,10 @@
 
 贴图、FBX 模型与配色分析桌面应用。当前是在 v0.1 MVP 基础上，按 `Nyxel-需求规格-v0.2.md` 做的 v0.2 增量版本。
 
+- B站：https://space.bilibili.com/354642845?spm_id_from=333.1007.0.0
+- 爱发电：https://ifdian.net/a/nyxelstudio
+- QQ 群：757979659
+
 ## 最新增量
 
 - **贴图预览颜色校正**：贴图查看器不再对 sRGB 贴图做二次解码，预览颜色与原图保持一致
