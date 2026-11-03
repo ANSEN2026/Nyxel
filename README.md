@@ -69,6 +69,7 @@ npm run dist    # 生成 NSIS 安装包
 
 - `release/Nyxel Setup 0.2.0-alpha.8.exe`（NSIS，未签名）
 - `release/win-unpacked/Nyxel.exe`（免安装目录）
+- GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases/tag/v0.2.0-alpha.8
 - 安装时选择的目录若最后一级不是 `Nyxel`，安装器会自动创建 `Nyxel` 子文件夹；如果已经是 `Nyxel` 则直接使用，避免出现 `Nyxel\Nyxel`
 
 ## 已知限制（相对完整规格）
