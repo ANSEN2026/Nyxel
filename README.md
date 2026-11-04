@@ -1,4 +1,4 @@
-# Nyxel v0.2 Alpha（贴图颜色 / 截图 / 文件管理增量）
+# Nyxel v0.2 Alpha（贴图颜色 / 截图 / 文件管理 / 视频压缩增量）
 
 贴图、FBX 模型与配色分析桌面应用。当前是在 v0.1 MVP 基础上，按 `Nyxel-需求规格-v0.2.md` 做的 v0.2 增量版本。
 
@@ -15,6 +15,7 @@
 - **关于我们**：左侧栏底部新增圆形感叹号按钮，展示 B站、爱发电、GitHub 和 QQ 群信息，链接可直接打开
 - **检查更新**：设置 → 关于 → 检查更新，通过 GitHub Releases 按稳定 / 测试通道查询；发现新版本可直接打开下载页
 - **视频压缩**：左侧栏新增视频工作区，支持 H.264 / H.265、CRF、分辨率、帧率和音频设置；首次使用按需下载 ffmpeg，压缩过程显示进度、可取消
+- **导航图标**：贴图改为网格图标，模型改为三维立方体图标
 - **配色分析工作区**（Ctrl+3）：4 / 6 / 8 / 12 色提取，感知 / 像素占比，忽略近黑近白，透明像素阈值
 - 横向堆叠色条 + 色块列表（HEX / 占比 / 中文近色名），占比 < 1% 归入「其他」
 - 悬停色块高亮图片中对应像素，点击复制 HEX，支持导出 JSON
@@ -74,9 +75,9 @@ npm run dist    # 生成 NSIS 安装包
 
 ## 打包产物
 
-- `release/Nyxel Setup 0.2.0-alpha.10.exe`（NSIS，未签名）
+- `release/Nyxel Setup 0.2.0-alpha.11.exe`（NSIS，未签名）
 - `release/win-unpacked/Nyxel.exe`（免安装目录）
-- GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases/tag/v0.2.0-alpha.10
+- GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases/tag/v0.2.0-alpha.11
 - 安装时选择的目录若最后一级不是 `Nyxel`，安装器会自动创建 `Nyxel` 子文件夹；如果已经是 `Nyxel` 则直接使用，避免出现 `Nyxel\Nyxel`
 
 ## 已知限制（相对完整规格）

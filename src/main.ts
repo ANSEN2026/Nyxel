@@ -18,8 +18,14 @@ appRoot.innerHTML = `
       <img class="logo" src="${logoUrl}" alt="Nyxel" draggable="false" />
       <nav class="nav">
         <button class="nav-button active" data-view="home" type="button">⌂<span class="nav-tooltip">首页 Ctrl+0</span></button>
-        <button class="nav-button" data-view="texture" type="button">▤<span class="nav-tooltip">贴图 Ctrl+1</span></button>
-        <button class="nav-button" data-view="model" type="button">◈<span class="nav-tooltip">模型 Ctrl+2</span></button>
+        <button class="nav-button" data-view="texture" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.5h16M4 14.5h16M9.5 4v16M14.5 4v16"/></svg>
+          <span class="nav-tooltip">贴图 Ctrl+1</span>
+        </button>
+        <button class="nav-button" data-view="model" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 21 8v8l-9 5-9-5V8z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>
+          <span class="nav-tooltip">模型 Ctrl+2</span>
+        </button>
         <button class="nav-button" data-view="color" type="button">◑<span class="nav-tooltip">配色 Ctrl+3</span></button>
         <div class="nav-divider"></div>
         <div class="nav-section-title">文件</div>
