@@ -8,6 +8,7 @@ export class SettingsView {
   private saveHandler: (settings: Settings) => Promise<void>;
   private toast: ToastApi;
   private body: HTMLElement;
+  private updateUrl = '';
 
   constructor(saveHandler: (settings: Settings) => Promise<void>, toast: ToastApi) {
     this.saveHandler = saveHandler;
@@ -153,19 +154,21 @@ export class SettingsView {
               <div class="settings-control">
                 <select id="set-channel">
                   <option value="stable">稳定</option>
-                  <option value="beta">测试</option>
+                  <option value="beta">测试（含 Alpha）</option>
                 </select>
               </div>
             </div>
+            <div class="settings-hint" id="set-update-status">点击「检查更新」会访问 GitHub Releases；稳定频道只检查正式版，测试频道包含 Alpha / Beta。</div>
           </section>
 
           <section class="settings-section">
             <h3>关于</h3>
             <div class="about-box">
-              <div><strong>Nyxel</strong> <span id="set-version">v0.2.0-alpha.4</span> · v0.2 Alpha</div>
+              <div><strong>Nyxel</strong> <span id="set-version">v0.2</span> · v0.2 Alpha</div>
               <div id="set-runtime" class="muted"></div>
               <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
                 <button data-action="check-update">检查更新</button>
+                <button data-action="open-update" class="hidden">下载更新</button>
                 <button data-action="licenses">许可清单</button>
                 <button data-action="privacy">隐私说明</button>
               </div>
@@ -271,8 +274,46 @@ export class SettingsView {
       }
     });
 
-    this.element.querySelector('[data-action="check-update"]')?.addEventListener('click', () => {
-      this.toast('v0.1 原型暂未接入自动更新，发布流程后续补齐', 'info');
+    const checkUpdateButton = this.element.querySelector('[data-action="check-update"]') as HTMLButtonElement | null;
+    const openUpdateButton = this.element.querySelector('[data-action="open-update"]') as HTMLButtonElement | null;
+    checkUpdateButton?.addEventListener('click', async () => {
+      if (!checkUpdateButton) return;
+      const status = this.element.querySelector('#set-update-status') as HTMLElement | null;
+      checkUpdateButton.disabled = true;
+      checkUpdateButton.textContent = '检查中…';
+      openUpdateButton?.classList.add('hidden');
+      this.updateUrl = '';
+      if (status) status.textContent = '正在访问 GitHub Releases…';
+      try {
+        const result = await window.nyxel.update.check();
+        if (!result.ok) {
+          if (status) status.textContent = `检查失败：${result.error ?? '未知错误'}`;
+          this.toast(`检查更新失败：${result.error ?? '未知错误'}`, 'error');
+          return;
+        }
+        if (result.hasUpdate) {
+          this.updateUrl = result.downloadUrl ?? result.releaseUrl ?? '';
+          if (status) {
+            status.textContent = `发现新版本 ${result.latestTag ?? result.latestVersion}（当前 v${result.currentVersion}）`;
+          }
+          openUpdateButton?.classList.remove('hidden');
+          this.toast(`发现新版本 ${result.latestTag ?? result.latestVersion}`, 'success');
+        } else {
+          if (status) status.textContent = result.message ?? `已是最新版本（v${result.currentVersion}）`;
+          this.toast(result.message ?? '已是最新版本', 'success');
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (status) status.textContent = `检查失败：${message}`;
+        this.toast(`检查更新失败：${message}`, 'error');
+      } finally {
+        checkUpdateButton.disabled = false;
+        checkUpdateButton.textContent = '检查更新';
+      }
+    });
+    openUpdateButton?.addEventListener('click', () => {
+      if (!this.updateUrl) return;
+      window.open(this.updateUrl, '_blank');
     });
     this.element.querySelector('[data-action="licenses"]')?.addEventListener('click', () => {
       this.toast('许可清单：Electron、Three.js、Vite、TypeScript；完整清单将在发布前生成', 'info');

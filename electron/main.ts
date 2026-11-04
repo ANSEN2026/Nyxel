@@ -9,6 +9,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  net,
   screen,
   shell
 } from 'electron';
@@ -604,6 +605,149 @@ async function importLibraryTextures(folder: string): Promise<{ ok: boolean; imp
   }
   if (imported) notifyLibraryChanged();
   return { ok: true, imported };
+}
+
+const UPDATE_REPO = 'ANSEN2026/Nyxel';
+const UPDATE_API = `https://api.github.com/repos/${UPDATE_REPO}/releases?per_page=20`;
+
+interface GithubRelease {
+  tag_name: string;
+  name: string;
+  html_url: string;
+  body: string;
+  draft: boolean;
+  prerelease: boolean;
+  published_at: string;
+  assets: Array<{ name: string; browser_download_url: string; size: number }>;
+}
+
+interface UpdateCheckResult {
+  ok: boolean;
+  currentVersion: string;
+  latestVersion?: string;
+  latestTag?: string;
+  hasUpdate?: boolean;
+  releaseUrl?: string;
+  downloadUrl?: string;
+  publishedAt?: string;
+  channel?: string;
+  message?: string;
+  error?: string;
+}
+
+function parseVersion(value: string): { major: number; minor: number; patch: number; pre: string } | null {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(String(value).trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    pre: match[4] ?? ''
+  };
+}
+
+function comparePrerelease(left: string, right: string): number {
+  if (!left && !right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+  const leftParts = left.split('.');
+  const rightParts = right.split('.');
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index];
+    const rightPart = rightParts[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    if (leftNumeric && rightNumeric) {
+      const difference = Number(leftPart) - Number(rightPart);
+      if (difference !== 0) return difference;
+    } else if (leftNumeric) {
+      return -1;
+    } else if (rightNumeric) {
+      return 1;
+    } else {
+      const difference = leftPart.localeCompare(rightPart);
+      if (difference !== 0) return difference;
+    }
+  }
+  return 0;
+}
+
+function compareVersions(left: string, right: string): number {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  if (!a || !b) return String(left).localeCompare(String(right));
+  if (a.major !== b.major) return a.major - b.major;
+  if (a.minor !== b.minor) return a.minor - b.minor;
+  if (a.patch !== b.patch) return a.patch - b.patch;
+  return comparePrerelease(a.pre, b.pre);
+}
+
+async function checkForUpdates(): Promise<UpdateCheckResult> {
+  const settings = loadSettings();
+  const channel = process.env.NYXEL_UPDATE_CHANNEL || settings.updateChannel;
+  const currentVersion = app.getVersion();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await net.fetch(UPDATE_API, {
+      headers: {
+        'User-Agent': 'Nyxel-Update-Checker',
+        Accept: 'application/vnd.github+json'
+      },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      return { ok: false, currentVersion, channel, error: `GitHub 返回 ${response.status}` };
+    }
+    const releases = await response.json() as GithubRelease[];
+    const candidates = releases.filter((release) => !release.draft && (channel === 'beta' || !release.prerelease));
+    if (!candidates.length) {
+      return {
+        ok: true,
+        currentVersion,
+        channel,
+        hasUpdate: false,
+        message: channel === 'stable'
+          ? '稳定频道暂无新版本；可切换到「测试（含 Alpha）」查看预发布版本。'
+          : '暂无可用的新版本。'
+      };
+    }
+
+    const latest = candidates.reduce((best, release) => {
+      if (!best) return release;
+      return compareVersions(release.tag_name, best.tag_name) > 0 ? release : best;
+    }, candidates[0]);
+    const latestVersion = latest.tag_name.replace(/^v/i, '');
+    const hasUpdate = compareVersions(latest.tag_name, currentVersion) > 0;
+    const installer = latest.assets.find((asset) => asset.name.toLowerCase().endsWith('.exe'));
+    return {
+      ok: true,
+      currentVersion,
+      latestVersion,
+      latestTag: latest.tag_name,
+      hasUpdate,
+      releaseUrl: latest.html_url,
+      downloadUrl: installer?.browser_download_url ?? latest.html_url,
+      publishedAt: latest.published_at,
+      channel,
+      message: hasUpdate ? `发现新版本 ${latest.tag_name}` : `已是最新版本（v${currentVersion}）`
+    };
+  } catch (error) {
+    const message = error instanceof Error && error.name === 'AbortError'
+      ? '网络请求超时，请检查网络或代理设置'
+      : error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      currentVersion,
+      channel,
+      error: message
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function captureFullScreen(): Promise<string> {
@@ -1412,6 +1556,8 @@ function registerIpc(): void {
       hotkeyRegistered
     };
   });
+
+  ipcMain.handle('update:check', async () => checkForUpdates());
 
   ipcMain.handle('app:openPath', async (_event, target: string) => {
     const error = await shell.openPath(target);

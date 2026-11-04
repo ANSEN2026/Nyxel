@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('nyxel', {
     showItemInFolder: (target: string) => ipcRenderer.invoke('app:showItemInFolder', target),
     clearCache: () => ipcRenderer.invoke('app:clearCache')
   },
+  update: {
+    check: () => ipcRenderer.invoke('update:check')
+  },
   screenshot: {
     capture: () => ipcRenderer.invoke('screenshot:capture'),
     setHotkey: (accelerator: string) => ipcRenderer.invoke('screenshot:setHotkey', accelerator),

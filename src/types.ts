@@ -59,6 +59,20 @@ export interface AiUpscaleResult {
   error?: string;
 }
 
+export interface UpdateCheckResult {
+  ok: boolean;
+  currentVersion: string;
+  latestVersion?: string;
+  latestTag?: string;
+  hasUpdate?: boolean;
+  releaseUrl?: string;
+  downloadUrl?: string;
+  publishedAt?: string;
+  channel?: string;
+  message?: string;
+  error?: string;
+}
+
 export interface LibraryFile {
   name: string;
   path: string;
@@ -131,6 +145,9 @@ export interface NyxelApi {
     openPath: (target: string) => Promise<string>;
     showItemInFolder: (target: string) => Promise<void>;
     clearCache: () => Promise<boolean>;
+  };
+  update: {
+    check: () => Promise<UpdateCheckResult>;
   };
   screenshot: {
     capture: () => Promise<{ ok: boolean; path?: string; copied?: boolean; error?: string; cancelled?: boolean }>;

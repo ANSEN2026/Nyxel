@@ -13,6 +13,7 @@
 - **截图预览与标记**：框选后先进入预览窗口，支持画笔、荧光笔、矩形、箭头、撤销 / 重做、清空；点「批准并保存」后弹出保存位置，也可直接复制到剪贴板
 - **文件管理**：左侧栏新增「图库」和「贴图资源」；图库自动记录每次截图，贴图资源支持新建文件夹、导入贴图，点卡片可直接在贴图工作区打开
 - **关于我们**：左侧栏底部新增圆形感叹号按钮，展示 B站、爱发电、GitHub 和 QQ 群信息，链接可直接打开
+- **检查更新**：设置 → 关于 → 检查更新，通过 GitHub Releases 按稳定 / 测试通道查询；发现新版本可直接打开下载页
 - **配色分析工作区**（Ctrl+3）：4 / 6 / 8 / 12 色提取，感知 / 像素占比，忽略近黑近白，透明像素阈值
 - 横向堆叠色条 + 色块列表（HEX / 占比 / 中文近色名），占比 < 1% 归入「其他」
 - 悬停色块高亮图片中对应像素，点击复制 HEX，支持导出 JSON
@@ -71,9 +72,9 @@ npm run dist    # 生成 NSIS 安装包
 
 ## 打包产物
 
-- `release/Nyxel Setup 0.2.0-alpha.8.exe`（NSIS，未签名）
+- `release/Nyxel Setup 0.2.0-alpha.9.exe`（NSIS，未签名）
 - `release/win-unpacked/Nyxel.exe`（免安装目录）
-- GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases/tag/v0.2.0-alpha.8
+- GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases/tag/v0.2.0-alpha.9
 - 安装时选择的目录若最后一级不是 `Nyxel`，安装器会自动创建 `Nyxel` 子文件夹；如果已经是 `Nyxel` 则直接使用，避免出现 `Nyxel\Nyxel`
 
 ## 已知限制（相对完整规格）
@@ -90,7 +91,7 @@ npm run dist    # 生成 NSIS 安装包
 - EXR / HDR 贴图预览未接；TGA 已支持
 - 语言切换只保存配置，尚未接入完整 i18n
 - 硬件加速设置只保存，未在启动前实际应用
-- 自动更新、`latest.yml`、发布流程尚未接入
+- 自动更新目前是「检查并跳转 GitHub Release」，自动下载安装和 `latest.yml` 热更新尚未接入
 - 最近项目暂无缩略图
 - FBX UpAxis 默认 Y-up，弹窗可选 Z-up；尚未读取文件 GlobalSettings
 - Windows 10 上 DWM 圆角降级为普通窗口；Windows 11 可继续接圆角 / Mica
