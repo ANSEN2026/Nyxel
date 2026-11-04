@@ -128,11 +128,12 @@ export class SettingsView {
           <section class="settings-section">
             <h3>媒体</h3>
             <div class="settings-row">
-              <div class="settings-label">ffmpeg 路径</div>
+              <div class="settings-label">ffmpeg 运行时</div>
               <div class="settings-control">
-                <input id="set-ffmpeg" type="text" placeholder="v0.1 仅占位，暂未启用" disabled>
+                <input id="set-ffmpeg" type="text" placeholder="首次压缩时自动下载" disabled>
               </div>
             </div>
+            <div class="settings-hint">视频压缩工作区会在首次使用时下载 ffmpeg，并保存在本机运行时目录，之后可离线使用。</div>
           </section>
 
           <section class="settings-section">

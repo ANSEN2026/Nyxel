@@ -14,6 +14,7 @@
 - **文件管理**：左侧栏新增「图库」和「贴图资源」；图库自动记录每次截图，贴图资源支持新建文件夹、导入贴图，点卡片可直接在贴图工作区打开
 - **关于我们**：左侧栏底部新增圆形感叹号按钮，展示 B站、爱发电、GitHub 和 QQ 群信息，链接可直接打开
 - **检查更新**：设置 → 关于 → 检查更新，通过 GitHub Releases 按稳定 / 测试通道查询；发现新版本可直接打开下载页
+- **视频压缩**：左侧栏新增视频工作区，支持 H.264 / H.265、CRF、分辨率、帧率和音频设置；首次使用按需下载 ffmpeg，压缩过程显示进度、可取消
 - **配色分析工作区**（Ctrl+3）：4 / 6 / 8 / 12 色提取，感知 / 像素占比，忽略近黑近白，透明像素阈值
 - 横向堆叠色条 + 色块列表（HEX / 占比 / 中文近色名），占比 < 1% 归入「其他」
 - 悬停色块高亮图片中对应像素，点击复制 HEX，支持导出 JSON
@@ -21,6 +22,7 @@
 - 设置新增「配色」分类；`settings.json` 升级到 `schemaVersion: 2`，兼容旧配置
 - 左侧导航新增配色图标与 `Ctrl+3`
 - 左侧导航新增「图库 / 贴图资源」与 `Ctrl+4` / `Ctrl+5`
+- 左侧导航新增「视频压缩」与 `Ctrl+6`
 - **截图改为可拖拽框选区域**：多显示器各自覆盖，双击 / Enter 进入预览，Esc 取消
 - 设置新增「截图保存位置」，可单独更改截图目录
 - **模型工作区新增 UV 检视**（3D / UV 切换）：UV 标尺与 U/V 轴标记、多 UV 通道、材质分组、棋盘 / 纯色 / 当前贴图背景、2×2 象限平铺对比、越界标红、重叠检测、Texel Density、3D ↔ UV 双向选中
@@ -72,9 +74,9 @@ npm run dist    # 生成 NSIS 安装包
 
 ## 打包产物
 
-- `release/Nyxel Setup 0.2.0-alpha.9.exe`（NSIS，未签名）
+- `release/Nyxel Setup 0.2.0-alpha.10.exe`（NSIS，未签名）
 - `release/win-unpacked/Nyxel.exe`（免安装目录）
-- GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases/tag/v0.2.0-alpha.9
+- GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases/tag/v0.2.0-alpha.10
 - 安装时选择的目录若最后一级不是 `Nyxel`，安装器会自动创建 `Nyxel` 子文件夹；如果已经是 `Nyxel` 则直接使用，避免出现 `Nyxel\Nyxel`
 
 ## 已知限制（相对完整规格）
@@ -92,6 +94,8 @@ npm run dist    # 生成 NSIS 安装包
 - 语言切换只保存配置，尚未接入完整 i18n
 - 硬件加速设置只保存，未在启动前实际应用
 - 自动更新目前是「检查并跳转 GitHub Release」，自动下载安装和 `latest.yml` 热更新尚未接入
+- 视频压缩首次使用需下载约 200 MB 的 ffmpeg 运行时（BtbN GPL 构建）；当前提供单文件压缩，批量队列和硬件编码预设尚未接入
+- 使用 ffmpeg 时请遵循对应上游项目的 GPL 许可；正式公开分发前建议复核许可与再分发方式
 - 最近项目暂无缩略图
 - FBX UpAxis 默认 Y-up，弹窗可选 Z-up；尚未读取文件 GlobalSettings
 - Windows 10 上 DWM 圆角降级为普通窗口；Windows 11 可继续接圆角 / Mica

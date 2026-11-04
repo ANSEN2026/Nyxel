@@ -6,3 +6,6 @@ release/
 .DS_Store
 
 .update-test-profile/
+.video-test-profile/
+.video-packaged-profile/
+.update-packaged-profile/

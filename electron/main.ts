@@ -215,7 +215,15 @@ async function runAutomation(): Promise<void> {
   const capturePath = process.env.NYXEL_CAPTURE;
   const texturePath = process.env.NYXEL_TEST_TEXTURE;
   const modelPath = process.env.NYXEL_TEST_MODEL;
+  const videoPath = process.env.NYXEL_TEST_VIDEO;
 
+  if (videoPath) {
+    setTimeout(() => {
+      void mainWindow?.webContents.executeJavaScript(
+        `window.__nyxel?.openVideoPath(${JSON.stringify(videoPath)})`
+      ).catch((error) => console.error(error));
+    }, 600);
+  }
   if (texturePath) {
     setTimeout(() => {
       void mainWindow?.webContents.executeJavaScript(
@@ -1078,6 +1086,385 @@ function sendAiProgress(progress: AiProgress): void {
   }
 }
 
+const FFMPEG_BUILD_URL = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip';
+const FFMPEG_DOWNLOAD_URLS = [
+  FFMPEG_BUILD_URL,
+  `https://ghproxy.net/${FFMPEG_BUILD_URL}`,
+  `https://gh-proxy.com/${FFMPEG_BUILD_URL}`
+];
+
+let videoDownloading = false;
+let videoProgress: VideoProgress | null = null;
+let videoProcess: ChildProcess | null = null;
+let videoCancelled = false;
+
+interface VideoInfo {
+  path: string;
+  name: string;
+  size: number;
+  duration: number;
+  width: number;
+  height: number;
+  fps: number;
+  videoCodec: string;
+  audioCodec?: string;
+  bitrate?: number;
+}
+
+interface VideoProgress {
+  phase: 'download' | 'extract' | 'probe' | 'compress' | 'done' | 'error';
+  percent: number;
+  message?: string;
+  speed?: string;
+  currentTime?: number;
+  duration?: number;
+}
+
+interface VideoStatus {
+  available: boolean;
+  dir: string;
+  defaultOutputDir: string;
+  downloading: boolean;
+  progress?: VideoProgress;
+}
+
+interface VideoCompressOptions {
+  input: string;
+  outputDir: string;
+  codec: 'h264' | 'h265';
+  crf: number;
+  preset: string;
+  resolution: 'source' | '1080' | '720' | '480';
+  fps: 'source' | '60' | '30' | '24';
+  audio: 'aac192' | 'aac128' | 'aac96' | 'none';
+}
+
+interface VideoProbeJson {
+  streams?: Array<{
+    codec_type?: string;
+    codec_name?: string;
+    width?: number;
+    height?: number;
+    r_frame_rate?: string;
+    duration?: string;
+  }>;
+  format?: {
+    duration?: string;
+    bit_rate?: string;
+  };
+}
+
+function ffmpegRuntimeDir(): string {
+  return path.join(app.getPath('userData'), 'runtime', 'ffmpeg');
+}
+
+function ffmpegExePath(): string {
+  return path.join(ffmpegRuntimeDir(), 'ffmpeg.exe');
+}
+
+function ffprobeExePath(): string {
+  return path.join(ffmpegRuntimeDir(), 'ffprobe.exe');
+}
+
+function videoStatus(): VideoStatus {
+  return {
+    available: fs.existsSync(ffmpegExePath()) && fs.existsSync(ffprobeExePath()),
+    dir: ffmpegRuntimeDir(),
+    defaultOutputDir: path.join(app.getPath('documents'), 'Nyxel', 'Videos'),
+    downloading: videoDownloading,
+    progress: videoProgress ?? undefined
+  };
+}
+
+function sendVideoProgress(progress: VideoProgress): void {
+  videoProgress = progress;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('video:progress', progress);
+  }
+}
+
+function parseFps(value?: string): number {
+  if (!value) return 0;
+  const [numerator, denominator] = value.split('/').map(Number);
+  if (!Number.isFinite(numerator)) return 0;
+  if (!denominator) return numerator;
+  return numerator / denominator;
+}
+
+function parseTimeToSeconds(value?: string): number {
+  if (!value) return 0;
+  const parts = value.split(':').map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return 0;
+}
+
+async function downloadFfmpegRuntime(): Promise<{ ok: boolean; error?: string; status: VideoStatus }> {
+  if (videoStatus().available) return { ok: true, status: videoStatus() };
+  if (videoDownloading) return { ok: false, error: 'ffmpeg 正在下载中', status: videoStatus() };
+
+  videoDownloading = true;
+  const runtime = ffmpegRuntimeDir();
+  const staging = `${runtime}-staging`;
+  const zipPath = path.join(os.tmpdir(), `nyxel-ffmpeg-${process.pid}.zip`);
+
+  try {
+    await fs.promises.mkdir(runtime, { recursive: true });
+    sendVideoProgress({ phase: 'download', percent: 0, message: '连接 ffmpeg 下载服务器…' });
+
+    let zip: Buffer | null = null;
+    let lastError: Error | null = null;
+    for (const url of FFMPEG_DOWNLOAD_URLS) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error('无法读取下载数据');
+        const total = Number(response.headers.get('content-length') ?? 0);
+        const handle = await fs.promises.open(zipPath, 'w');
+        let received = 0;
+        let lastReport = 0;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!value) continue;
+            await handle.write(value);
+            received += value.byteLength;
+            const now = Date.now();
+            if (now - lastReport > 180) {
+              lastReport = now;
+              const percent = total ? Math.min(78, (received / total) * 78) : 0;
+              sendVideoProgress({
+                phase: 'download',
+                percent,
+                message: total
+                  ? `下载 ffmpeg ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`
+                  : `下载 ffmpeg ${(received / 1048576).toFixed(1)} MB`
+              });
+            }
+          }
+        } finally {
+          await handle.close();
+        }
+        zip = await fs.promises.readFile(zipPath);
+        break;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        await fs.promises.rm(zipPath, { force: true }).catch(() => undefined);
+      }
+    }
+
+    if (!zip) throw lastError ?? new Error('ffmpeg 下载失败');
+
+    sendVideoProgress({ phase: 'extract', percent: 82, message: '解压 ffmpeg…' });
+    const entries = unzipSync(new Uint8Array(zip), {
+      filter: (file) => /(^|\/)(ffmpeg|ffprobe)\.exe$/i.test(file.name) || /(^|\/)LICENSE/i.test(file.name)
+    });
+    await fs.promises.rm(staging, { recursive: true, force: true });
+    await fs.promises.mkdir(staging, { recursive: true });
+    for (const [name, data] of Object.entries(entries)) {
+      const base = path.basename(name);
+      if (!base) continue;
+      await fs.promises.writeFile(path.join(staging, base), data);
+    }
+    if (!fs.existsSync(path.join(staging, 'ffmpeg.exe')) || !fs.existsSync(path.join(staging, 'ffprobe.exe'))) {
+      throw new Error('解压后未找到 ffmpeg.exe / ffprobe.exe');
+    }
+
+    await fs.promises.rm(runtime, { recursive: true, force: true });
+    await fs.promises.rename(staging, runtime);
+    videoDownloading = false;
+    sendVideoProgress({ phase: 'done', percent: 100, message: 'ffmpeg 运行时已就绪' });
+    return { ok: true, status: videoStatus() };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    videoDownloading = false;
+    sendVideoProgress({ phase: 'error', percent: 0, message });
+    await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+    return { ok: false, error: message, status: videoStatus() };
+  } finally {
+    videoDownloading = false;
+    await fs.promises.rm(zipPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function probeVideo(filePath: string): Promise<{ ok: boolean; info?: VideoInfo; error?: string }> {
+  if (!videoStatus().available) return { ok: false, error: '请先下载 ffmpeg 运行时' };
+  try {
+    const stat = await fs.promises.stat(filePath);
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = spawn(ffprobeExePath(), [
+        '-v', 'error',
+        '-print_format', 'json',
+        '-show_format',
+        '-show_streams',
+        filePath
+      ], { windowsHide: true });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) resolve(stdout);
+        else reject(new Error(stderr.trim() || `ffprobe 退出码 ${code}`));
+      });
+    });
+    const parsed = JSON.parse(output) as VideoProbeJson;
+    const video = parsed.streams?.find((stream) => stream.codec_type === 'video');
+    if (!video || !video.width || !video.height) throw new Error('文件中没有可用的视频轨道');
+    const audio = parsed.streams?.find((stream) => stream.codec_type === 'audio');
+    const duration = Number(parsed.format?.duration ?? video.duration ?? 0);
+    return {
+      ok: true,
+      info: {
+        path: filePath,
+        name: path.basename(filePath),
+        size: stat.size,
+        duration: Number.isFinite(duration) ? duration : 0,
+        width: video.width,
+        height: video.height,
+        fps: parseFps(video.r_frame_rate),
+        videoCodec: video.codec_name ?? '',
+        audioCodec: audio?.codec_name,
+        bitrate: Number(parsed.format?.bit_rate ?? 0) || undefined
+      }
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function compressVideo(options: VideoCompressOptions): Promise<{ ok: boolean; output?: string; size?: number; error?: string; cancelled?: boolean }> {
+  if (videoProcess) return { ok: false, error: '已有压缩任务正在运行' };
+  if (!videoStatus().available) return { ok: false, error: '请先下载 ffmpeg 运行时' };
+  const input = path.resolve(String(options.input ?? ''));
+  try {
+    const stat = await fs.promises.stat(input);
+    if (!stat.isFile()) return { ok: false, error: '输入文件不存在' };
+  } catch {
+    return { ok: false, error: '输入文件不存在' };
+  }
+
+  const probe = await probeVideo(input);
+  if (!probe.ok || !probe.info) return { ok: false, error: probe.error ?? '无法读取视频信息' };
+  const info = probe.info;
+  const outputDir = path.resolve(options.outputDir || path.join(app.getPath('documents'), 'Nyxel', 'Videos'));
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  const baseName = path.basename(input, path.extname(input));
+  const output = await uniqueFilePath(outputDir, `${baseName}_compressed.mp4`);
+  const codec = options.codec === 'h265' ? 'libx265' : 'libx264';
+  const args = [
+    '-hide_banner',
+    '-y',
+    '-i', input,
+    '-map', '0:v:0',
+    '-map', '0:a?',
+    '-c:v', codec,
+    '-preset', options.preset || 'medium',
+    '-crf', String(Math.min(35, Math.max(14, options.crf || 23))),
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart'
+  ];
+  if (codec === 'libx265') args.push('-tag:v', 'hvc1');
+  if (options.resolution !== 'source') {
+    const targetHeight = Number(options.resolution);
+    if (targetHeight && info.height > targetHeight) args.push('-vf', `scale=-2:${targetHeight}`);
+  }
+  if (options.fps !== 'source') args.push('-r', options.fps);
+  if (options.audio === 'none') {
+    args.push('-an');
+  } else {
+    const audioBitrate = options.audio === 'aac192' ? '192k' : options.audio === 'aac96' ? '96k' : '128k';
+    args.push('-c:a', 'aac', '-b:a', audioBitrate);
+  }
+  args.push('-progress', 'pipe:1', '-nostats', '-loglevel', 'error', output);
+
+  videoCancelled = false;
+  sendVideoProgress({ phase: 'compress', percent: 0, message: '开始压缩…' });
+
+  return new Promise((resolve) => {
+    const child = spawn(ffmpegExePath(), args, { windowsHide: true });
+    videoProcess = child;
+    let stdoutBuffer = '';
+    let stderr = '';
+    let currentTime = 0;
+    let speed = '';
+    let settled = false;
+
+    const finish = (result: { ok: boolean; output?: string; size?: number; error?: string; cancelled?: boolean }) => {
+      if (settled) return;
+      settled = true;
+      videoProcess = null;
+      resolve(result);
+    };
+
+    child.stdout.on('data', (chunk) => {
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const split = line.indexOf('=');
+        if (split < 0) continue;
+        const key = line.slice(0, split);
+        const value = line.slice(split + 1);
+        if (key === 'out_time_us' || key === 'out_time_ms') {
+          currentTime = Number(value) / 1_000_000;
+        } else if (key === 'out_time') {
+          currentTime = parseTimeToSeconds(value);
+        } else if (key === 'speed') {
+          speed = value;
+        } else if (key === 'progress' && value === 'end') {
+          sendVideoProgress({ phase: 'compress', percent: 100, message: '压缩完成', speed, currentTime, duration: info.duration });
+        }
+        const percent = info.duration > 0 ? Math.min(99, (currentTime / info.duration) * 100) : 0;
+        if (Number.isFinite(percent)) {
+          sendVideoProgress({
+            phase: 'compress',
+            percent,
+            message: `压缩中 ${percent.toFixed(0)}%${speed ? ` · ${speed}` : ''}`,
+            speed,
+            currentTime,
+            duration: info.duration
+          });
+        }
+      }
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 6000) stderr = stderr.slice(-6000);
+    });
+
+    child.on('error', (error) => {
+      finish({ ok: false, error: error.message });
+    });
+
+    child.on('close', async (code) => {
+      if (videoCancelled) {
+        await fs.promises.rm(output, { force: true }).catch(() => undefined);
+        sendVideoProgress({ phase: 'error', percent: 0, message: '已取消' });
+        finish({ ok: false, cancelled: true, error: '已取消' });
+        return;
+      }
+      if (code !== 0) {
+        await fs.promises.rm(output, { force: true }).catch(() => undefined);
+        const message = stderr.trim() || `ffmpeg 退出码 ${code}`;
+        sendVideoProgress({ phase: 'error', percent: 0, message });
+        finish({ ok: false, error: message });
+        return;
+      }
+      try {
+        const outputStat = await fs.promises.stat(output);
+        sendVideoProgress({ phase: 'done', percent: 100, message: '压缩完成', duration: info.duration, currentTime: info.duration });
+        finish({ ok: true, output, size: outputStat.size });
+      } catch (error) {
+        finish({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+  });
+}
+
 async function findFile(root: string, fileName: string): Promise<string | null> {
   const entries = await fs.promises.readdir(root, { withFileTypes: true });
   for (const entry of entries) {
@@ -1478,6 +1865,20 @@ function registerIpc(): void {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  ipcMain.handle('dialog:openVideo', async () => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [
+        {
+          name: '视频文件',
+          extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'ts', 'flv', 'wmv']
+        }
+      ]
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+
   ipcMain.handle('dialog:openDirectory', async () => {
     if (!mainWindow) return null;
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] });
@@ -1558,6 +1959,21 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('update:check', async () => checkForUpdates());
+
+  ipcMain.handle('video:status', () => videoStatus());
+  ipcMain.handle('video:download', async () => downloadFfmpegRuntime());
+  ipcMain.handle('video:probe', async (_event, filePath: string) => probeVideo(filePath));
+  ipcMain.handle('video:compress', async (_event, options: VideoCompressOptions) => compressVideo(options));
+  ipcMain.handle('video:cancel', () => {
+    if (!videoProcess) return false;
+    videoCancelled = true;
+    try {
+      videoProcess.kill();
+    } catch {
+      // ignore
+    }
+    return true;
+  });
 
   ipcMain.handle('app:openPath', async (_event, target: string) => {
     const error = await shell.openPath(target);

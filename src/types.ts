@@ -1,4 +1,4 @@
-export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures';
+export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video';
 export type Theme = 'dark' | 'light' | 'system';
 export type UpdateChannel = 'stable' | 'beta';
 
@@ -73,6 +73,72 @@ export interface UpdateCheckResult {
   error?: string;
 }
 
+export type VideoCodec = 'h264' | 'h265';
+export type VideoResolution = 'source' | '1080' | '720' | '480';
+export type VideoFps = 'source' | '60' | '30' | '24';
+export type VideoAudio = 'aac192' | 'aac128' | 'aac96' | 'none';
+
+export interface VideoInfo {
+  path: string;
+  name: string;
+  size: number;
+  duration: number;
+  width: number;
+  height: number;
+  fps: number;
+  videoCodec: string;
+  audioCodec?: string;
+  bitrate?: number;
+}
+
+export interface VideoProgress {
+  phase: 'download' | 'extract' | 'probe' | 'compress' | 'done' | 'error';
+  percent: number;
+  message?: string;
+  speed?: string;
+  currentTime?: number;
+  duration?: number;
+}
+
+export interface VideoStatus {
+  available: boolean;
+  dir: string;
+  defaultOutputDir: string;
+  downloading: boolean;
+  progress?: VideoProgress;
+}
+
+export interface VideoDownloadResult {
+  ok: boolean;
+  error?: string;
+  status: VideoStatus;
+}
+
+export interface VideoProbeResult {
+  ok: boolean;
+  info?: VideoInfo;
+  error?: string;
+}
+
+export interface VideoCompressOptions {
+  input: string;
+  outputDir: string;
+  codec: VideoCodec;
+  crf: number;
+  preset: string;
+  resolution: VideoResolution;
+  fps: VideoFps;
+  audio: VideoAudio;
+}
+
+export interface VideoCompressResult {
+  ok: boolean;
+  output?: string;
+  size?: number;
+  error?: string;
+  cancelled?: boolean;
+}
+
 export interface LibraryFile {
   name: string;
   path: string;
@@ -130,6 +196,7 @@ export interface NyxelApi {
   dialog: {
     openImage: () => Promise<string | null>;
     openModel: () => Promise<string | null>;
+    openVideo: () => Promise<string | null>;
     openDirectory: () => Promise<string | null>;
   };
   file: {
@@ -148,6 +215,14 @@ export interface NyxelApi {
   };
   update: {
     check: () => Promise<UpdateCheckResult>;
+  };
+  video: {
+    status: () => Promise<VideoStatus>;
+    download: () => Promise<VideoDownloadResult>;
+    probe: (path: string) => Promise<VideoProbeResult>;
+    compress: (options: VideoCompressOptions) => Promise<VideoCompressResult>;
+    cancel: () => Promise<boolean>;
+    onProgress: (callback: (progress: VideoProgress) => void) => () => void;
   };
   screenshot: {
     capture: () => Promise<{ ok: boolean; path?: string; copied?: boolean; error?: string; cancelled?: boolean }>;

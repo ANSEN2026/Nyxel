@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('nyxel', {
   dialog: {
     openImage: () => ipcRenderer.invoke('dialog:openImage'),
     openModel: () => ipcRenderer.invoke('dialog:openModel'),
+    openVideo: () => ipcRenderer.invoke('dialog:openVideo'),
     openDirectory: () => ipcRenderer.invoke('dialog:openDirectory')
   },
   file: {
@@ -34,6 +35,18 @@ contextBridge.exposeInMainWorld('nyxel', {
   },
   update: {
     check: () => ipcRenderer.invoke('update:check')
+  },
+  video: {
+    status: () => ipcRenderer.invoke('video:status'),
+    download: () => ipcRenderer.invoke('video:download'),
+    probe: (filePath: string) => ipcRenderer.invoke('video:probe', filePath),
+    compress: (options: unknown) => ipcRenderer.invoke('video:compress', options),
+    cancel: () => ipcRenderer.invoke('video:cancel'),
+    onProgress: (callback: (progress: unknown) => void) => {
+      const listener = (_event: unknown, progress: unknown) => callback(progress);
+      ipcRenderer.on('video:progress', listener);
+      return () => ipcRenderer.removeListener('video:progress', listener);
+    }
   },
   screenshot: {
     capture: () => ipcRenderer.invoke('screenshot:capture'),

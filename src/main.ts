@@ -8,6 +8,7 @@ import { HomeView } from './views/home';
 import { ModelView } from './views/model';
 import { SettingsView } from './views/settings';
 import { TextureView } from './views/texture';
+import { VideoView } from './views/video';
 import { basename, isImageFile, isModelFile } from './utils';
 
 const appRoot = document.querySelector('#app') as HTMLElement;
@@ -29,6 +30,12 @@ appRoot.innerHTML = `
         <button class="nav-button" data-view="textures" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           <span class="nav-tooltip">贴图资源 Ctrl+5</span>
+        </button>
+        <div class="nav-divider"></div>
+        <div class="nav-section-title">媒体</div>
+        <button class="nav-button" data-view="video" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>
+          <span class="nav-tooltip">视频压缩 Ctrl+6</span>
         </button>
       </nav>
       <div class="sidebar-bottom">
@@ -75,6 +82,7 @@ let modelView: ModelView;
 let colorView: ColorView;
 let galleryView: FilesView;
 let texturesView: FilesView;
+let videoView: VideoView;
 let settingsView: SettingsView;
 let aboutView: AboutView;
 
@@ -179,12 +187,19 @@ async function openColorFile(file: File): Promise<void> {
   await colorView.loadFile(file);
 }
 
+async function openVideoPath(path: string): Promise<void> {
+  showView('video');
+  updateTitle('视频压缩', basename(path));
+  await videoView.loadPath(path);
+}
+
 function showView(view: ViewName): void {
   if (currentView === 'texture') textureView.deactivate();
   if (currentView === 'model') modelView.deactivate();
   if (currentView === 'color') colorView.deactivate();
   if (currentView === 'gallery') galleryView.deactivate();
   if (currentView === 'textures') texturesView.deactivate();
+  if (currentView === 'video') videoView.deactivate();
 
   currentView = view;
   homeView.element.classList.toggle('hidden', view !== 'home');
@@ -193,6 +208,7 @@ function showView(view: ViewName): void {
   colorView.element.classList.toggle('hidden', view !== 'color');
   galleryView.element.classList.toggle('hidden', view !== 'gallery');
   texturesView.element.classList.toggle('hidden', view !== 'textures');
+  videoView.element.classList.toggle('hidden', view !== 'video');
 
   document.querySelectorAll('.nav-button').forEach((button) => {
     button.classList.toggle('active', (button as HTMLElement).dataset.view === view);
@@ -213,6 +229,9 @@ function showView(view: ViewName): void {
   } else if (view === 'textures') {
     void texturesView.activate();
     updateTitle('贴图资源');
+  } else if (view === 'video') {
+    void videoView.activate();
+    updateTitle('视频压缩');
   } else {
     modelView.activate();
     updateTitle('模型');
@@ -278,6 +297,9 @@ function bindKeyboard(): void {
     } else if (event.key === '5') {
       event.preventDefault();
       showView('textures');
+    } else if (event.key === '6') {
+      event.preventDefault();
+      showView('video');
     } else if (event.key === ',') {
       event.preventDefault();
       void settingsView.open(settings, appInfo);
@@ -330,6 +352,7 @@ async function bootstrap(): Promise<void> {
   modelView = new ModelView(callbacks);
   galleryView = new FilesView('gallery', callbacks);
   texturesView = new FilesView('textures', callbacks);
+  videoView = new VideoView(callbacks);
   settingsView = new SettingsView(saveSettings, toast);
   aboutView = new AboutView(toast);
 
@@ -339,13 +362,15 @@ async function bootstrap(): Promise<void> {
     modelView.element,
     colorView.element,
     galleryView.element,
-    texturesView.element
+    texturesView.element,
+    videoView.element
   );
   textureView.element.classList.add('hidden');
   modelView.element.classList.add('hidden');
   colorView.element.classList.add('hidden');
   galleryView.element.classList.add('hidden');
   texturesView.element.classList.add('hidden');
+  videoView.element.classList.add('hidden');
   document.body.append(settingsView.element, aboutView.element);
 
   bindWindowControls();
@@ -366,6 +391,7 @@ async function bootstrap(): Promise<void> {
     openTexturePath,
     openModelPath,
     openColorPath,
+    openVideoPath,
     applyModelTexturePath: (path: string) => modelView.applyExternalTexturePath(path)
   };
 
