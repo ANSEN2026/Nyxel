@@ -1,10 +1,11 @@
-import type { VideoNoteDocument, VideoNoteMeta, ViewCallbacks } from '../types';
+import type { VideoNoteDocument, VideoNoteImageRect, VideoNoteMeta, ViewCallbacks } from '../types';
 import { formatTime } from '../utils';
 
 type NoteTool = 'brush' | 'highlighter' | 'eraser';
 
-const CANVAS_WIDTH = 1000;
-const CANVAS_HEIGHT = 1400;
+const CANVAS_MAX_SIDE = 1600;
+const DEFAULT_CANVAS_WIDTH = 1600;
+const DEFAULT_CANVAS_HEIGHT = 900;
 const HISTORY_LIMIT = 25;
 const ENABLED_KEY = 'nyxel.videoNotebook.enabled';
 
@@ -28,6 +29,7 @@ export class VideoNotebook {
   private offPanel: HTMLElement;
   private enabledPanel: HTMLElement;
   private list: HTMLElement;
+  private listMenu: HTMLElement;
   private editor: HTMLElement;
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -40,6 +42,42 @@ export class VideoNotebook {
   private drawPane: HTMLElement;
   private textPane: HTMLElement;
   private tabButtons: HTMLButtonElement[];
+  private expandButton: HTMLButtonElement;
+  private transformButton: HTMLButtonElement;
+  private artboard: HTMLElement;
+  private imageLayer: HTMLImageElement;
+  private transformLayer: HTMLElement;
+  private transformBox: HTMLElement;
+  private drawExpanded = false;
+  private imageData = '';
+  private imageRect: VideoNoteImageRect = {
+    x: 0,
+    y: 0,
+    width: DEFAULT_CANVAS_WIDTH,
+    height: DEFAULT_CANVAS_HEIGHT
+  };
+  private transformMode = false;
+  private transformStartRect: VideoNoteImageRect | null = null;
+  private transformDrag: {
+    mode: 'move' | 'scale';
+    handle: string;
+    startX: number;
+    startY: number;
+    rect: VideoNoteImageRect;
+  } | null = null;
+  private viewBadge: HTMLButtonElement;
+  private viewZoomLabel: HTMLElement;
+  private railColorInput: HTMLInputElement;
+  private railWidthInput: HTMLInputElement;
+  private railWidthValue: HTMLElement;
+  private railColorPreview: HTMLElement;
+  private viewZoom = 1;
+  private viewPanX = 0;
+  private viewPanY = 0;
+  private viewPanning = false;
+  private viewPanLastX = 0;
+  private viewPanLastY = 0;
+  private spaceHeld = false;
 
   private tool: NoteTool = 'brush';
   private color = '#e7b95e';
@@ -50,6 +88,45 @@ export class VideoNotebook {
   private history: string[] = [];
   private historyIndex = -1;
   private restoreToken = 0;
+
+  private onNotebookKey = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && !this.listMenu.classList.contains('hidden')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.hideNoteContext();
+      return;
+    }
+    if (!this.notePath || this.editor.classList.contains('hidden') || this.drawPane.classList.contains('hidden')) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key === '0') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.resetViewZoom();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 't') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.toggleTransformMode();
+      return;
+    }
+    if (this.transformMode && event.key === 'Enter') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.applyTransformMode();
+      return;
+    }
+    if (event.key !== 'Escape') return;
+    if (this.transformMode) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.cancelTransformMode();
+      return;
+    }
+    if (!this.drawExpanded) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.setDrawExpanded(false);
+  };
 
   constructor(
     container: HTMLElement,
@@ -96,6 +173,8 @@ export class VideoNotebook {
         </div>
         <div class="notebook-draw-pane" id="notebook-draw-pane">
           <div class="notebook-tools">
+            <button type="button" class="note-expand-button" data-note-expand title="放大绘制画面（全屏）">⤢ 放大</button>
+            <button type="button" class="note-transform-button" data-note-transform title="自由缩放截图图层（Ctrl+T）">⤡ 缩放</button>
             <button type="button" class="note-capture-button" data-note-capture>截取当前画面</button>
             <button type="button" class="active" data-note-tool="brush">画笔</button>
             <button type="button" data-note-tool="highlighter">荧光笔</button>
@@ -107,9 +186,83 @@ export class VideoNotebook {
             <button type="button" data-note-redo>重做</button>
             <button type="button" data-note-clear>清空</button>
           </div>
-          <div class="notebook-canvas-wrap">
-            <canvas id="note-canvas" width="${CANVAS_WIDTH}" height="${CANVAS_HEIGHT}"></canvas>
+          <div class="notebook-rail" aria-label="绘画工具">
+            <div class="notebook-rail-label">工具</div>
+            <button type="button" class="active" data-note-tool="brush" title="画笔">✎</button>
+            <button type="button" data-note-tool="highlighter" title="荧光笔">▮</button>
+            <button type="button" data-note-tool="eraser" title="橡皮">⌫</button>
+            <div class="notebook-rail-sep"></div>
+            <button type="button" data-rail-undo title="撤销">↶</button>
+            <button type="button" data-rail-redo title="重做">↷</button>
+            <button type="button" data-rail-clear title="清空涂鸦">⌧</button>
           </div>
+          <div class="notebook-canvas-wrap">
+            <div class="notebook-artboard" id="notebook-artboard">
+              <img id="note-image-layer" alt="" draggable="false">
+              <canvas id="note-canvas" width="${DEFAULT_CANVAS_WIDTH}" height="${DEFAULT_CANVAS_HEIGHT}"></canvas>
+              <div class="note-transform-layer hidden" id="note-transform-layer">
+                <div class="note-transform-box" id="note-transform-box">
+                  <span class="note-transform-handle" data-transform-handle="nw"></span>
+                  <span class="note-transform-handle" data-transform-handle="ne"></span>
+                  <span class="note-transform-handle" data-transform-handle="sw"></span>
+                  <span class="note-transform-handle" data-transform-handle="se"></span>
+                </div>
+                <div class="note-transform-bar">
+                  <span>拖动角缩放 · 拖动框移动 · Enter 应用 · Esc 取消</span>
+                  <button type="button" data-transform-cancel>取消</button>
+                  <button type="button" class="primary" data-transform-apply>应用</button>
+                </div>
+              </div>
+            </div>
+            <button class="notebook-view-badge hidden" id="note-view-badge" type="button" title="适应画布">100%</button>
+          </div>
+          <aside class="notebook-inspector" aria-label="绘画属性">
+            <section class="notebook-panel">
+              <h4>颜色</h4>
+              <div class="notebook-color-control">
+                <span class="notebook-color-preview" data-note-color-preview></span>
+                <input type="color" value="#e7b95e" data-note-color title="画笔颜色">
+              </div>
+              <div class="notebook-swatches">
+                <button type="button" style="--swatch:#f4f6f8" data-note-swatch="#f4f6f8" title="白色"></button>
+                <button type="button" style="--swatch:#e7b95e" data-note-swatch="#e7b95e" title="黄色"></button>
+                <button type="button" style="--swatch:#8fffc4" data-note-swatch="#8fffc4" title="绿色"></button>
+                <button type="button" style="--swatch:#ff9a9a" data-note-swatch="#ff9a9a" title="红色"></button>
+                <button type="button" style="--swatch:#7dd3fc" data-note-swatch="#7dd3fc" title="蓝色"></button>
+                <button type="button" style="--swatch:#1f1f1f" data-note-swatch="#1f1f1f" title="黑色"></button>
+              </div>
+            </section>
+            <section class="notebook-panel">
+              <h4>画笔</h4>
+              <div class="notebook-panel-row">
+                <span>大小</span>
+                <input type="range" min="1" max="36" step="1" value="4" data-note-width>
+                <strong data-note-width-value>4</strong>
+              </div>
+            </section>
+            <section class="notebook-panel">
+              <h4>图层</h4>
+              <div class="notebook-layer-row">
+                <span class="notebook-layer-icon">▧</span>
+                <span>截图</span>
+                <small>image</small>
+              </div>
+              <div class="notebook-layer-row">
+                <span class="notebook-layer-icon">✎</span>
+                <span>涂鸦</span>
+                <small>drawing</small>
+              </div>
+            </section>
+            <section class="notebook-panel">
+              <h4>视图</h4>
+              <div class="notebook-view-row">
+                <span>缩放</span>
+                <strong id="note-view-zoom">100%</strong>
+                <button type="button" data-view-fit>适应</button>
+              </div>
+              <p class="notebook-view-hint">Alt + 滚轮缩放 · 空格拖动</p>
+            </section>
+          </aside>
         </div>
         <div class="notebook-text-pane hidden" id="notebook-text-pane">
           <div class="notebook-text-tools">
@@ -134,6 +287,7 @@ export class VideoNotebook {
           </div>
         </div>
       </div>
+      <div class="context-menu notebook-context-menu hidden" id="notebook-context-menu"></div>
     `;
 
     this.toggle = this.element.querySelector('#notebook-enabled') as HTMLInputElement;
@@ -141,6 +295,7 @@ export class VideoNotebook {
     this.offPanel = this.element.querySelector('#notebook-off') as HTMLElement;
     this.enabledPanel = this.element.querySelector('#notebook-enabled-panel') as HTMLElement;
     this.list = this.element.querySelector('#notebook-list') as HTMLElement;
+    this.listMenu = this.element.querySelector('#notebook-context-menu') as HTMLElement;
     this.editor = this.element.querySelector('#notebook-editor') as HTMLElement;
     this.canvas = this.element.querySelector('#note-canvas') as HTMLCanvasElement;
     this.ctx = this.canvas.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
@@ -152,6 +307,18 @@ export class VideoNotebook {
     this.drawPane = this.element.querySelector('#notebook-draw-pane') as HTMLElement;
     this.textPane = this.element.querySelector('#notebook-text-pane') as HTMLElement;
     this.tabButtons = Array.from(this.element.querySelectorAll<HTMLButtonElement>('[data-note-tab]'));
+    this.expandButton = this.element.querySelector('[data-note-expand]') as HTMLButtonElement;
+    this.transformButton = this.element.querySelector('[data-note-transform]') as HTMLButtonElement;
+    this.artboard = this.element.querySelector('#notebook-artboard') as HTMLElement;
+    this.imageLayer = this.element.querySelector('#note-image-layer') as HTMLImageElement;
+    this.transformLayer = this.element.querySelector('#note-transform-layer') as HTMLElement;
+    this.transformBox = this.element.querySelector('#note-transform-box') as HTMLElement;
+    this.viewBadge = this.element.querySelector('#note-view-badge') as HTMLButtonElement;
+    this.viewZoomLabel = this.element.querySelector('#note-view-zoom') as HTMLElement;
+    this.railColorInput = this.element.querySelector('[data-note-color]') as HTMLInputElement;
+    this.railWidthInput = this.element.querySelector('[data-note-width]') as HTMLInputElement;
+    this.railWidthValue = this.element.querySelector('[data-note-width-value]') as HTMLElement;
+    this.railColorPreview = this.element.querySelector('[data-note-color-preview]') as HTMLElement;
 
     this.toggle.checked = this.enabled;
     this.initCanvas();
@@ -167,6 +334,8 @@ export class VideoNotebook {
     this.note = null;
     this.videoLabel.textContent = videoName || '未加载视频';
     this.editor.classList.add('hidden');
+    this.setDrawExpanded(false);
+    this.hideNoteContext();
     this.textArea.innerHTML = '';
     this.savedTextRange = null;
     this.initCanvas();
@@ -181,7 +350,272 @@ export class VideoNotebook {
     this.notePath = '';
     this.note = null;
     this.editor.classList.add('hidden');
+    this.setDrawExpanded(false);
+    this.hideNoteContext();
     this.videoLabel.textContent = '未加载视频';
+  }
+
+  private setDrawExpanded(expanded: boolean): void {
+    if (this.drawExpanded === expanded) return;
+    this.cancelTransformMode();
+    this.drawExpanded = expanded;
+    this.drawPane.classList.toggle('is-expanded', expanded);
+    this.resetViewZoom();
+    this.expandButton.classList.toggle('active', expanded);
+    this.expandButton.setAttribute('aria-pressed', String(expanded));
+    this.expandButton.textContent = expanded ? '↙ 还原' : '⤢ 放大';
+    this.expandButton.title = expanded ? '还原绘制画面（Esc）' : '放大绘制画面（全屏）';
+    if (expanded) {
+      requestAnimationFrame(() => this.layoutArtboard());
+    } else {
+      this.artboard.style.width = '';
+      this.artboard.style.height = '';
+    }
+  }
+
+  private layoutArtboard(): void {
+    if (!this.drawExpanded) return;
+    const wrap = this.artboard.parentElement as HTMLElement | null;
+    if (!wrap) return;
+    const availableWidth = Math.max(1, wrap.clientWidth);
+    const availableHeight = Math.max(1, wrap.clientHeight);
+    const aspect = this.canvas.width / Math.max(1, this.canvas.height);
+    let width = availableWidth;
+    let height = width / aspect;
+    if (height > availableHeight) {
+      height = availableHeight;
+      width = height * aspect;
+    }
+    this.artboard.style.width = `${Math.floor(width)}px`;
+    this.artboard.style.height = `${Math.floor(height)}px`;
+  }
+
+  private viewportOf(): HTMLElement {
+    return this.artboard.parentElement as HTMLElement;
+  }
+
+  private applyViewZoom(): void {
+    this.artboard.style.transformOrigin = 'center center';
+    this.artboard.style.transform = this.viewZoom === 1 && this.viewPanX === 0 && this.viewPanY === 0
+      ? ''
+      : `translate(${this.viewPanX}px, ${this.viewPanY}px) scale(${this.viewZoom})`;
+    const label = `${Math.round(this.viewZoom * 100)}%`;
+    this.viewZoomLabel.textContent = label;
+    this.viewBadge.textContent = label;
+    this.viewBadge.classList.toggle('hidden', this.viewZoom === 1 && this.viewPanX === 0 && this.viewPanY === 0);
+  }
+
+  private resetViewZoom(): void {
+    this.viewZoom = 1;
+    this.viewPanX = 0;
+    this.viewPanY = 0;
+    this.viewPanning = false;
+    this.spaceHeld = false;
+    this.viewportOf().classList.remove('is-pan-ready', 'is-panning');
+    this.applyViewZoom();
+  }
+
+  private zoomViewAt(clientX: number, clientY: number, nextZoom: number): void {
+    const zoom = Math.max(0.25, Math.min(8, nextZoom));
+    if (Math.abs(zoom - this.viewZoom) < 0.001) return;
+    const before = this.artboard.getBoundingClientRect();
+    const u = (clientX - before.left) / Math.max(1, before.width);
+    const v = (clientY - before.top) / Math.max(1, before.height);
+    this.viewZoom = zoom;
+    if (zoom <= 1.001) {
+      this.viewPanX = 0;
+      this.viewPanY = 0;
+      this.applyViewZoom();
+      return;
+    }
+    this.applyViewZoom();
+    const after = this.artboard.getBoundingClientRect();
+    this.viewPanX += clientX - (after.left + u * after.width);
+    this.viewPanY += clientY - (after.top + v * after.height);
+    this.applyViewZoom();
+  }
+
+  private startViewPan(event: PointerEvent): void {
+    if (!this.spaceHeld || !this.isDrawingActive()) return;
+    if (event.button !== 0 && event.button !== 1) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (this.viewZoom <= 1.001) return;
+    this.viewPanning = true;
+    this.viewPanLastX = event.clientX;
+    this.viewPanLastY = event.clientY;
+    this.viewportOf().setPointerCapture(event.pointerId);
+    this.viewportOf().classList.add('is-panning');
+  }
+
+  private moveViewPan(event: PointerEvent): void {
+    if (!this.viewPanning) return;
+    event.preventDefault();
+    this.viewPanX += event.clientX - this.viewPanLastX;
+    this.viewPanY += event.clientY - this.viewPanLastY;
+    this.viewPanLastX = event.clientX;
+    this.viewPanLastY = event.clientY;
+    this.applyViewZoom();
+  }
+
+  private endViewPan(event: PointerEvent): void {
+    if (!this.viewPanning) return;
+    this.viewPanning = false;
+    this.viewportOf().classList.remove('is-panning');
+    try { this.viewportOf().releasePointerCapture(event.pointerId); } catch { /* released */ }
+  }
+
+  private isDrawingActive(): boolean {
+    return Boolean(this.notePath) && !this.editor.classList.contains('hidden') && !this.drawPane.classList.contains('hidden');
+  }
+
+  private syncColorControls(): void {
+    this.colorInput.value = this.color;
+    this.railColorInput.value = this.color;
+    this.railColorPreview.style.background = this.color;
+  }
+
+  private syncWidthControls(): void {
+    this.widthInput.value = String(this.lineWidth);
+    this.railWidthInput.value = String(this.lineWidth);
+    this.widthValue.textContent = String(this.lineWidth);
+    this.railWidthValue.textContent = String(this.lineWidth);
+  }
+
+  private renderImageLayer(): void {
+    const width = Math.max(1, this.canvas.width);
+    const height = Math.max(1, this.canvas.height);
+    const rect = this.imageRect;
+    if (this.imageData) {
+      if (this.imageLayer.getAttribute('src') !== this.imageData) this.imageLayer.src = this.imageData;
+      this.imageLayer.hidden = false;
+    } else {
+      this.imageLayer.hidden = true;
+      this.imageLayer.removeAttribute('src');
+    }
+    this.imageLayer.style.left = `${(rect.x / width) * 100}%`;
+    this.imageLayer.style.top = `${(rect.y / height) * 100}%`;
+    this.imageLayer.style.width = `${(rect.width / width) * 100}%`;
+    this.imageLayer.style.height = `${(rect.height / height) * 100}%`;
+  }
+
+  private renderTransformBox(): void {
+    if (!this.transformMode) return;
+    const width = Math.max(1, this.canvas.width);
+    const height = Math.max(1, this.canvas.height);
+    const rect = this.imageRect;
+    this.transformBox.style.left = `${(rect.x / width) * 100}%`;
+    this.transformBox.style.top = `${(rect.y / height) * 100}%`;
+    this.transformBox.style.width = `${(rect.width / width) * 100}%`;
+    this.transformBox.style.height = `${(rect.height / height) * 100}%`;
+  }
+
+  private startTransformMode(): void {
+    if (!this.notePath) return;
+    if (!this.imageData) {
+      this.callbacks.toast('当前还没有可缩放的截图', 'info');
+      return;
+    }
+    this.transformMode = true;
+    this.transformStartRect = { ...this.imageRect };
+    this.transformLayer.classList.remove('hidden');
+    this.transformButton.classList.add('active');
+    this.transformButton.title = '应用截图变换（Ctrl+T）';
+    this.renderImageLayer();
+    this.renderTransformBox();
+  }
+
+  private applyTransformMode(): void {
+    if (!this.transformMode) return;
+    this.transformMode = false;
+    this.transformDrag = null;
+    this.transformStartRect = null;
+    this.transformLayer.classList.add('hidden');
+    this.transformButton.classList.remove('active');
+    this.transformButton.title = '自由缩放截图图层（Ctrl+T）';
+    this.renderImageLayer();
+    this.scheduleSave();
+  }
+
+  private cancelTransformMode(): void {
+    if (!this.transformMode) return;
+    if (this.transformStartRect) this.imageRect = { ...this.transformStartRect };
+    this.transformMode = false;
+    this.transformDrag = null;
+    this.transformStartRect = null;
+    this.transformLayer.classList.add('hidden');
+    this.transformButton.classList.remove('active');
+    this.transformButton.title = '自由缩放截图图层（Ctrl+T）';
+    this.renderImageLayer();
+  }
+
+  private toggleTransformMode(): void {
+    if (this.transformMode) this.applyTransformMode();
+    else this.startTransformMode();
+  }
+
+  private startTransformDrag(event: PointerEvent): void {
+    if (!this.transformMode) return;
+    const target = event.target as HTMLElement;
+    const handle = target.closest<HTMLElement>('[data-transform-handle]')?.dataset.transformHandle ?? '';
+    if (!handle && target !== this.transformBox) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.transformDrag = {
+      mode: handle ? 'scale' : 'move',
+      handle,
+      startX: event.clientX,
+      startY: event.clientY,
+      rect: { ...this.imageRect }
+    };
+    this.transformLayer.setPointerCapture(event.pointerId);
+  }
+
+  private moveTransformDrag(event: PointerEvent): void {
+    if (!this.transformDrag) return;
+    event.preventDefault();
+    const artboardRect = this.artboard.getBoundingClientRect();
+    const scaleX = this.canvas.width / Math.max(1, artboardRect.width);
+    const scaleY = this.canvas.height / Math.max(1, artboardRect.height);
+    const dx = (event.clientX - this.transformDrag.startX) * scaleX;
+    const dy = (event.clientY - this.transformDrag.startY) * scaleY;
+    const start = this.transformDrag.rect;
+    const canvasWidth = this.canvas.width;
+    const canvasHeight = this.canvas.height;
+
+    if (this.transformDrag.mode === 'move') {
+      this.imageRect = {
+        ...start,
+        x: Math.max(0, Math.min(canvasWidth - start.width, start.x + dx)),
+        y: Math.max(0, Math.min(canvasHeight - start.height, start.y + dy))
+      };
+    } else {
+      const signX = this.transformDrag.handle.includes('e') ? 1 : -1;
+      const signY = this.transformDrag.handle.includes('s') ? 1 : -1;
+      const factorX = 1 + (signX * dx) / Math.max(1, start.width);
+      const factorY = 1 + (signY * dy) / Math.max(1, start.height);
+      const proposed = Math.abs(factorX - 1) >= Math.abs(factorY - 1) ? factorX : factorY;
+      const maxFactor = Math.min(canvasWidth / start.width, canvasHeight / start.height);
+      const factor = Math.max(0.12, Math.min(maxFactor, proposed));
+      const width = start.width * factor;
+      const height = start.height * factor;
+      const anchorX = this.transformDrag.handle.includes('w') ? start.x + start.width : start.x;
+      const anchorY = this.transformDrag.handle.includes('n') ? start.y + start.height : start.y;
+      this.imageRect = {
+        x: this.transformDrag.handle.includes('w') ? anchorX - width : anchorX,
+        y: this.transformDrag.handle.includes('n') ? anchorY - height : anchorY,
+        width,
+        height
+      };
+    }
+    this.renderImageLayer();
+    this.renderTransformBox();
+  }
+
+  private endTransformDrag(event: PointerEvent): void {
+    if (!this.transformDrag) return;
+    this.transformDrag = null;
+    try { this.transformLayer.releasePointerCapture(event.pointerId); } catch { /* already released */ }
   }
 
   private bindEvents(): void {
@@ -193,6 +627,7 @@ export class VideoNotebook {
         this.notePath = '';
         this.note = null;
         this.editor.classList.add('hidden');
+        this.setDrawExpanded(false);
       }
       this.renderState();
       if (this.enabled) void this.refreshNotes();
@@ -200,8 +635,30 @@ export class VideoNotebook {
 
     this.element.querySelector('[data-note-start]')?.addEventListener('click', () => void this.startNote());
     this.element.querySelector('[data-note-dir]')?.addEventListener('click', () => void this.openDir());
+
+    this.list.addEventListener('contextmenu', (event) => {
+      const item = (event.target as HTMLElement).closest<HTMLElement>('.notebook-list-item');
+      if (!item) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.showNoteContext(item, event.clientX, event.clientY);
+    });
+    this.listMenu.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLElement>('[data-note-delete]');
+      if (!button) return;
+      event.stopPropagation();
+      const notePath = this.listMenu.dataset.notePath ?? '';
+      this.hideNoteContext();
+      void this.deleteNote(notePath);
+    });
+    document.addEventListener('click', (event) => {
+      if (!this.listMenu.contains(event.target as Node)) this.hideNoteContext();
+    });
+    this.element.addEventListener('scroll', () => this.hideNoteContext(), true);
+
     this.element.querySelector('[data-note-back]')?.addEventListener('click', () => {
       void this.saveNow();
+      this.setDrawExpanded(false);
       this.editor.classList.add('hidden');
       this.enabledPanel.classList.remove('hidden');
       if (this.enabled) void this.refreshNotes();
@@ -217,6 +674,15 @@ export class VideoNotebook {
       });
     });
     this.element.querySelector('[data-note-capture]')?.addEventListener('click', () => void this.captureFrame(true));
+    this.expandButton.addEventListener('click', () => this.setDrawExpanded(!this.drawExpanded));
+    this.transformButton.addEventListener('click', () => this.toggleTransformMode());
+    this.element.querySelector('[data-transform-apply]')?.addEventListener('click', () => this.applyTransformMode());
+    this.element.querySelector('[data-transform-cancel]')?.addEventListener('click', () => this.cancelTransformMode());
+    this.transformBox.addEventListener('pointerdown', (event) => this.startTransformDrag(event));
+    this.transformLayer.addEventListener('pointermove', (event) => this.moveTransformDrag(event));
+    this.transformLayer.addEventListener('pointerup', (event) => this.endTransformDrag(event));
+    this.transformLayer.addEventListener('pointercancel', (event) => this.endTransformDrag(event));
+    window.addEventListener('keydown', this.onNotebookKey, true);
 
     this.tabButtons.forEach((button) => {
       button.addEventListener('click', () => {
@@ -255,22 +721,66 @@ export class VideoNotebook {
     textColor?.addEventListener('mousedown', () => this.captureTextSelection());
     textColor?.addEventListener('change', () => this.applyTextColor(textColor.value));
 
-    this.colorInput.addEventListener('input', () => {
-      this.color = this.colorInput.value;
+    const applyColor = (color: string): void => {
+      this.color = color;
       this.tool = 'brush';
       this.element.querySelectorAll('[data-note-tool]').forEach((item) => {
         item.classList.toggle('active', (item as HTMLElement).dataset.noteTool === 'brush');
       });
+      this.syncColorControls();
+    };
+    this.colorInput.addEventListener('input', () => applyColor(this.colorInput.value));
+    this.railColorInput.addEventListener('input', () => applyColor(this.railColorInput.value));
+    this.element.querySelectorAll<HTMLElement>('[data-note-swatch]').forEach((button) => {
+      button.addEventListener('click', () => applyColor(button.dataset.noteSwatch ?? '#e7b95e'));
     });
-    this.widthInput.addEventListener('input', () => {
-      this.lineWidth = Number(this.widthInput.value) || 4;
-      this.widthValue.textContent = String(this.lineWidth);
-    });
+    const applyWidth = (value: string): void => {
+      this.lineWidth = Number(value) || 4;
+      this.syncWidthControls();
+    };
+    this.widthInput.addEventListener('input', () => applyWidth(this.widthInput.value));
+    this.railWidthInput.addEventListener('input', () => applyWidth(this.railWidthInput.value));
+    this.syncColorControls();
+    this.syncWidthControls();
 
     this.element.querySelector('[data-note-undo]')?.addEventListener('click', () => this.undo());
     this.element.querySelector('[data-note-redo]')?.addEventListener('click', () => this.redo());
     this.element.querySelector('[data-note-clear]')?.addEventListener('click', () => this.clear());
+    this.element.querySelector('[data-rail-undo]')?.addEventListener('click', () => this.undo());
+    this.element.querySelector('[data-rail-redo]')?.addEventListener('click', () => this.redo());
+    this.element.querySelector('[data-rail-clear]')?.addEventListener('click', () => this.clear());
     this.element.querySelector('[data-note-time]')?.addEventListener('click', () => this.insertTime());
+
+    this.viewBadge.addEventListener('click', () => this.resetViewZoom());
+    this.element.querySelector('[data-view-fit]')?.addEventListener('click', () => this.resetViewZoom());
+    const viewport = this.viewportOf();
+    viewport.addEventListener('wheel', (event) => {
+      if (!event.altKey) return;
+      event.preventDefault();
+      this.zoomViewAt(event.clientX, event.clientY, this.viewZoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
+    }, { passive: false });
+    viewport.addEventListener('pointerdown', (event) => this.startViewPan(event), true);
+    viewport.addEventListener('pointermove', (event) => this.moveViewPan(event));
+    viewport.addEventListener('pointerup', (event) => this.endViewPan(event));
+    viewport.addEventListener('pointercancel', (event) => this.endViewPan(event));
+    window.addEventListener('keydown', (event) => {
+      if (event.code !== 'Space' || !this.isDrawingActive()) return;
+      const target = event.target as HTMLElement;
+      if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      this.spaceHeld = true;
+      event.preventDefault();
+      viewport.classList.add('is-pan-ready');
+    }, true);
+    window.addEventListener('keyup', (event) => {
+      if (event.code !== 'Space') return;
+      this.spaceHeld = false;
+      viewport.classList.remove('is-pan-ready', 'is-panning');
+    }, true);
+    window.addEventListener('blur', () => {
+      this.spaceHeld = false;
+      this.viewPanning = false;
+      viewport.classList.remove('is-pan-ready', 'is-panning');
+    });
 
     this.textArea.addEventListener('input', () => this.scheduleSave());
     this.textArea.addEventListener('mouseup', () => this.captureTextSelection());
@@ -290,6 +800,9 @@ export class VideoNotebook {
     this.canvas.addEventListener('pointermove', (event) => this.moveStroke(event));
     this.canvas.addEventListener('pointerup', (event) => this.endStroke(event));
     this.canvas.addEventListener('pointercancel', (event) => this.endStroke(event));
+    window.addEventListener('resize', () => {
+      if (this.drawExpanded) this.layoutArtboard();
+    });
     window.addEventListener('beforeunload', () => { void this.saveNow(); });
   }
 
@@ -310,6 +823,7 @@ export class VideoNotebook {
 
   private async refreshNotes(): Promise<void> {
     if (!this.videoPath) return;
+    this.hideNoteContext();
     const result = await window.nyxel.notes.list(this.videoPath);
     this.list.innerHTML = '';
     if (!result.ok || !result.notes.length) {
@@ -323,6 +837,7 @@ export class VideoNotebook {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'notebook-list-item';
+      button.dataset.notePath = note.path;
       const strong = document.createElement('strong');
       strong.textContent = this.noteLabel(note);
       const span = document.createElement('span');
@@ -338,6 +853,57 @@ export class VideoNotebook {
     if (Number.isNaN(time.getTime())) return '复盘记事本';
     const pad = (value: number) => String(value).padStart(2, '0');
     return `复盘 ${time.getFullYear()}-${pad(time.getMonth() + 1)}-${pad(time.getDate())} ${pad(time.getHours())}:${pad(time.getMinutes())}`;
+  }
+
+  private showNoteContext(item: HTMLElement, x: number, y: number): void {
+    const notePath = item.dataset.notePath ?? '';
+    if (!notePath) return;
+    this.listMenu.dataset.notePath = notePath;
+    this.listMenu.innerHTML = '';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'danger';
+    button.dataset.noteDelete = '1';
+    button.textContent = '删除复盘';
+    this.listMenu.append(button);
+    this.listMenu.classList.remove('hidden');
+    const rect = this.listMenu.getBoundingClientRect();
+    this.listMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    this.listMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+  }
+
+  private hideNoteContext(): void {
+    this.listMenu.classList.add('hidden');
+    delete this.listMenu.dataset.notePath;
+  }
+
+  private async deleteNote(notePath: string): Promise<void> {
+    if (!notePath) return;
+    if (!window.confirm('删除这份复盘记录？文件会移到系统回收站，之后可以恢复。')) return;
+    const isCurrent = this.notePath === notePath;
+    try {
+      if (isCurrent) await this.saveNow();
+      const result = await window.nyxel.notes.delete(notePath);
+      if (!result.ok) {
+        this.callbacks.toast(`删除复盘失败：${result.error ?? '未知错误'}`, 'error');
+        return;
+      }
+      if (isCurrent) {
+        this.notePath = '';
+        this.note = null;
+        this.editor.classList.add('hidden');
+        this.setDrawExpanded(false);
+        this.enabledPanel.classList.remove('hidden');
+        this.initCanvas();
+      }
+      await this.refreshNotes();
+      this.callbacks.toast('复盘记录已删除，可在系统回收站中恢复', 'success');
+    } catch (error) {
+      this.callbacks.toast(
+        `删除复盘失败：${error instanceof Error ? error.message : String(error)}`,
+        'error'
+      );
+    }
   }
 
   private async startNote(): Promise<void> {
@@ -370,6 +936,7 @@ export class VideoNotebook {
     this.note = note;
     this.notePath = notePath;
     this.enabledPanel.classList.add('hidden');
+    this.setDrawExpanded(false);
     this.editor.classList.remove('hidden');
     this.tabButtons.forEach((button, index) => button.classList.toggle('active', index === 0));
     this.drawPane.classList.remove('hidden');
@@ -377,31 +944,115 @@ export class VideoNotebook {
     this.textArea.innerHTML = this.noteToHtml(note);
     this.savedTextRange = null;
     this.saveState.textContent = '已载入';
-    await this.loadDrawing(note.drawing ?? '');
+    await this.loadDrawing(
+      note.drawing ?? '',
+      note.image ?? '',
+      note.imageRect,
+      note.canvasWidth,
+      note.canvasHeight
+    );
   }
 
-  private async loadDrawing(dataUrl: string): Promise<void> {
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  private setCanvasSize(width: number, height: number): void {
+    const nextWidth = Math.max(1, Math.round(width));
+    const nextHeight = Math.max(1, Math.round(height));
+    this.artboard.style.setProperty('--note-aspect', `${nextWidth} / ${nextHeight}`);
+    if (this.canvas.width === nextWidth && this.canvas.height === nextHeight) return;
+    this.canvas.width = nextWidth;
+    this.canvas.height = nextHeight;
+    if (this.drawExpanded) requestAnimationFrame(() => this.layoutArtboard());
+  }
+
+  private fitCanvasToVideo(): void {
+    const video = this.getVideo();
+    const videoWidth = video?.videoWidth ?? 0;
+    const videoHeight = video?.videoHeight ?? 0;
+    if (!(videoWidth > 0 && videoHeight > 0)) {
+      this.setCanvasSize(DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT);
+      return;
+    }
+    const aspect = videoWidth / videoHeight;
+    if (aspect >= 1) {
+      this.setCanvasSize(CANVAS_MAX_SIDE, CANVAS_MAX_SIDE / aspect);
+    } else {
+      this.setCanvasSize(CANVAS_MAX_SIDE * aspect, CANVAS_MAX_SIDE);
+    }
+  }
+
+  private async loadImage(dataUrl: string): Promise<HTMLImageElement | null> {
+    if (!dataUrl) return null;
+    return new Promise<HTMLImageElement | null>((resolve) => {
+      const loaded = new Image();
+      loaded.onload = () => resolve(loaded);
+      loaded.onerror = () => resolve(null);
+      loaded.src = dataUrl;
+    });
+  }
+
+  private async loadDrawing(
+    drawingData: string,
+    imageData = '',
+    imageRect?: VideoNoteImageRect,
+    savedCanvasWidth?: number,
+    savedCanvasHeight?: number
+  ): Promise<void> {
+    this.cancelTransformMode();
+    this.resetViewZoom();
+    const flattenedNote = !imageData && Boolean(drawingData);
+    const imageUrl = imageData || drawingData;
+    const drawingUrl = flattenedNote ? '' : drawingData;
+    const [image, drawing] = await Promise.all([
+      this.loadImage(imageUrl),
+      this.loadImage(drawingUrl)
+    ]);
+
+    if (image && image.naturalWidth > 0 && image.naturalHeight > 0) {
+      const scale = Math.min(1, CANVAS_MAX_SIDE / Math.max(image.naturalWidth, image.naturalHeight));
+      this.setCanvasSize(image.naturalWidth * scale, image.naturalHeight * scale);
+    } else if (drawing && drawing.naturalWidth > 0 && drawing.naturalHeight > 0) {
+      const scale = Math.min(1, CANVAS_MAX_SIDE / Math.max(drawing.naturalWidth, drawing.naturalHeight));
+      this.setCanvasSize(drawing.naturalWidth * scale, drawing.naturalHeight * scale);
+    } else {
+      this.fitCanvasToVideo();
+    }
+
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    this.imageData = image ? imageUrl : '';
+    if (image) {
+      const source = imageRect && imageRect.width > 0 && imageRect.height > 0
+        ? imageRect
+        : { x: 0, y: 0, width, height };
+      const sourceWidth = savedCanvasWidth && savedCanvasWidth > 0 ? savedCanvasWidth : width;
+      const sourceHeight = savedCanvasHeight && savedCanvasHeight > 0 ? savedCanvasHeight : height;
+      this.imageRect = {
+        x: source.x * (width / sourceWidth),
+        y: source.y * (height / sourceHeight),
+        width: source.width * (width / sourceWidth),
+        height: source.height * (height / sourceHeight)
+      };
+    } else {
+      this.imageRect = { x: 0, y: 0, width, height };
+    }
+    this.renderImageLayer();
+
+    this.ctx.clearRect(0, 0, width, height);
+    if (drawing) this.ctx.drawImage(drawing, 0, 0, width, height);
     this.history = [];
     this.historyIndex = -1;
-    if (dataUrl) {
-      await new Promise<void>((resolve) => {
-        const image = new Image();
-        image.onload = () => {
-          this.ctx.drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-          resolve();
-        };
-        image.onerror = () => resolve();
-        image.src = dataUrl;
-      });
-    }
     this.pushHistory(false);
   }
 
   private initCanvas(): void {
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    this.cancelTransformMode();
+    this.resetViewZoom();
+    this.fitCanvasToVideo();
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    this.imageData = '';
+    this.imageRect = { x: 0, y: 0, width, height };
+    this.renderImageLayer();
+    this.ctx.clearRect(0, 0, width, height);
     this.history = [];
     this.historyIndex = -1;
     this.pushHistory(false);
@@ -410,13 +1061,14 @@ export class VideoNotebook {
   private pointerPosition(event: PointerEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return {
-      x: (event.clientX - rect.left) * (CANVAS_WIDTH / Math.max(1, rect.width)),
-      y: (event.clientY - rect.top) * (CANVAS_HEIGHT / Math.max(1, rect.height))
+      x: (event.clientX - rect.left) * (this.canvas.width / Math.max(1, rect.width)),
+      y: (event.clientY - rect.top) * (this.canvas.height / Math.max(1, rect.height))
     };
   }
 
   private startStroke(event: PointerEvent): void {
-    if (event.button !== 0 || !this.notePath) return;
+    if (!this.notePath || this.transformMode) return;
+    if (event.button !== 0) return;
     event.preventDefault();
     const point = this.pointerPosition(event);
     this.drawing = true;
@@ -430,9 +1082,16 @@ export class VideoNotebook {
     this.ctx.save();
     this.ctx.lineCap = 'round';
     this.ctx.lineJoin = 'round';
-    this.ctx.strokeStyle = this.tool === 'eraser' ? '#ffffff' : this.color;
-    this.ctx.fillStyle = this.ctx.strokeStyle;
-    this.ctx.globalAlpha = this.tool === 'highlighter' ? 0.35 : 1;
+    if (this.tool === 'eraser') {
+      this.ctx.globalCompositeOperation = 'destination-out';
+      this.ctx.strokeStyle = '#000000';
+      this.ctx.fillStyle = '#000000';
+      this.ctx.globalAlpha = 1;
+    } else {
+      this.ctx.strokeStyle = this.color;
+      this.ctx.fillStyle = this.color;
+      this.ctx.globalAlpha = this.tool === 'highlighter' ? 0.35 : 1;
+    }
     this.ctx.lineWidth = this.tool === 'highlighter' ? this.lineWidth * 3 : this.lineWidth;
     this.ctx.beginPath();
     this.ctx.arc(x, y, this.ctx.lineWidth / 2, 0, Math.PI * 2);
@@ -447,8 +1106,14 @@ export class VideoNotebook {
     this.ctx.save();
     this.ctx.lineCap = 'round';
     this.ctx.lineJoin = 'round';
-    this.ctx.strokeStyle = this.tool === 'eraser' ? '#ffffff' : this.color;
-    this.ctx.globalAlpha = this.tool === 'highlighter' ? 0.35 : 1;
+    if (this.tool === 'eraser') {
+      this.ctx.globalCompositeOperation = 'destination-out';
+      this.ctx.strokeStyle = '#000000';
+      this.ctx.globalAlpha = 1;
+    } else {
+      this.ctx.strokeStyle = this.color;
+      this.ctx.globalAlpha = this.tool === 'highlighter' ? 0.35 : 1;
+    }
     this.ctx.lineWidth = this.tool === 'highlighter' ? this.lineWidth * 3 : this.lineWidth;
     this.ctx.beginPath();
     this.ctx.moveTo(this.lastX, this.lastY);
@@ -482,9 +1147,10 @@ export class VideoNotebook {
     const image = new Image();
     image.onload = () => {
       if (token !== this.restoreToken) return;
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      this.ctx.drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      const width = this.canvas.width;
+      const height = this.canvas.height;
+      this.ctx.clearRect(0, 0, width, height);
+      this.ctx.drawImage(image, 0, 0, width, height);
       this.historyIndex = index;
       this.scheduleSave();
     };
@@ -502,9 +1168,10 @@ export class VideoNotebook {
   }
 
   private clear(): void {
-    if (!window.confirm('清空这份记事本的手写内容？')) return;
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    if (!window.confirm('清空这份记事本的涂鸦内容？截图会保留。')) return;
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    this.ctx.clearRect(0, 0, width, height);
     this.pushHistory(true);
   }
 
@@ -517,21 +1184,23 @@ export class VideoNotebook {
     }
     if (confirmReplace && !window.confirm('重新截取当前画面会替换当前涂鸦，继续？')) return false;
     try {
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      const margin = 36;
-      const maxWidth = CANVAS_WIDTH - margin * 2;
-      const maxHeight = CANVAS_HEIGHT - margin * 2;
-      const scale = Math.min(maxWidth / video.videoWidth, maxHeight / video.videoHeight);
-      const width = video.videoWidth * scale;
-      const height = video.videoHeight * scale;
-      this.ctx.drawImage(
-        video,
-        (CANVAS_WIDTH - width) / 2,
-        (CANVAS_HEIGHT - height) / 2,
-        width,
-        height
-      );
+      this.cancelTransformMode();
+      this.resetViewZoom();
+      this.fitCanvasToVideo();
+      const width = this.canvas.width;
+      const height = this.canvas.height;
+      const frame = document.createElement('canvas');
+      frame.width = width;
+      frame.height = height;
+      const frameContext = frame.getContext('2d');
+      if (!frameContext) throw new Error('无法创建截图画布');
+      frameContext.drawImage(video, 0, 0, width, height);
+      this.imageData = frame.toDataURL('image/png');
+      this.imageRect = { x: 0, y: 0, width, height };
+      this.renderImageLayer();
+      this.ctx.clearRect(0, 0, width, height);
+      this.history = [];
+      this.historyIndex = -1;
       this.pushHistory(false);
       this.saveState.textContent = '已截取当前画面';
       this.scheduleSave();
@@ -672,7 +1341,11 @@ export class VideoNotebook {
       const result = await window.nyxel.notes.save(this.notePath, {
         text: this.textArea.innerText,
         textHtml: this.textArea.innerHTML,
-        drawing: this.canvas.toDataURL('image/png')
+        drawing: this.canvas.toDataURL('image/png'),
+        image: this.imageData,
+        imageRect: this.imageRect,
+        canvasWidth: this.canvas.width,
+        canvasHeight: this.canvas.height
       });
       if (result.ok && result.note) {
         this.note = result.note;

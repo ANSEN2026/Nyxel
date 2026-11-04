@@ -7,14 +7,14 @@
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0b0d12;
-        --panel: #11151c;
-        --panel-2: #161b24;
-        --panel-3: #1c222d;
-        --border: #232a36;
-        --border-strong: #313a4a;
-        --text: #e8ebf2;
-        --muted: #8a93a3;
+        --bg: #141414;
+        --panel: #181818;
+        --panel-2: #1f1f1f;
+        --panel-3: #272727;
+        --border: #2d2d2d;
+        --border-strong: #3a3a3a;
+        --text: #ececec;
+        --muted: #9a9a9a;
         --accent: #a6d0b5;
         --accent-strong: #8fc3a2;
         --accent-soft: rgba(166, 208, 181, 0.15);
@@ -22,6 +22,7 @@
       }
 
       * { box-sizing: border-box; }
+      .hidden { display: none !important; }
       html, body {
         width: 100%;
         height: 100%;
@@ -46,8 +47,8 @@
         align-items: center;
         gap: 10px;
         padding: 0 12px 0 16px;
-        background: linear-gradient(90deg, #173d2d, #10261d);
-        border-bottom: 1px solid rgba(166, 208, 181, 0.14);
+        background: linear-gradient(180deg, #202020 0%, #181818 100%);
+        border-bottom: 1px solid #2d2d2d;
         -webkit-app-region: drag;
       }
 
@@ -69,13 +70,54 @@
       }
 
       .title-hint {
-        color: rgba(226, 241, 233, 0.62);
+        color: rgba(236, 236, 236, 0.62);
         font-size: 11px;
         white-space: nowrap;
       }
 
-      .window-actions {
+      .top-actions {
         margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        -webkit-app-region: no-drag;
+      }
+
+      .top-actions button {
+        padding: 6px 14px;
+        border: 1px solid #3a3a3a;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.06);
+        color: rgba(236, 236, 236, 0.86);
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+      }
+
+      .top-actions button:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+      }
+
+      .top-actions button.top-next {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--accent-ink);
+        font-weight: 600;
+      }
+
+      .top-actions button.top-next:hover {
+        background: var(--accent-strong);
+        border-color: var(--accent-strong);
+      }
+
+      .top-actions button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+
+      .window-actions {
+        margin-left: 0;
         display: flex;
         gap: 2px;
         -webkit-app-region: no-drag;
@@ -87,7 +129,7 @@
         border: 0;
         border-radius: 6px;
         background: transparent;
-        color: rgba(235, 245, 239, 0.72);
+        color: rgba(236, 236, 236, 0.72);
         font: inherit;
         font-size: 14px;
         cursor: pointer;
@@ -103,6 +145,7 @@
       }
 
       .stage {
+        position: relative;
         flex: 1;
         min-height: 0;
         display: flex;
@@ -110,12 +153,12 @@
         justify-content: center;
         padding: 18px;
         overflow: hidden;
-        background-color: #141821;
+        background-color: #1a1a1a;
         background-image:
-          linear-gradient(45deg, #202633 25%, transparent 25%),
-          linear-gradient(-45deg, #202633 25%, transparent 25%),
-          linear-gradient(45deg, transparent 75%, #202633 75%),
-          linear-gradient(-45deg, transparent 75%, #202633 75%);
+          linear-gradient(45deg, #2a2a2a 25%, transparent 25%),
+          linear-gradient(-45deg, #2a2a2a 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, #2a2a2a 75%),
+          linear-gradient(-45deg, transparent 75%, #2a2a2a 75%);
         background-size: 22px 22px;
         background-position: 0 0, 0 11px, 11px -11px, -11px 0;
       }
@@ -126,7 +169,7 @@
         box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
         border-radius: 3px;
         overflow: hidden;
-        background: #0b0d12;
+        background: #141414;
       }
 
       #canvas {
@@ -135,6 +178,41 @@
         max-height: 100%;
         cursor: crosshair;
         touch-action: none;
+      }
+
+      .canvas-wrap {
+        transform-origin: center center;
+        will-change: transform;
+      }
+
+      .zoom-badge {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        z-index: 5;
+        padding: 4px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 5px;
+        background: rgba(12, 14, 16, 0.8);
+        color: var(--accent);
+        font: inherit;
+        font-size: 10px;
+        cursor: pointer;
+        backdrop-filter: blur(8px);
+      }
+
+      .zoom-badge:hover {
+        background: rgba(30, 34, 40, 0.92);
+      }
+
+      .stage.pan-ready,
+      .stage.pan-ready #canvas {
+        cursor: grab;
+      }
+
+      .stage.panning,
+      .stage.panning #canvas {
+        cursor: grabbing;
       }
 
       .toolbar {
@@ -327,7 +405,11 @@
   <body>
     <header class="titlebar">
       <div class="brand"><span class="brand-dot"></span>Nyxel 截图</div>
-      <div class="title-hint">标记后保存 · 保存位置可自选</div>
+      <div class="title-hint">Alt+滚轮缩放 · 标记后点“下一步”</div>
+      <div class="top-actions">
+        <button id="cancel" type="button">取消</button>
+        <button id="save" class="top-next" type="button">下一步</button>
+      </div>
       <div class="window-actions">
         <button id="minimize" type="button" title="最小化">─</button>
         <button id="close" class="close" type="button" title="取消截图">×</button>
@@ -338,6 +420,7 @@
       <div class="canvas-wrap">
         <canvas id="canvas"></canvas>
       </div>
+      <button id="zoom-badge" class="zoom-badge hidden" type="button" title="适应窗口">100%</button>
     </main>
 
     <footer class="toolbar">
@@ -362,17 +445,17 @@
       <label class="size-control">粗细 <input id="brush" type="range" min="2" max="18" step="1" value="5"><span id="size-value">5</span></label>
       <div class="actions">
         <button id="copy" type="button">复制</button>
-        <button id="save" class="primary" type="button">批准并保存</button>
-        <button id="cancel" class="ghost" type="button">取消</button>
       </div>
     </footer>
-    <div id="status" class="status">拖动选择标记 · Ctrl+S 保存 · Esc 取消</div>
+    <div id="status" class="status">Alt+滚轮缩放 · 空格拖动 · Ctrl+0 适应 · Ctrl+S 保存 · Esc 取消</div>
 
     <script>
       (() => {
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const stage = document.querySelector('.stage');
+        const canvasWrap = document.querySelector('.canvas-wrap');
+        const zoomBadge = document.getElementById('zoom-badge');
         const statusEl = document.getElementById('status');
         const saveButton = document.getElementById('save');
         const copyButton = document.getElementById('copy');
@@ -394,6 +477,13 @@
         let brushSize = 5;
         let renderQueued = false;
         let busy = false;
+        let viewZoom = 1;
+        let viewPanX = 0;
+        let viewPanY = 0;
+        let viewPanning = false;
+        let viewPanLastX = 0;
+        let viewPanLastY = 0;
+        let spaceHeld = false;
 
         function setStatus(text) {
           statusEl.textContent = text;
@@ -407,6 +497,76 @@
           const scale = Math.min(1, availableWidth / canvas.width, availableHeight / canvas.height);
           canvas.style.width = `${Math.max(1, Math.round(canvas.width * scale))}px`;
           canvas.style.height = `${Math.max(1, Math.round(canvas.height * scale))}px`;
+        }
+
+        function applyViewZoom() {
+          canvasWrap.style.transformOrigin = 'center center';
+          canvasWrap.style.transform = viewZoom === 1 && viewPanX === 0 && viewPanY === 0
+            ? ''
+            : `translate(${viewPanX}px, ${viewPanY}px) scale(${viewZoom})`;
+          const label = `${Math.round(viewZoom * 100)}%`;
+          zoomBadge.textContent = label;
+          zoomBadge.classList.toggle('hidden', viewZoom === 1 && viewPanX === 0 && viewPanY === 0);
+        }
+
+        function resetViewZoom() {
+          viewZoom = 1;
+          viewPanX = 0;
+          viewPanY = 0;
+          viewPanning = false;
+          spaceHeld = false;
+          stage.classList.remove('pan-ready', 'panning');
+          applyViewZoom();
+        }
+
+        function zoomViewAt(clientX, clientY, nextZoom) {
+          const zoom = Math.max(0.25, Math.min(8, nextZoom));
+          if (Math.abs(zoom - viewZoom) < 0.001) return;
+          const before = canvasWrap.getBoundingClientRect();
+          const u = (clientX - before.left) / Math.max(1, before.width);
+          const v = (clientY - before.top) / Math.max(1, before.height);
+          viewZoom = zoom;
+          if (zoom <= 1.001) {
+            viewPanX = 0;
+            viewPanY = 0;
+            applyViewZoom();
+            return;
+          }
+          applyViewZoom();
+          const after = canvasWrap.getBoundingClientRect();
+          viewPanX += clientX - (after.left + u * after.width);
+          viewPanY += clientY - (after.top + v * after.height);
+          applyViewZoom();
+        }
+
+        function startViewPan(event) {
+          if (!spaceHeld || !image) return;
+          if (event.button !== 0 && event.button !== 1) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          if (viewZoom <= 1.001) return;
+          viewPanning = true;
+          viewPanLastX = event.clientX;
+          viewPanLastY = event.clientY;
+          stage.setPointerCapture(event.pointerId);
+          stage.classList.add('panning');
+        }
+
+        function moveViewPan(event) {
+          if (!viewPanning) return;
+          event.preventDefault();
+          viewPanX += event.clientX - viewPanLastX;
+          viewPanY += event.clientY - viewPanLastY;
+          viewPanLastX = event.clientX;
+          viewPanLastY = event.clientY;
+          applyViewZoom();
+        }
+
+        function endViewPan(event) {
+          if (!viewPanning) return;
+          viewPanning = false;
+          stage.classList.remove('panning');
+          try { stage.releasePointerCapture(event.pointerId); } catch { /* released */ }
         }
 
         function drawArrow(annotation) {
@@ -644,8 +804,9 @@
             current = null;
             drawing = false;
             layout();
+            resetViewZoom();
             render();
-            setStatus(`${loaded.naturalWidth} × ${loaded.naturalHeight} · 标记后点“批准并保存”`);
+            setStatus(`${loaded.naturalWidth} × ${loaded.naturalHeight} · 标记后点“下一步”`);
           };
           loaded.onerror = () => setStatus('截图加载失败，请重新截图');
           loaded.src = payload.dataUrl;
@@ -656,6 +817,35 @@
         canvas.addEventListener('pointerup', endStroke);
         canvas.addEventListener('pointercancel', endStroke);
         canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+        zoomBadge.addEventListener('click', resetViewZoom);
+        stage.addEventListener('wheel', (event) => {
+          if (!event.altKey) return;
+          event.preventDefault();
+          zoomViewAt(event.clientX, event.clientY, viewZoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
+        }, { passive: false });
+        stage.addEventListener('pointerdown', (event) => startViewPan(event), true);
+        stage.addEventListener('pointermove', (event) => moveViewPan(event));
+        stage.addEventListener('pointerup', (event) => endViewPan(event));
+        stage.addEventListener('pointercancel', (event) => endViewPan(event));
+        window.addEventListener('keydown', (event) => {
+          if (event.code !== 'Space' || !image) return;
+          const target = event.target;
+          if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+          spaceHeld = true;
+          event.preventDefault();
+          stage.classList.add('pan-ready');
+        }, true);
+        window.addEventListener('keyup', (event) => {
+          if (event.code !== 'Space') return;
+          spaceHeld = false;
+          stage.classList.remove('pan-ready', 'panning');
+        }, true);
+        window.addEventListener('blur', () => {
+          spaceHeld = false;
+          viewPanning = false;
+          stage.classList.remove('pan-ready', 'panning');
+        });
 
         toolButtons.forEach((button) => {
           button.addEventListener('click', () => setTool(button.dataset.tool));
@@ -676,7 +866,10 @@
         document.getElementById('close').addEventListener('click', cancel);
         document.getElementById('minimize').addEventListener('click', () => window.editor.minimize());
 
-        window.addEventListener('resize', layout);
+        window.addEventListener('resize', () => {
+          layout();
+          resetViewZoom();
+        });
         window.addEventListener('keydown', (event) => {
           const key = event.key.toLowerCase();
           if (event.key === 'Escape') {
@@ -692,6 +885,11 @@
           if ((event.ctrlKey || event.metaKey) && key === 'c') {
             event.preventDefault();
             void copy();
+            return;
+          }
+          if ((event.ctrlKey || event.metaKey) && event.key === '0') {
+            event.preventDefault();
+            resetViewZoom();
             return;
           }
           if ((event.ctrlKey || event.metaKey) && key === 'z') {

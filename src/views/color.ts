@@ -286,7 +286,7 @@ export class ColorView {
 
     const context = this.imageCanvas.getContext('2d') as CanvasRenderingContext2D;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
-    context.fillStyle = '#b8bcc2';
+    context.fillStyle = '#b8b8b8';
     context.fillRect(0, 0, rect.width, rect.height);
 
     if (!this.bitmap) return;
@@ -344,7 +344,7 @@ export class ColorView {
     if (otherRatio > 0.0001) {
       const segment = document.createElement('button');
       segment.className = 'color-seg color-seg-other';
-      segment.style.background = '#5b6068';
+      segment.style.background = '#5f5f5f';
       segment.style.width = `${Math.max(1, otherRatio * 100)}%`;
       segment.title = `其他 ${(otherRatio * 100).toFixed(1)}%`;
       this.colorBar.append(segment);
@@ -352,7 +352,7 @@ export class ColorView {
       const row = document.createElement('div');
       row.className = 'color-row color-row-other';
       row.innerHTML = `
-        <span class="color-swatch" style="background:#5b6068"></span>
+        <span class="color-swatch" style="background:#5f5f5f"></span>
         <span class="color-name">其他</span>
         <span class="color-hex">${other.length} 色</span>
         <span class="color-ratio">${(otherRatio * 100).toFixed(1)}%</span>

@@ -190,6 +190,13 @@ export interface VideoNoteMeta {
   updatedAt: string;
 }
 
+export interface VideoNoteImageRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface VideoNoteDocument {
   version: 1;
   videoPath: string;
@@ -199,6 +206,10 @@ export interface VideoNoteDocument {
   text: string;
   textHtml: string;
   drawing: string;
+  image?: string;
+  imageRect?: VideoNoteImageRect;
+  canvasWidth?: number;
+  canvasHeight?: number;
 }
 
 export interface AccountUser {
@@ -314,7 +325,8 @@ export interface NyxelApi {
     list: (videoPath: string) => Promise<{ ok: boolean; dir: string; notes: VideoNoteMeta[]; error?: string }>;
     create: (videoPath: string) => Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }>;
     read: (notePath: string) => Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }>;
-    save: (notePath: string, updates: { text?: string; textHtml?: string; drawing?: string }) => Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }>;
+    save: (notePath: string, updates: { text?: string; textHtml?: string; drawing?: string; image?: string; imageRect?: VideoNoteImageRect; canvasWidth?: number; canvasHeight?: number }) => Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }>;
+    delete: (notePath: string) => Promise<{ ok: boolean; error?: string }>;
     openDir: () => Promise<{ ok: boolean; dir: string; error?: string }>;
   };
   audio: {

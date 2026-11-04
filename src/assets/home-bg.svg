@@ -1,40 +1,40 @@
-﻿<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
   <defs>
     <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#080c0d"/>
-      <stop offset="0.45" stop-color="#0a1110"/>
-      <stop offset="1" stop-color="#080b10"/>
+      <stop offset="0" stop-color="#141414"/>
+      <stop offset="0.45" stop-color="#181818"/>
+      <stop offset="1" stop-color="#141414"/>
     </linearGradient>
     <radialGradient id="mint" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#63d6a5" stop-opacity="0.42"/>
-      <stop offset="0.55" stop-color="#2c8b70" stop-opacity="0.16"/>
-      <stop offset="1" stop-color="#0a1110" stop-opacity="0"/>
+      <stop offset="0" stop-color="#a6d0b5" stop-opacity="0.2"/>
+      <stop offset="0.55" stop-color="#303030" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#181818" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="teal" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#1f7f78" stop-opacity="0.5"/>
-      <stop offset="0.6" stop-color="#154f50" stop-opacity="0.16"/>
-      <stop offset="1" stop-color="#080b10" stop-opacity="0"/>
+      <stop offset="0" stop-color="#5a5a5a" stop-opacity="0.3"/>
+      <stop offset="0.6" stop-color="#2a2a2a" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#141414" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="ice" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#c8f7de" stop-opacity="0.2"/>
+      <stop offset="0" stop-color="#d0d0d0" stop-opacity="0.1"/>
       <stop offset="1" stop-color="#c8f7de" stop-opacity="0"/>
     </radialGradient>
     <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="0.2">
       <stop offset="0" stop-color="#9fe0b8" stop-opacity="0"/>
-      <stop offset="0.22" stop-color="#9fe0b8" stop-opacity="0.9"/>
-      <stop offset="0.58" stop-color="#5fd5ae" stop-opacity="0.65"/>
+      <stop offset="0.22" stop-color="#9fe0b8" stop-opacity="0.55"/>
+      <stop offset="0.58" stop-color="#5fd5ae" stop-opacity="0.35"/>
       <stop offset="1" stop-color="#2c8b70" stop-opacity="0"/>
     </linearGradient>
     <linearGradient id="ribbon2" x1="0" y1="1" x2="1" y2="0">
       <stop offset="0" stop-color="#2c8b70" stop-opacity="0"/>
-      <stop offset="0.38" stop-color="#7dd3fc" stop-opacity="0.5"/>
-      <stop offset="0.7" stop-color="#a6d0b5" stop-opacity="0.72"/>
+      <stop offset="0.38" stop-color="#8fc3a2" stop-opacity="0.5"/>
+      <stop offset="0.7" stop-color="#a6d0b5" stop-opacity="0.4"/>
       <stop offset="1" stop-color="#a6d0b5" stop-opacity="0"/>
     </linearGradient>
     <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#0b0d12" stop-opacity="0"/>
-      <stop offset="0.72" stop-color="#0b0d12" stop-opacity="0.15"/>
-      <stop offset="1" stop-color="#0b0d12" stop-opacity="0.92"/>
+      <stop offset="0" stop-color="#141414" stop-opacity="0"/>
+      <stop offset="0.72" stop-color="#141414" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#141414" stop-opacity="0.92"/>
     </linearGradient>
     <filter id="blurXL" x="-30%" y="-60%" width="160%" height="220%">
       <feGaussianBlur stdDeviation="54"/>
@@ -66,7 +66,7 @@
     <path d="M-160 720 C 150 560 360 800 680 615 C 940 465 1110 250 1420 325 C 1560 360 1690 300 1830 210"
           stroke="url(#ribbon2)" stroke-width="96" opacity="0.22" filter="url(#blurXL)"/>
     <path d="M-120 520 C 260 355 470 610 750 430 C 1010 262 1180 90 1460 155 C 1590 185 1690 130 1810 55"
-          stroke="#7dd3fc" stroke-width="52" opacity="0.11" filter="url(#blurXL)"/>
+          stroke="#8fc3a2" stroke-width="52" opacity="0.11" filter="url(#blurXL)"/>
 
     <g opacity="0.62" filter="url(#blurS)">
       <path d="M-120 672 C 200 512 430 758 710 588 C 980 425 1120 215 1420 290 C 1550 325 1680 270 1800 195" stroke="url(#ribbon)" stroke-width="1.4"/>

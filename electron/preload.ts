@@ -105,7 +105,8 @@ contextBridge.exposeInMainWorld('nyxel', {
     list: (videoPath: string) => ipcRenderer.invoke('notes:list', videoPath),
     create: (videoPath: string) => ipcRenderer.invoke('notes:create', videoPath),
     read: (notePath: string) => ipcRenderer.invoke('notes:read', notePath),
-    save: (notePath: string, updates: { text?: string; textHtml?: string; drawing?: string }) => ipcRenderer.invoke('notes:save', notePath, updates),
+    save: (notePath: string, updates: { text?: string; textHtml?: string; drawing?: string; image?: string; imageRect?: { x: number; y: number; width: number; height: number }; canvasWidth?: number; canvasHeight?: number }) => ipcRenderer.invoke('notes:save', notePath, updates),
+    delete: (notePath: string) => ipcRenderer.invoke('notes:delete', notePath),
     openDir: () => ipcRenderer.invoke('notes:openDir')
   },
   audio: {

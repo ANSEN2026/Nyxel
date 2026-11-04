@@ -936,7 +936,7 @@ export class ModelView {
       const cell = 32;
       for (let y = 0; y < canvas.height; y += cell) {
         for (let x = 0; x < canvas.width; x += cell) {
-          context.fillStyle = (x / cell + y / cell) % 2 === 0 ? '#151a22' : '#0d1117';
+          context.fillStyle = (x / cell + y / cell) % 2 === 0 ? '#2a2a2a' : '#1a1a1a';
           context.fillRect(x, y, cell, cell);
         }
       }

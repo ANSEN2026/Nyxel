@@ -414,7 +414,7 @@ function createWindow(): void {
     minWidth: 980,
     minHeight: 620,
     frame: false,
-    backgroundColor: '#0b0d12',
+    backgroundColor: '#141414',
     show: false,
     title: 'Texture map',
     icon: path.join(__dirname, '..', 'resources', 'icon.png'),
@@ -1191,6 +1191,13 @@ interface VideoNoteMeta {
   updatedAt: string;
 }
 
+interface VideoNoteImageRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface VideoNoteDocument {
   version: 1;
   videoPath: string;
@@ -1200,11 +1207,26 @@ interface VideoNoteDocument {
   text: string;
   textHtml: string;
   drawing: string;
+  image?: string;
+  imageRect?: VideoNoteImageRect;
+  canvasWidth?: number;
+  canvasHeight?: number;
 }
 
 function videoNotesDir(): string {
   const settings = loadSettings();
   return path.resolve(settings.videoNoteDir || path.join(app.getPath('userData'), 'VideoNotes'));
+}
+
+function normalizeNoteImageRect(value: unknown): VideoNoteImageRect | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const source = value as Partial<VideoNoteImageRect>;
+  const x = Number(source.x);
+  const y = Number(source.y);
+  const width = Number(source.width);
+  const height = Number(source.height);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return undefined;
+  return { x, y, width, height };
 }
 
 function safeFileBase(value: string): string {
@@ -1265,7 +1287,8 @@ async function createVideoNote(videoPath: string): Promise<{ ok: boolean; note?:
       updatedAt: now,
       text: '',
       textHtml: '',
-      drawing: ''
+      drawing: '',
+      image: ''
     };
     await fs.promises.writeFile(fileName, JSON.stringify(note, null, 2), 'utf8');
     return { ok: true, note, path: fileName };
@@ -1292,7 +1315,11 @@ async function readVideoNote(notePath: string): Promise<{ ok: boolean; note?: Vi
         updatedAt: String(parsed.updatedAt ?? parsed.createdAt ?? ''),
         text: String(parsed.text ?? ''),
         textHtml: String(parsed.textHtml ?? ''),
-        drawing: String(parsed.drawing ?? '')
+        drawing: String(parsed.drawing ?? ''),
+        image: String(parsed.image ?? ''),
+        imageRect: normalizeNoteImageRect(parsed.imageRect),
+        canvasWidth: Number.isFinite(Number(parsed.canvasWidth)) ? Number(parsed.canvasWidth) : undefined,
+        canvasHeight: Number.isFinite(Number(parsed.canvasHeight)) ? Number(parsed.canvasHeight) : undefined
       }
     };
   } catch (error) {
@@ -1302,7 +1329,7 @@ async function readVideoNote(notePath: string): Promise<{ ok: boolean; note?: Vi
 
 async function saveVideoNote(
   notePath: string,
-  updates: { text?: string; textHtml?: string; drawing?: string }
+  updates: { text?: string; textHtml?: string; drawing?: string; image?: string; imageRect?: VideoNoteImageRect; canvasWidth?: number; canvasHeight?: number }
 ): Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }> {
   try {
     const dir = videoNotesDir();
@@ -1317,7 +1344,17 @@ async function saveVideoNote(
       updatedAt: new Date().toISOString(),
       text: updates.text !== undefined ? String(updates.text) : String(parsed.text ?? ''),
       textHtml: updates.textHtml !== undefined ? String(updates.textHtml) : String(parsed.textHtml ?? ''),
-      drawing: updates.drawing !== undefined ? String(updates.drawing) : String(parsed.drawing ?? '')
+      drawing: updates.drawing !== undefined ? String(updates.drawing) : String(parsed.drawing ?? ''),
+      image: updates.image !== undefined ? String(updates.image) : String(parsed.image ?? ''),
+      imageRect: updates.imageRect !== undefined
+        ? normalizeNoteImageRect(updates.imageRect)
+        : normalizeNoteImageRect(parsed.imageRect),
+      canvasWidth: updates.canvasWidth !== undefined
+        ? Number(updates.canvasWidth)
+        : (Number.isFinite(Number(parsed.canvasWidth)) ? Number(parsed.canvasWidth) : undefined),
+      canvasHeight: updates.canvasHeight !== undefined
+        ? Number(updates.canvasHeight)
+        : (Number.isFinite(Number(parsed.canvasHeight)) ? Number(parsed.canvasHeight) : undefined)
     };
     await fs.promises.writeFile(target, JSON.stringify(note, null, 2), 'utf8');
     return { ok: true, note, path: target };
@@ -1330,6 +1367,23 @@ async function openVideoNotesDir(): Promise<{ ok: boolean; dir: string; error?: 
   const dir = await ensureVideoNotesDir();
   const error = await shell.openPath(dir);
   return error ? { ok: false, dir, error } : { ok: true, dir };
+}
+
+async function deleteVideoNote(notePath: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const dir = videoNotesDir();
+    const target = path.resolve(String(notePath ?? ''));
+    if (!isInside(dir, target) || target === path.resolve(dir)) {
+      return { ok: false, error: '记事本文件不在当前记事本目录中' };
+    }
+    if (!target.toLowerCase().endsWith('.json')) return { ok: false, error: '只能删除记事本文件' };
+    const stat = await fs.promises.stat(target);
+    if (!stat.isFile()) return { ok: false, error: '记事本文件不存在' };
+    await shell.trashItem(target);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function listVideos(): Promise<{ root: string; files: Array<{
@@ -1681,7 +1735,7 @@ function openScreenshotEditor(image: Electron.NativeImage, display: Electron.Dis
     minWidth: 560,
     minHeight: 420,
     frame: false,
-    backgroundColor: '#0b0d12',
+    backgroundColor: '#141414',
     resizable: true,
     maximizable: true,
     fullscreenable: false,
@@ -2954,9 +3008,11 @@ function registerIpc(): void {
 
   ipcMain.handle('notes:read', async (_event, notePath: string) => readVideoNote(notePath));
 
-  ipcMain.handle('notes:save', async (_event, notePath: string, updates: { text?: string; textHtml?: string; drawing?: string }) => {
+  ipcMain.handle('notes:save', async (_event, notePath: string, updates: { text?: string; textHtml?: string; drawing?: string; image?: string; imageRect?: VideoNoteImageRect; canvasWidth?: number; canvasHeight?: number }) => {
     return saveVideoNote(notePath, updates);
   });
+
+  ipcMain.handle('notes:delete', async (_event, notePath: string) => deleteVideoNote(notePath));
 
   ipcMain.handle('notes:openDir', async () => openVideoNotesDir());
 
