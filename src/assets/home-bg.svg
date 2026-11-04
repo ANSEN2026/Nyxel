@@ -1,0 +1,92 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#080c0d"/>
+      <stop offset="0.45" stop-color="#0a1110"/>
+      <stop offset="1" stop-color="#080b10"/>
+    </linearGradient>
+    <radialGradient id="mint" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#63d6a5" stop-opacity="0.42"/>
+      <stop offset="0.55" stop-color="#2c8b70" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#0a1110" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="teal" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#1f7f78" stop-opacity="0.5"/>
+      <stop offset="0.6" stop-color="#154f50" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#080b10" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ice" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#c8f7de" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#c8f7de" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="0.2">
+      <stop offset="0" stop-color="#9fe0b8" stop-opacity="0"/>
+      <stop offset="0.22" stop-color="#9fe0b8" stop-opacity="0.9"/>
+      <stop offset="0.58" stop-color="#5fd5ae" stop-opacity="0.65"/>
+      <stop offset="1" stop-color="#2c8b70" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="ribbon2" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#2c8b70" stop-opacity="0"/>
+      <stop offset="0.38" stop-color="#7dd3fc" stop-opacity="0.5"/>
+      <stop offset="0.7" stop-color="#a6d0b5" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#a6d0b5" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b0d12" stop-opacity="0"/>
+      <stop offset="0.72" stop-color="#0b0d12" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#0b0d12" stop-opacity="0.92"/>
+    </linearGradient>
+    <filter id="blurXL" x="-30%" y="-60%" width="160%" height="220%">
+      <feGaussianBlur stdDeviation="54"/>
+    </filter>
+    <filter id="blurL" x="-30%" y="-60%" width="160%" height="220%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="blurS" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="2.6"/>
+    </filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="17" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="table" tableValues="0 0.055"/>
+      </feComponentTransfer>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#base)"/>
+  <ellipse cx="230" cy="620" rx="620" ry="430" fill="url(#mint)"/>
+  <ellipse cx="1290" cy="250" rx="600" ry="420" fill="url(#teal)"/>
+  <ellipse cx="980" cy="760" rx="440" ry="260" fill="url(#mint)" opacity="0.35"/>
+  <ellipse cx="620" cy="150" rx="330" ry="220" fill="url(#ice)"/>
+
+  <g fill="none" stroke-linecap="round">
+    <path d="M-220 660 C 100 500 330 760 640 580 C 900 430 1060 200 1370 280 C 1520 320 1660 250 1810 170"
+          stroke="url(#ribbon)" stroke-width="170" opacity="0.26" filter="url(#blurXL)"/>
+    <path d="M-160 720 C 150 560 360 800 680 615 C 940 465 1110 250 1420 325 C 1560 360 1690 300 1830 210"
+          stroke="url(#ribbon2)" stroke-width="96" opacity="0.22" filter="url(#blurXL)"/>
+    <path d="M-120 520 C 260 355 470 610 750 430 C 1010 262 1180 90 1460 155 C 1590 185 1690 130 1810 55"
+          stroke="#7dd3fc" stroke-width="52" opacity="0.11" filter="url(#blurXL)"/>
+
+    <g opacity="0.62" filter="url(#blurS)">
+      <path d="M-120 672 C 200 512 430 758 710 588 C 980 425 1120 215 1420 290 C 1550 325 1680 270 1800 195" stroke="url(#ribbon)" stroke-width="1.4"/>
+      <path d="M-160 700 C 170 540 410 786 690 610 C 970 432 1110 232 1410 308 C 1540 340 1670 288 1790 215" stroke="url(#ribbon)" stroke-width="1"/>
+      <path d="M-80 644 C 240 486 460 730 740 562 C 1000 405 1150 200 1440 270 C 1570 302 1700 245 1810 172" stroke="url(#ribbon2)" stroke-width="1.2"/>
+      <path d="M-180 744 C 130 586 380 826 660 650 C 940 472 1090 268 1390 344 C 1520 378 1650 320 1780 248" stroke="url(#ribbon2)" stroke-width="0.9"/>
+      <path d="M120 790 C 360 690 560 820 820 690 C 1050 575 1180 452 1420 470" stroke="#9fe0b8" stroke-width="0.7" opacity="0.5"/>
+    </g>
+
+    <g opacity="0.62" filter="url(#blurS)">
+      <path d="M-80 300 C 170 200 330 300 470 230 C 610 160 700 80 880 110" stroke="url(#ribbon2)" stroke-width="1"/>
+      <path d="M260 900 C 430 760 620 830 760 700 C 880 590 980 500 1160 520" stroke="url(#ribbon)" stroke-width="0.8" opacity="0.6"/>
+    </g>
+
+    <path d="M-40 420 C 230 310 380 480 620 340 C 830 218 950 120 1170 150 C 1340 174 1490 110 1640 20"
+          stroke="#5fd5ae" stroke-width="70" opacity="0.1" filter="url(#blurL)"/>
+    <path d="M120 920 C 350 780 590 850 760 720 C 930 590 1060 500 1270 560 C 1400 595 1510 560 1630 480"
+          stroke="#9fe0b8" stroke-width="90" opacity="0.09" filter="url(#blurL)"/>
+  </g>
+
+  <rect width="1600" height="900" fill="url(#fade)"/>
+  <rect width="1600" height="900" filter="url(#grain)" opacity="0.85"/>
+</svg>

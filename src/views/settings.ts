@@ -278,7 +278,7 @@ export class SettingsView {
     const checkUpdateButton = this.element.querySelector('[data-action="check-update"]') as HTMLButtonElement | null;
     const openUpdateButton = this.element.querySelector('[data-action="open-update"]') as HTMLButtonElement | null;
     checkUpdateButton?.addEventListener('click', async () => {
-      if (!checkUpdateButton) return;
+      if (!checkUpdateButton || this.appInfo?.windowsStore) return;
       const status = this.element.querySelector('#set-update-status') as HTMLElement | null;
       checkUpdateButton.disabled = true;
       checkUpdateButton.textContent = '检查中…';
@@ -343,6 +343,22 @@ export class SettingsView {
     (this.element.querySelector('#set-cache-dir') as HTMLElement).textContent = settings.cacheDir;
     (this.element.querySelector('#set-version') as HTMLElement).textContent = `v${appInfo.version}`;
     (this.element.querySelector('#set-runtime') as HTMLElement).textContent = `Electron ${window.nyxel.versions.electron} · Chromium ${window.nyxel.versions.chrome} · ${appInfo.platform}/${appInfo.arch}`;
+    const checkButton = this.element.querySelector('[data-action="check-update"]') as HTMLButtonElement | null;
+    const channelSelect = this.element.querySelector('#set-channel') as HTMLSelectElement | null;
+    const updateStatus = this.element.querySelector('#set-update-status') as HTMLElement | null;
+    if (checkButton && channelSelect && updateStatus) {
+      if (appInfo.windowsStore) {
+        checkButton.disabled = true;
+        checkButton.textContent = '商店版本自动更新';
+        channelSelect.disabled = true;
+        updateStatus.textContent = 'Microsoft Store 版本由商店自动更新，此构建不检查 GitHub Releases。';
+      } else {
+        checkButton.disabled = false;
+        checkButton.textContent = '检查更新';
+        channelSelect.disabled = false;
+        updateStatus.textContent = '点击「检查更新」会访问 GitHub Releases；稳定频道只检查正式版，测试频道包含 Alpha / Beta。';
+      }
+    }
     this.element.classList.remove('hidden');
   }
 

@@ -1,9 +1,15 @@
 import type { LibraryFile, LibraryFolder, ViewCallbacks } from '../types';
 import { formatBytes, formatTime } from '../utils';
 
-type FilesMode = 'gallery' | 'textures';
+type FilesMode = 'gallery' | 'textures' | 'videos';
 
 const FOLDER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+const CALENDAR_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></svg>';
+const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>';
+const FOLDER_COLORS = ['#a6d0b5', '#7dd3fc', '#a78bfa', '#fbbf24', '#fb7185', '#f97316', '#5eead4', '#cbd5e1'];
+const ZOOM_KEY = 'nyxel.files.thumbHeight';
+const MIN_THUMB = 64;
+const MAX_THUMB = 320;
 
 export class FilesView {
   readonly element: HTMLElement;
@@ -16,21 +22,30 @@ export class FilesView {
   private folderCount = 0;
   private searchQuery = '';
   private layoutQueued = false;
-  private info: { root: string; galleryDir: string; texturesDir: string } | null = null;
+  private thumbHeight = Number(localStorage.getItem(ZOOM_KEY)) || 142;
+  private info: { root: string; galleryDir: string; texturesDir: string; videosDir?: string } | null = null;
   private grid: HTMLElement;
   private empty: HTMLElement;
   private count: HTMLElement;
-  private folderPath: HTMLElement;
-  private folderList: HTMLElement;
-  private modal: HTMLElement;
-  private folderInput: HTMLInputElement;
-  private modalError: HTMLElement;
+  private folderPath: HTMLElement | null;
+  private folderList: HTMLElement | null;
+  private modal: HTMLElement | null;
+  private folderInput: HTMLInputElement | null;
+  private modalError: HTMLElement | null;
+  private colorPop: HTMLElement | null = null;
+  private colorFolder = '';
+  private dragFolder = '';
+  private player: HTMLElement | null = null;
+  private playerVideo: HTMLVideoElement | null = null;
+  private playerTitle: HTMLElement | null = null;
+  private playerMeta: HTMLElement | null = null;
+  private playerPath = '';
 
   constructor(mode: FilesMode, callbacks: ViewCallbacks) {
     this.mode = mode;
     this.callbacks = callbacks;
     this.element = document.createElement('div');
-    this.element.className = `view files-view ${mode === 'gallery' ? 'gallery-view' : 'textures-view'}`;
+    this.element.className = `view files-view ${mode === 'gallery' ? 'gallery-view' : mode === 'textures' ? 'textures-view' : 'videos-view'}`;
 
     if (mode === 'gallery') {
       this.element.innerHTML = `
@@ -43,6 +58,7 @@ export class FilesView {
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
             <input id="files-search" type="search" placeholder="搜索截图" spellcheck="false">
           </div>
+          <span class="zoom-hint" data-zoom-hint>Ctrl + 滚轮缩放</span>
           <span class="spacer"></span>
           <button data-action="refresh">刷新</button>
           <button data-action="open-root">打开图库文件夹</button>
@@ -52,7 +68,7 @@ export class FilesView {
           <div class="asset-grid" id="files-grid"></div>
         </div>
       `;
-    } else {
+    } else if (mode === 'textures') {
       this.element.innerHTML = `
         <div class="view-toolbar files-toolbar">
           <div class="files-heading">
@@ -63,6 +79,7 @@ export class FilesView {
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
             <input id="files-search" type="search" placeholder="搜索素材" spellcheck="false">
           </div>
+          <span class="zoom-hint" data-zoom-hint>Ctrl + 滚轮缩放</span>
           <span class="spacer"></span>
           <button class="primary" data-action="import">导入贴图</button>
           <button data-action="refresh">刷新</button>
@@ -71,18 +88,24 @@ export class FilesView {
         <div class="view-body files-body textures-body">
           <aside class="folder-pane">
             <div class="folder-pane-head">
-              <span>文件夹</span>
+              <div class="folder-pane-title">
+                <button class="folder-up" data-action="up" type="button" title="上一级文件夹" disabled>▴</button>
+                <span>文件夹</span>
+              </div>
               <button data-action="new-folder" type="button" title="新建文件夹">+</button>
             </div>
-            <button class="folder-row active" data-folder="" type="button">
+            <div class="folder-row folder-row-root active" data-folder="" role="button" tabindex="0">
               <span class="folder-icon">${FOLDER_ICON}</span>
               <span class="folder-label">全部贴图</span>
               <span class="folder-count" id="all-count"></span>
-            </button>
-            <div id="folder-list"></div>
+            </div>
+            <div id="folder-list" class="folder-tree"></div>
           </aside>
           <section class="texture-pane">
-            <div class="folder-path" id="folder-path">全部贴图</div>
+            <div class="folder-path" id="folder-path">
+              <button class="path-up" data-action="up" type="button" title="上一级" disabled>▴</button>
+              <span class="folder-path-crumbs"></span>
+            </div>
             <div class="texture-scroll">
               <div class="files-empty hidden"></div>
               <div class="asset-grid" id="files-grid"></div>
@@ -100,20 +123,83 @@ export class FilesView {
             </div>
           </div>
         </div>
+        <div class="folder-color-pop hidden" id="folder-color-pop">
+          <div class="folder-color-head">文件夹图标颜色</div>
+          <div class="folder-color-grid">
+            ${FOLDER_COLORS.map((color) => `<button type="button" class="folder-color-swatch" data-color="${color}" style="--swatch:${color}" title="${color}"></button>`).join('')}
+          </div>
+          <button type="button" class="folder-color-reset" data-color="reset">恢复默认颜色</button>
+        </div>
+      `;
+    } else {
+      this.element.innerHTML = `
+        <div class="view-toolbar files-toolbar">
+          <div class="files-heading">
+            <strong class="files-title">视频作品</strong>
+            <span class="files-sub" id="files-count">0 个视频</span>
+          </div>
+          <div class="files-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            <input id="files-search" type="search" placeholder="搜索视频作品" spellcheck="false">
+          </div>
+          <span class="spacer"></span>
+          <button class="primary" data-action="import-video">上传视频</button>
+          <button data-action="refresh">刷新</button>
+          <button data-action="open-root">打开作品文件夹</button>
+        </div>
+        <div class="view-body files-body videos-body">
+          <div class="files-empty hidden"></div>
+          <div class="video-grid" id="files-grid"></div>
+        </div>
+        <div class="video-player hidden" id="video-player">
+          <div class="video-player-card">
+            <header class="video-player-head">
+              <div class="video-player-title">
+                <strong id="video-player-title"></strong>
+                <span id="video-player-meta"></span>
+              </div>
+              <button type="button" data-player-close title="关闭">×</button>
+            </header>
+            <video id="video-player-el" controls playsinline></video>
+            <footer class="video-player-foot">
+              <span id="video-player-note"></span>
+              <span class="spacer"></span>
+              <button type="button" data-player-show>在文件夹中显示</button>
+            </footer>
+          </div>
+        </div>
       `;
     }
 
     this.grid = this.element.querySelector('#files-grid') as HTMLElement;
     this.empty = this.element.querySelector('.files-empty') as HTMLElement;
     this.count = this.element.querySelector('#files-count') as HTMLElement;
-    this.folderPath = this.element.querySelector('#folder-path') as HTMLElement;
-    this.folderList = this.element.querySelector('#folder-list') as HTMLElement;
-    this.modal = this.element.querySelector('.files-modal') as HTMLElement;
-    this.folderInput = this.element.querySelector('#folder-name') as HTMLInputElement;
-    this.modalError = this.element.querySelector('#folder-error') as HTMLElement;
+    this.folderPath = this.element.querySelector('#folder-path');
+    this.folderList = this.element.querySelector('#folder-list');
+    this.modal = this.element.querySelector('.files-modal');
+    this.folderInput = this.element.querySelector('#folder-name');
+    this.modalError = this.element.querySelector('#folder-error');
+    this.colorPop = this.element.querySelector('#folder-color-pop');
+    this.player = this.element.querySelector('#video-player');
+    this.playerVideo = this.element.querySelector('#video-player-el');
+    this.playerTitle = this.element.querySelector('#video-player-title');
+    this.playerMeta = this.element.querySelector('#video-player-meta');
 
+    this.updateZoomHint();
     this.bindEvents();
     window.addEventListener('resize', () => this.scheduleLayout());
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        if (this.player && !this.player.classList.contains('hidden')) this.closePlayer();
+        this.hideColorPop();
+      }
+    });
+    document.addEventListener('click', (event) => {
+      if (!this.colorPop || this.colorPop.classList.contains('hidden')) return;
+      const target = event.target as HTMLElement;
+      if (this.colorPop.contains(target) || target.closest('[data-folder-color]')) return;
+      this.hideColorPop();
+    });
     window.nyxel.library.onChanged(() => {
       if (this.active) void this.load();
     });
@@ -139,6 +225,8 @@ export class FilesView {
       }
     });
 
+    this.bindZoom();
+
     const search = this.element.querySelector('#files-search') as HTMLInputElement | null;
     search?.addEventListener('input', () => {
       this.searchQuery = search.value;
@@ -150,25 +238,46 @@ export class FilesView {
     if (this.mode === 'textures') {
       this.element.querySelector('[data-action="import"]')?.addEventListener('click', () => void this.importTextures());
       this.element.querySelector('[data-action="new-folder"]')?.addEventListener('click', () => this.openFolderModal());
-      this.folderList.addEventListener('click', (event) => {
+      this.element.querySelectorAll('[data-action="up"]').forEach((button) => {
+        button.addEventListener('click', () => void this.navigateUp());
+      });
+      this.folderList?.addEventListener('click', (event) => {
         const row = (event.target as HTMLElement).closest<HTMLElement>('[data-folder]');
         if (!row) return;
+        if ((event.target as HTMLElement).closest('[data-folder-color]')) return;
         this.currentFolder = row.dataset.folder ?? '';
         this.updateFolderActive();
         void this.load();
       });
-      this.element.querySelector('[data-folder]')?.addEventListener('click', (event) => {
-        const row = event.currentTarget as HTMLElement;
-        this.currentFolder = row.dataset.folder ?? '';
+      const rootRow = this.element.querySelector<HTMLElement>('.folder-row-root');
+      rootRow?.addEventListener('click', (event) => {
+        if ((event.target as HTMLElement).closest('[data-folder-color]')) return;
+        this.currentFolder = '';
         this.updateFolderActive();
         void this.load();
       });
-      this.modal.addEventListener('click', (event) => {
+      rootRow?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          this.currentFolder = '';
+          this.updateFolderActive();
+          void this.load();
+        }
+      });
+      if (rootRow) this.bindFolderDragTarget(rootRow);
+      this.folderPath?.addEventListener('click', (event) => {
+        const button = (event.target as HTMLElement).closest<HTMLElement>('[data-crumb]');
+        if (!button) return;
+        this.currentFolder = button.dataset.crumb ?? '';
+        this.updateFolderActive();
+        void this.load();
+      });
+      this.modal?.addEventListener('click', (event) => {
         if (event.target === this.modal) this.closeFolderModal();
       });
       this.element.querySelector('[data-modal="cancel"]')?.addEventListener('click', () => this.closeFolderModal());
       this.element.querySelector('[data-modal="confirm"]')?.addEventListener('click', () => void this.createFolder());
-      this.folderInput.addEventListener('keydown', (event) => {
+      this.folderInput?.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
           void this.createFolder();
@@ -177,7 +286,67 @@ export class FilesView {
           this.closeFolderModal();
         }
       });
+      this.colorPop?.addEventListener('click', (event) => {
+        const button = (event.target as HTMLElement).closest<HTMLElement>('[data-color]');
+        if (!button) return;
+        const value = button.dataset.color === 'reset' ? null : button.dataset.color ?? null;
+        void this.saveFolderColor(value);
+      });
     }
+
+    if (this.mode === 'videos') {
+      this.element.querySelector('[data-action="import-video"]')?.addEventListener('click', () => void this.importVideos());
+      this.player?.addEventListener('click', (event) => {
+        if (event.target === this.player) this.closePlayer();
+      });
+      this.player?.querySelector('[data-player-close]')?.addEventListener('click', () => this.closePlayer());
+      this.player?.querySelector('[data-player-show]')?.addEventListener('click', () => {
+        if (this.playerPath) void window.nyxel.app.showItemInFolder(this.playerPath);
+      });
+      this.grid.addEventListener('click', (event) => {
+        const target = event.target as HTMLElement;
+        const card = target.closest<HTMLElement>('[data-video-path]');
+        if (!card) return;
+        const action = target.closest<HTMLElement>('[data-video-action]')?.dataset.videoAction;
+        const filePath = card.dataset.videoPath ?? '';
+        if (action === 'show') {
+          event.stopPropagation();
+          void window.nyxel.app.showItemInFolder(filePath);
+          return;
+        }
+        if (action === 'delete') {
+          event.stopPropagation();
+          void this.deleteFile(filePath);
+          return;
+        }
+        if (action === 'play' || !target.closest('button')) {
+          this.openPlayer(card);
+        }
+      });
+    }
+  }
+
+  private bindZoom(): void {
+    if (this.mode === 'videos') return;
+    this.element.addEventListener('wheel', (event) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      const factor = event.deltaY < 0 ? 1.22 : 1 / 1.22;
+      const next = Math.round(
+        Math.max(MIN_THUMB, Math.min(MAX_THUMB, this.thumbHeight * factor)) / 2
+      ) * 2;
+      if (next === this.thumbHeight) return;
+      this.thumbHeight = next;
+      localStorage.setItem(ZOOM_KEY, String(next));
+      this.updateZoomHint();
+      this.scheduleLayout();
+    }, { passive: false });
+  }
+
+  private updateZoomHint(): void {
+    this.element.querySelectorAll<HTMLElement>('[data-zoom-hint]').forEach((hint) => {
+      hint.textContent = `Ctrl + 滚轮缩放 · ${Math.round(this.thumbHeight)}px`;
+    });
   }
 
   async activate(): Promise<void> {
@@ -187,13 +356,17 @@ export class FilesView {
 
   deactivate(): void {
     this.active = false;
+    this.closePlayer();
+    this.hideColorPop();
   }
 
   private async load(): Promise<void> {
     if (this.mode === 'gallery') {
       await this.loadGallery();
-    } else {
+    } else if (this.mode === 'textures') {
       await this.loadTextures();
+    } else {
+      await this.loadVideos();
     }
   }
 
@@ -224,7 +397,7 @@ export class FilesView {
       this.folderCount = result.folders.length;
       this.renderFolders(result.folders, result.total);
       this.renderFiles(result.files);
-      this.folderPath.textContent = result.current ? result.current : '全部贴图';
+      this.renderFolderPath();
       this.updateFolderActive();
       this.callbacks.status.set('贴图资源', `${result.files.length} 张贴图`, result.current || '全部贴图');
     } catch (error) {
@@ -234,6 +407,22 @@ export class FilesView {
         return;
       }
       this.callbacks.toast(`读取贴图资源失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private async loadVideos(): Promise<void> {
+    try {
+      const result = await window.nyxel.library.videos();
+      this.info = {
+        root: result.root,
+        galleryDir: '',
+        texturesDir: '',
+        videosDir: result.root
+      };
+      this.renderFiles(result.files);
+      this.callbacks.status.set('视频作品', `${result.files.length} 个视频`, result.root);
+    } catch (error) {
+      this.callbacks.toast(`读取视频作品失败：${error instanceof Error ? error.message : String(error)}`, 'error');
     }
   }
 
@@ -247,25 +436,33 @@ export class FilesView {
     this.grid.innerHTML = '';
     this.empty.classList.toggle('hidden', filtered.length > 0);
     this.empty.textContent = query
-      ? '没有匹配的素材'
+      ? '没有匹配的内容'
       : this.mode === 'gallery'
         ? '还没有截图记录。完成一次截图后会自动出现在这里。'
-        : '还没有贴图。点「导入贴图」把图片复制到资源库。';
-    for (const file of filtered) {
-      this.grid.append(this.createFileCard(file));
+        : this.mode === 'textures'
+          ? '还没有贴图。点「导入贴图」把图片复制到资源库。'
+          : '还没有视频作品。点「上传视频」把视频放进作品区。';
+    if (this.mode === 'videos') {
+      for (const file of filtered) {
+        this.grid.append(this.createVideoCard(file));
+      }
+    } else {
+      for (const file of filtered) {
+        this.grid.append(this.createFileCard(file));
+      }
     }
     this.updateCount(filtered.length, files.length, Boolean(query));
     this.scheduleLayout();
   }
 
   private updateCount(filtered: number, total: number, searching: boolean): void {
-    const unit = this.mode === 'gallery' ? '张截图' : '张贴图';
+    const unit = this.mode === 'gallery' ? '张截图' : this.mode === 'videos' ? '个视频' : '张贴图';
     if (searching) {
       this.count.textContent = `${filtered} / ${total} ${unit}`;
-    } else if (this.mode === 'gallery') {
-      this.count.textContent = `${total} 张截图`;
+    } else if (this.mode === 'gallery' || this.mode === 'videos') {
+      this.count.textContent = `${total} ${unit}`;
     } else {
-      this.count.textContent = `${total} 张贴图 · ${this.folderCount} 个文件夹`;
+      this.count.textContent = `${total} ${unit} · ${this.folderCount} 个文件夹`;
     }
   }
 
@@ -325,8 +522,68 @@ export class FilesView {
     return card;
   }
 
+  private createVideoCard(file: LibraryFile): HTMLElement {
+    const card = document.createElement('article');
+    card.className = 'video-card';
+    card.dataset.videoPath = file.path;
+
+    const thumb = document.createElement('div');
+    thumb.className = 'video-card-thumb';
+
+    const preview = document.createElement('video');
+    preview.src = `${window.nyxel.library.mediaUrl(file.path)}#t=0.5`;
+    preview.preload = 'metadata';
+    preview.muted = true;
+    preview.playsInline = true;
+    preview.addEventListener('loadedmetadata', () => {
+      if (Number.isFinite(preview.duration) && preview.duration > 0.8) {
+        preview.currentTime = Math.min(0.8, preview.duration / 3);
+      }
+    });
+    thumb.append(preview);
+
+    const date = document.createElement('span');
+    date.className = 'video-date-badge';
+    const dateText = new Date(file.mtime);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    date.innerHTML = CALENDAR_ICON;
+    date.append(document.createTextNode(`${dateText.getFullYear()}-${pad(dateText.getMonth() + 1)}-${pad(dateText.getDate())}`));
+    date.title = `上传于 ${formatTime(file.mtime)}`;
+    thumb.append(date);
+
+    const play = document.createElement('span');
+    play.className = 'video-play-badge';
+    play.innerHTML = PLAY_ICON;
+    thumb.append(play);
+
+    const actions = document.createElement('div');
+    actions.className = 'asset-actions video-actions';
+    for (const [action, label] of [['play', '播放'], ['show', '定位'], ['delete', '删除']] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.videoAction = action;
+      button.textContent = label;
+      if (action === 'delete') button.className = 'danger';
+      actions.append(button);
+    }
+    thumb.append(actions);
+
+    const name = document.createElement('div');
+    name.className = 'asset-name video-name';
+    name.textContent = file.name;
+    name.title = file.relative;
+
+    const meta = document.createElement('div');
+    meta.className = 'video-card-meta';
+    const ext = file.name.split('.').pop()?.toUpperCase() ?? 'VIDEO';
+    meta.textContent = `${ext} · ${formatBytes(file.size)} · 上传于 ${formatTime(file.mtime)}`;
+
+    card.append(thumb, name, meta);
+    return card;
+  }
+
   private scheduleLayout(): void {
-    if (this.layoutQueued) return;
+    if (this.mode === 'videos' || this.layoutQueued) return;
     this.layoutQueued = true;
     requestAnimationFrame(() => {
       this.layoutQueued = false;
@@ -341,20 +598,20 @@ export class FilesView {
     if (width < 80) return;
 
     const gap = 8;
-    const targetHeight = 142;
+    const targetHeight = this.thumbHeight;
     const rows: HTMLElement[][] = [];
     let row: HTMLElement[] = [];
     let ratioSum = 0;
 
     for (const card of cards) {
       const ratio = Math.max(0.2, Number(card.dataset.aspect) || 1.6);
-      row.push(card);
-      ratioSum += ratio;
-      if (ratioSum * targetHeight + (row.length - 1) * gap >= width) {
+      if (row.length && (ratioSum + ratio) * targetHeight + row.length * gap > width) {
         rows.push(row);
         row = [];
         ratioSum = 0;
       }
+      row.push(card);
+      ratioSum += ratio;
     }
     if (row.length) rows.push(row);
 
@@ -365,7 +622,8 @@ export class FilesView {
       const isLast = rowIndex === rows.length - 1;
       let height = available / Math.max(0.2, sum);
       if (isLast) height = Math.min(height, targetHeight);
-      height = Math.max(62, Math.min(height, 260));
+      const maxHeight = Math.max(180, Math.min(420, targetHeight * 2.2));
+      height = Math.max(Math.min(62, targetHeight), Math.min(height, maxHeight));
 
       const rowElement = document.createElement('div');
       rowElement.className = 'asset-row';
@@ -380,28 +638,194 @@ export class FilesView {
   }
 
   private renderFolders(folders: LibraryFolder[], total: number): void {
+    if (!this.folderList) return;
     this.folderList.innerHTML = '';
     for (const folder of folders) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'folder-row';
+      const row = document.createElement('div');
+      row.className = 'folder-row folder-tree-row';
       row.dataset.folder = folder.relative;
-      row.style.paddingLeft = `${8 + folder.depth * 14}px`;
+      row.dataset.depth = String(folder.depth);
+      row.setAttribute('role', 'button');
+      row.tabIndex = 0;
+      row.draggable = true;
+
+      for (let index = 0; index < folder.depth; index += 1) {
+        const guide = document.createElement('span');
+        guide.className = 'folder-guide';
+        if (index === folder.depth - 1) guide.classList.add('elbow');
+        row.append(guide);
+      }
 
       const icon = document.createElement('span');
       icon.className = 'folder-icon';
+      if (folder.color) {
+        icon.classList.add('colored');
+        icon.style.color = folder.color;
+      }
       icon.innerHTML = FOLDER_ICON;
+
       const label = document.createElement('span');
       label.className = 'folder-label';
       label.textContent = folder.name;
+      label.title = folder.relative;
+
       const count = document.createElement('span');
       count.className = 'folder-count';
       count.textContent = String(folder.count);
-      row.append(icon, label, count);
+
+      const colorButton = document.createElement('button');
+      colorButton.type = 'button';
+      colorButton.className = 'folder-color-button';
+      colorButton.dataset.folderColor = folder.relative;
+      colorButton.title = '文件夹图标颜色';
+      colorButton.innerHTML = '<span></span>';
+
+      row.append(icon, label, count, colorButton);
+      this.bindFolderRow(row, folder.relative);
+      this.bindFolderDragTarget(row);
       this.folderList.append(row);
     }
     const allCount = this.element.querySelector('#all-count') as HTMLElement | null;
     if (allCount) allCount.textContent = String(total);
+  }
+
+  private bindFolderRow(row: HTMLElement, relative: string): void {
+    row.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('[data-folder-color]')) return;
+      this.currentFolder = relative;
+      this.updateFolderActive();
+      void this.load();
+    });
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        this.currentFolder = relative;
+        this.updateFolderActive();
+        void this.load();
+      }
+    });
+    row.addEventListener('dragstart', (event) => {
+      this.dragFolder = relative;
+      row.classList.add('dragging');
+      event.dataTransfer?.setData('text/plain', relative);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    });
+    row.addEventListener('dragend', () => {
+      this.dragFolder = '';
+      row.classList.remove('dragging');
+      this.element.querySelectorAll('.folder-drop-target').forEach((node) => node.classList.remove('folder-drop-target'));
+    });
+    const colorButton = row.querySelector<HTMLElement>('[data-folder-color]');
+    colorButton?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      this.openColorPop(colorButton.dataset.folderColor ?? '', colorButton);
+    });
+  }
+
+  private bindFolderDragTarget(row: HTMLElement): void {
+    row.addEventListener('dragover', (event) => {
+      if (!this.dragFolder) return;
+      const target = row.dataset.folder ?? '';
+      if (target === this.dragFolder) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      row.classList.add('folder-drop-target');
+    });
+    row.addEventListener('dragleave', (event) => {
+      if (row.contains(event.relatedTarget as Node | null)) return;
+      row.classList.remove('folder-drop-target');
+    });
+    row.addEventListener('drop', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      row.classList.remove('folder-drop-target');
+      const source = this.dragFolder || event.dataTransfer?.getData('text/plain') || '';
+      const target = row.dataset.folder ?? '';
+      if (!source || source === target) return;
+      void this.moveFolder(source, target);
+    });
+  }
+
+  private async moveFolder(source: string, targetParent: string): Promise<void> {
+    try {
+      const result = await window.nyxel.library.moveFolder(source, targetParent);
+      if (!result.ok) {
+        this.callbacks.toast(`移动失败：${result.error ?? '未知错误'}`, 'error');
+        return;
+      }
+      this.callbacks.toast('文件夹已移动', 'success');
+      if (this.currentFolder === source) {
+        this.currentFolder = result.path ?? targetParent;
+      } else if (this.currentFolder.startsWith(`${source}/`)) {
+        this.currentFolder = `${result.path ?? targetParent}${this.currentFolder.slice(source.length)}`;
+      }
+      await this.load();
+    } catch (error) {
+      this.callbacks.toast(`移动失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private openColorPop(relative: string, anchor: HTMLElement): void {
+    if (!this.colorPop) return;
+    this.colorFolder = relative;
+    this.colorPop.classList.remove('hidden');
+    const rect = anchor.getBoundingClientRect();
+    const popRect = this.colorPop.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.left - 8, window.innerWidth - popRect.width - 8));
+    const top = Math.min(rect.bottom + 6, window.innerHeight - popRect.height - 8);
+    this.colorPop.style.left = `${left}px`;
+    this.colorPop.style.top = `${top}px`;
+  }
+
+  private hideColorPop(): void {
+    this.colorPop?.classList.add('hidden');
+    this.colorFolder = '';
+  }
+
+  private async saveFolderColor(color: string | null): Promise<void> {
+    if (!this.colorFolder) return;
+    const folder = this.colorFolder;
+    this.hideColorPop();
+    try {
+      const result = await window.nyxel.library.setFolderColor(folder, color);
+      if (!result.ok) {
+        this.callbacks.toast(`改色失败：${result.error ?? '未知错误'}`, 'error');
+        return;
+      }
+      await this.load();
+    } catch (error) {
+      this.callbacks.toast(`改色失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private renderFolderPath(): void {
+    if (!this.folderPath) return;
+    const crumbs = this.folderPath.querySelector('.folder-path-crumbs');
+    if (!crumbs) return;
+    crumbs.innerHTML = '';
+    const parts = this.currentFolder.split('/').filter(Boolean);
+    const makeCrumb = (label: string, value: string, current: boolean): HTMLElement => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `path-crumb${current ? ' active' : ''}`;
+      button.dataset.crumb = value;
+      button.textContent = label;
+      return button;
+    };
+    crumbs.append(makeCrumb('全部贴图', '', parts.length === 0));
+    parts.forEach((part, index) => {
+      const separator = document.createElement('span');
+      separator.className = 'path-sep';
+      separator.textContent = '/';
+      crumbs.append(separator);
+      crumbs.append(makeCrumb(part, parts.slice(0, index + 1).join('/'), index === parts.length - 1));
+    });
+    this.element.querySelectorAll<HTMLButtonElement>('[data-action="up"]').forEach((button) => {
+      button.disabled = parts.length === 0;
+    });
   }
 
   private updateFolderActive(): void {
@@ -410,13 +834,30 @@ export class FilesView {
     });
   }
 
+  private async navigateUp(): Promise<void> {
+    if (!this.currentFolder) return;
+    const parts = this.currentFolder.split('/').filter(Boolean);
+    parts.pop();
+    this.currentFolder = parts.join('/');
+    this.updateFolderActive();
+    await this.load();
+  }
+
   private async openRoot(): Promise<void> {
     try {
-      const target = this.mode === 'gallery' ? this.info?.galleryDir : this.info?.texturesDir;
+      const target = this.mode === 'gallery'
+        ? this.info?.galleryDir
+        : this.mode === 'videos'
+          ? this.info?.videosDir
+          : this.info?.texturesDir;
       if (!target) {
         this.info = await window.nyxel.library.info();
       }
-      const root = this.mode === 'gallery' ? this.info?.galleryDir : this.info?.texturesDir;
+      const root = this.mode === 'gallery'
+        ? this.info?.galleryDir
+        : this.mode === 'videos'
+          ? this.info?.videosDir
+          : this.info?.texturesDir;
       if (!root) return;
       const error = await window.nyxel.app.openPath(root);
       if (error) this.callbacks.toast(`打开文件夹失败：${error}`, 'error');
@@ -425,12 +866,40 @@ export class FilesView {
     }
   }
 
+  private openPlayer(card: HTMLElement): void {
+    if (!this.player || !this.playerVideo) return;
+    const filePath = card.dataset.videoPath ?? '';
+    if (!filePath) return;
+    const name = card.querySelector('.video-name')?.textContent ?? '视频作品';
+    const meta = card.querySelector('.video-card-meta')?.textContent ?? '';
+    this.playerPath = filePath;
+    if (this.playerTitle) this.playerTitle.textContent = name;
+    if (this.playerMeta) this.playerMeta.textContent = meta;
+    const note = this.player.querySelector('#video-player-note');
+    if (note) note.textContent = filePath;
+    this.playerVideo.src = window.nyxel.library.mediaUrl(filePath);
+    this.player.classList.remove('hidden');
+    void this.playerVideo.play().catch(() => {
+      // Autoplay may be blocked; the native controls remain available.
+    });
+  }
+
+  private closePlayer(): void {
+    if (!this.player || !this.playerVideo) return;
+    this.playerVideo.pause();
+    this.playerVideo.removeAttribute('src');
+    this.playerVideo.load();
+    this.player.classList.add('hidden');
+    this.playerPath = '';
+  }
+
   private async deleteFile(filePath: string): Promise<void> {
     const name = filePath.split(/[\\/]/).pop() ?? '这个文件';
     if (!window.confirm(`将「${name}」移到回收站？`)) return;
     try {
       const result = await window.nyxel.library.delete(filePath);
       if (result.ok) {
+        if (this.playerPath === filePath) this.closePlayer();
         this.callbacks.toast('已移到回收站', 'success');
         await this.load();
       } else {
@@ -442,6 +911,7 @@ export class FilesView {
   }
 
   private openFolderModal(): void {
+    if (!this.modal || !this.folderInput || !this.modalError) return;
     this.modalError.textContent = '';
     this.folderInput.value = '';
     this.modal.classList.remove('hidden');
@@ -449,11 +919,12 @@ export class FilesView {
   }
 
   private closeFolderModal(): void {
-    this.modal.classList.add('hidden');
-    this.modalError.textContent = '';
+    this.modal?.classList.add('hidden');
+    if (this.modalError) this.modalError.textContent = '';
   }
 
   private async createFolder(): Promise<void> {
+    if (!this.folderInput || !this.modalError) return;
     const name = this.folderInput.value.trim();
     if (!name) {
       this.modalError.textContent = '请输入文件夹名称';
@@ -486,6 +957,21 @@ export class FilesView {
       await this.load();
     } catch (error) {
       this.callbacks.toast(`导入失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private async importVideos(): Promise<void> {
+    try {
+      const result = await window.nyxel.library.importVideos();
+      if (result.cancelled) return;
+      if (!result.ok) {
+        this.callbacks.toast(`上传失败：${result.error ?? '未知错误'}`, 'error');
+        return;
+      }
+      this.callbacks.toast(`已上传 ${result.imported ?? 0} 个视频作品`, 'success');
+      await this.load();
+    } catch (error) {
+      this.callbacks.toast(`上传失败：${error instanceof Error ? error.message : String(error)}`, 'error');
     }
   }
 }

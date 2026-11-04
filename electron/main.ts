@@ -10,12 +10,14 @@ import {
   Menu,
   nativeImage,
   net,
+  protocol,
   screen,
   shell
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { unzipSync } from 'fflate';
 
@@ -343,7 +345,21 @@ function dataUrlToPngBuffer(dataUrl: string): Buffer {
 }
 
 const LIBRARY_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tga']);
+const LIBRARY_VIDEO_EXTS = new Set(['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v', '.ts', '.flv', '.wmv']);
 const libraryThumbnailCache = new Map<string, { mtimeMs: number; dataUrl?: string }>();
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'nyxel-media',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true
+    }
+  }
+]);
 
 function libraryRoot(): string {
   return process.env.NYXEL_LIBRARY_DIR || path.join(app.getPath('documents'), 'Nyxel', 'Library');
@@ -357,10 +373,24 @@ function texturesDir(): string {
   return path.join(libraryRoot(), 'Textures');
 }
 
+function videosDir(): string {
+  return path.join(libraryRoot(), 'Videos');
+}
+
+function libraryMetaDir(): string {
+  return path.join(libraryRoot(), '.nyxel-meta');
+}
+
+function folderColorsFile(): string {
+  return path.join(libraryMetaDir(), 'folder-colors.json');
+}
+
 async function ensureLibraryDirs(): Promise<void> {
   await Promise.all([
     fs.promises.mkdir(galleryDir(), { recursive: true }),
-    fs.promises.mkdir(texturesDir(), { recursive: true })
+    fs.promises.mkdir(texturesDir(), { recursive: true }),
+    fs.promises.mkdir(videosDir(), { recursive: true }),
+    fs.promises.mkdir(libraryMetaDir(), { recursive: true })
   ]);
 }
 
@@ -386,6 +416,54 @@ function toRelative(root: string, target: string): string {
 
 function isLibraryImage(fileName: string): boolean {
   return LIBRARY_IMAGE_EXTS.has(path.extname(fileName).toLowerCase());
+}
+
+function isLibraryVideo(fileName: string): boolean {
+  return LIBRARY_VIDEO_EXTS.has(path.extname(fileName).toLowerCase());
+}
+
+async function readFolderColors(): Promise<Record<string, string>> {
+  try {
+    const raw = await fs.promises.readFile(folderColorsFile(), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const colors: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) {
+        colors[normalizeRelative(key)] = value;
+      }
+    }
+    return colors;
+  } catch {
+    return {};
+  }
+}
+
+async function writeFolderColors(colors: Record<string, string>): Promise<void> {
+  await ensureLibraryDirs();
+  await fs.promises.writeFile(
+    folderColorsFile(),
+    JSON.stringify(colors, null, 2),
+    'utf8'
+  );
+}
+
+function registerMediaProtocol(): void {
+  protocol.handle('nyxel-media', async (request) => {
+    try {
+      const requestUrl = new URL(request.url);
+      const raw = requestUrl.searchParams.get('path');
+      if (!raw) return new Response('Bad request', { status: 400 });
+      const filePath = path.resolve(raw);
+      const allowed = [videosDir(), galleryDir(), texturesDir()].some((dir) => isInside(dir, filePath));
+      if (!allowed) return new Response('Forbidden', { status: 403 });
+      const stat = await fs.promises.stat(filePath);
+      if (!stat.isFile()) return new Response('Not found', { status: 404 });
+      return net.fetch(pathToFileURL(filePath).toString(), { headers: request.headers });
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
+  });
 }
 
 async function uniqueFilePath(dir: string, fileName: string): Promise<string> {
@@ -487,10 +565,11 @@ async function countLibraryImages(dir: string): Promise<number> {
 
 async function collectLibraryFolders(
   root: string,
+  colors: Record<string, string>,
   dir = root,
   depth = 0,
-  result: Array<{ name: string; relative: string; depth: number; count: number }> = []
-): Promise<Array<{ name: string; relative: string; depth: number; count: number }>> {
+  result: Array<{ name: string; relative: string; depth: number; count: number; color?: string }> = []
+): Promise<Array<{ name: string; relative: string; depth: number; count: number; color?: string }>> {
   let entries;
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -502,13 +581,15 @@ async function collectLibraryFolders(
     .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
   for (const entry of folders) {
     const fullPath = path.join(dir, entry.name);
+    const relative = toRelative(root, fullPath);
     result.push({
       name: entry.name,
-      relative: toRelative(root, fullPath),
+      relative,
       depth,
-      count: await countLibraryImages(fullPath)
+      count: await countLibraryImages(fullPath),
+      color: colors[relative]
     });
-    await collectLibraryFolders(root, fullPath, depth + 1, result);
+    await collectLibraryFolders(root, colors, fullPath, depth + 1, result);
   }
   return result;
 }
@@ -542,7 +623,7 @@ async function listTextures(folder: string): Promise<{
   root: string;
   current: string;
   total: number;
-  folders: Array<{ name: string; relative: string; depth: number; count: number }>;
+  folders: Array<{ name: string; relative: string; depth: number; count: number; color?: string }>;
   files: Array<{
     name: string;
     path: string;
@@ -555,7 +636,8 @@ async function listTextures(folder: string): Promise<{
   await ensureLibraryDirs();
   const root = texturesDir();
   const current = resolveInside(root, folder);
-  const folders = await collectLibraryFolders(root);
+  const colors = await readFolderColors();
+  const folders = await collectLibraryFolders(root, colors);
   const allPaths = await walkLibraryFiles(root);
   const filePaths = current.relative
     ? (await fs.promises.readdir(current.target, { withFileTypes: true }))
@@ -608,6 +690,126 @@ async function importLibraryTextures(folder: string): Promise<{ ok: boolean; imp
   for (const filePath of result.filePaths) {
     if (!isLibraryImage(filePath)) continue;
     const destination = await uniqueFilePath(target.target, path.basename(filePath));
+    await fs.promises.copyFile(filePath, destination);
+    imported += 1;
+  }
+  if (imported) notifyLibraryChanged();
+  return { ok: true, imported };
+}
+
+async function moveLibraryFolder(source: string, targetParent: string): Promise<{ ok: boolean; path?: string; error?: string }> {
+  await ensureLibraryDirs();
+  const root = texturesDir();
+  const sourceDir = resolveInside(root, source);
+  const parentDir = resolveInside(root, targetParent);
+  if (!sourceDir.relative) return { ok: false, error: '不能移动资源库根目录' };
+  try {
+    const stat = await fs.promises.stat(sourceDir.target);
+    if (!stat.isDirectory()) return { ok: false, error: '只能移动文件夹' };
+  } catch {
+    return { ok: false, error: '文件夹不存在' };
+  }
+  if (parentDir.target === sourceDir.target || isInside(sourceDir.target, parentDir.target)) {
+    return { ok: false, error: '不能把文件夹移动到自身或子文件夹里' };
+  }
+  const target = path.join(parentDir.target, path.basename(sourceDir.target));
+  if (!isInside(root, target)) return { ok: false, error: '路径不在资源库内' };
+  if (path.resolve(target) === path.resolve(sourceDir.target)) {
+    return { ok: true, path: sourceDir.relative };
+  }
+  if (fs.existsSync(target)) return { ok: false, error: '目标文件夹里已经有同名文件夹' };
+  try {
+    await fs.promises.rename(sourceDir.target, target);
+    const nextRelative = toRelative(root, target);
+    const colors = await readFolderColors();
+    let changed = false;
+    for (const key of Object.keys(colors)) {
+      if (key === sourceDir.relative || key.startsWith(`${sourceDir.relative}/`)) {
+        colors[`${nextRelative}${key.slice(sourceDir.relative.length)}`] = colors[key];
+        delete colors[key];
+        changed = true;
+      }
+    }
+    if (changed) await writeFolderColors(colors);
+    notifyLibraryChanged();
+    return { ok: true, path: nextRelative };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function setLibraryFolderColor(folder: string, color: string | null): Promise<{ ok: boolean; error?: string }> {
+  await ensureLibraryDirs();
+  const root = texturesDir();
+  const target = resolveInside(root, folder);
+  if (!target.relative) return { ok: false, error: '不能给资源库根目录改色' };
+  try {
+    const stat = await fs.promises.stat(target.target);
+    if (!stat.isDirectory()) return { ok: false, error: '只能给文件夹改色' };
+  } catch {
+    return { ok: false, error: '文件夹不存在' };
+  }
+  if (color !== null && !/^#[0-9a-f]{6}$/i.test(color)) {
+    return { ok: false, error: '颜色格式无效' };
+  }
+  const colors = await readFolderColors();
+  if (color) colors[target.relative] = color;
+  else delete colors[target.relative];
+  await writeFolderColors(colors);
+  notifyLibraryChanged();
+  return { ok: true };
+}
+
+async function listVideos(): Promise<{ root: string; files: Array<{
+  name: string;
+  path: string;
+  relative: string;
+  size: number;
+  mtime: number;
+}> }> {
+  await ensureLibraryDirs();
+  const root = videosDir();
+  const entries = await fs.promises.readdir(root, { withFileTypes: true });
+  const files = await Promise.all(entries
+    .filter((entry) => entry.isFile() && isLibraryVideo(entry.name))
+    .map(async (entry) => {
+      const filePath = path.join(root, entry.name);
+      try {
+        const stat = await fs.promises.stat(filePath);
+        return {
+          name: entry.name,
+          path: filePath,
+          relative: toRelative(root, filePath),
+          size: stat.size,
+          mtime: stat.mtimeMs
+        };
+      } catch {
+        return null;
+      }
+    }));
+  const result = files.filter((file): file is NonNullable<typeof file> => file !== null);
+  result.sort((left, right) => right.mtime - left.mtime);
+  return { root, files: result };
+}
+
+async function importLibraryVideos(): Promise<{ ok: boolean; imported?: number; cancelled?: boolean; error?: string }> {
+  await ensureLibraryDirs();
+  const root = videosDir();
+  const options: Electron.OpenDialogOptions = {
+    title: '上传视频到作品区',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: '视频', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'ts', 'flv', 'wmv'] }
+    ]
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled) return { ok: false, cancelled: true };
+  let imported = 0;
+  for (const filePath of result.filePaths) {
+    if (!isLibraryVideo(filePath)) continue;
+    const destination = await uniqueFilePath(root, path.basename(filePath));
     await fs.promises.copyFile(filePath, destination);
     imported += 1;
   }
@@ -694,9 +896,16 @@ function compareVersions(left: string, right: string): number {
 }
 
 async function checkForUpdates(): Promise<UpdateCheckResult> {
+  const currentVersion = app.getVersion();
+  if (process.windowsStore) {
+    return {
+      ok: false,
+      currentVersion,
+      error: 'Microsoft Store 版本由商店自动更新'
+    };
+  }
   const settings = loadSettings();
   const channel = process.env.NYXEL_UPDATE_CHANNEL || settings.updateChannel;
-  const currentVersion = app.getVersion();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
@@ -1954,7 +2163,8 @@ function registerIpc(): void {
       settingsPath: settingsFile(),
       exportDir: settings.exportDir,
       cacheDir: settings.cacheDir,
-      hotkeyRegistered
+      hotkeyRegistered,
+      windowsStore: Boolean(process.windowsStore)
     };
   });
 
@@ -2104,7 +2314,8 @@ function registerIpc(): void {
     return {
       root: libraryRoot(),
       galleryDir: galleryDir(),
-      texturesDir: texturesDir()
+      texturesDir: texturesDir(),
+      videosDir: videosDir()
     };
   });
 
@@ -2120,9 +2331,21 @@ function registerIpc(): void {
     return importLibraryTextures(folder);
   });
 
+  ipcMain.handle('library:videos', async () => listVideos());
+
+  ipcMain.handle('library:importVideos', async () => importLibraryVideos());
+
+  ipcMain.handle('library:moveFolder', async (_event, source: string, targetParent: string) => {
+    return moveLibraryFolder(source, targetParent);
+  });
+
+  ipcMain.handle('library:setFolderColor', async (_event, folder: string, color: string | null) => {
+    return setLibraryFolderColor(folder, color);
+  });
+
   ipcMain.handle('library:delete', async (_event, target: string) => {
     const absolute = path.resolve(String(target ?? ''));
-    if (!isInside(galleryDir(), absolute) && !isInside(texturesDir(), absolute)) {
+    if (!isInside(galleryDir(), absolute) && !isInside(texturesDir(), absolute) && !isInside(videosDir(), absolute)) {
       return { ok: false, error: '只能删除资源库中的文件' };
     }
     try {
@@ -2157,6 +2380,7 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     app.setAppUserModelId('com.nyxel.app');
+    registerMediaProtocol();
     registerIpc();
     createWindow();
     const settings = loadSettings();

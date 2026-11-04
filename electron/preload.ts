@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('nyxel', {
   platform: process.platform,
+  test: {
+    noRestoreWorkspace: process.env.NYXEL_TEST_NO_RESTORE === '1'
+  },
   versions: {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
@@ -75,6 +78,11 @@ contextBridge.exposeInMainWorld('nyxel', {
     textures: (folder: string) => ipcRenderer.invoke('library:textures', folder),
     createFolder: (parent: string, name: string) => ipcRenderer.invoke('library:createFolder', parent, name),
     importTextures: (folder: string) => ipcRenderer.invoke('library:importTextures', folder),
+    videos: () => ipcRenderer.invoke('library:videos'),
+    importVideos: () => ipcRenderer.invoke('library:importVideos'),
+    moveFolder: (source: string, targetParent: string) => ipcRenderer.invoke('library:moveFolder', source, targetParent),
+    setFolderColor: (folder: string, color: string | null) => ipcRenderer.invoke('library:setFolderColor', folder, color),
+    mediaUrl: (filePath: string) => `nyxel-media://local/?path=${encodeURIComponent(filePath)}`,
     delete: (target: string) => ipcRenderer.invoke('library:delete', target),
     onChanged: (callback: () => void) => {
       const listener = () => callback();

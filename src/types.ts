@@ -1,4 +1,4 @@
-export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video';
+export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video' | 'videos';
 export type Theme = 'dark' | 'light' | 'system';
 export type UpdateChannel = 'stable' | 'beta';
 
@@ -153,12 +153,14 @@ export interface LibraryFolder {
   relative: string;
   depth: number;
   count: number;
+  color?: string;
 }
 
 export interface LibraryInfo {
   root: string;
   galleryDir: string;
   texturesDir: string;
+  videosDir: string;
 }
 
 export interface LibraryGallery {
@@ -174,6 +176,11 @@ export interface LibraryTextures {
   files: LibraryFile[];
 }
 
+export interface LibraryVideos {
+  root: string;
+  files: LibraryFile[];
+}
+
 export interface AppInfo {
   version: string;
   platform: string;
@@ -182,10 +189,12 @@ export interface AppInfo {
   exportDir: string;
   cacheDir: string;
   hotkeyRegistered: boolean;
+  windowsStore: boolean;
 }
 
 export interface NyxelApi {
   platform: string;
+  test: { noRestoreWorkspace: boolean };
   versions: { electron: string; chrome: string; node: string };
   window: {
     minimize: () => Promise<void>;
@@ -242,6 +251,11 @@ export interface NyxelApi {
     textures: (folder: string) => Promise<LibraryTextures>;
     createFolder: (parent: string, name: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
     importTextures: (folder: string) => Promise<{ ok: boolean; imported?: number; cancelled?: boolean; error?: string }>;
+    videos: () => Promise<LibraryVideos>;
+    importVideos: () => Promise<{ ok: boolean; imported?: number; cancelled?: boolean; error?: string }>;
+    moveFolder: (source: string, targetParent: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+    setFolderColor: (folder: string, color: string | null) => Promise<{ ok: boolean; error?: string }>;
+    mediaUrl: (filePath: string) => string;
     delete: (target: string) => Promise<{ ok: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   };

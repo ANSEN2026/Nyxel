@@ -43,6 +43,10 @@ appRoot.innerHTML = `
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>
           <span class="nav-tooltip">视频压缩 Ctrl+6</span>
         </button>
+        <button class="nav-button" data-view="videos" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.2"/><path d="M3 9h18M7 5v4M17 5v4M8.5 13.2l4 2.3-4 2.3z"/></svg>
+          <span class="nav-tooltip">视频作品 Ctrl+7</span>
+        </button>
       </nav>
       <div class="sidebar-bottom">
         <button class="about-button" id="btn-about" type="button" title="关于我们">!</button>
@@ -89,6 +93,7 @@ let colorView: ColorView;
 let galleryView: FilesView;
 let texturesView: FilesView;
 let videoView: VideoView;
+let videosView: FilesView;
 let settingsView: SettingsView;
 let aboutView: AboutView;
 
@@ -206,6 +211,7 @@ function showView(view: ViewName): void {
   if (currentView === 'gallery') galleryView.deactivate();
   if (currentView === 'textures') texturesView.deactivate();
   if (currentView === 'video') videoView.deactivate();
+  if (currentView === 'videos') videosView.deactivate();
 
   currentView = view;
   homeView.element.classList.toggle('hidden', view !== 'home');
@@ -215,6 +221,7 @@ function showView(view: ViewName): void {
   galleryView.element.classList.toggle('hidden', view !== 'gallery');
   texturesView.element.classList.toggle('hidden', view !== 'textures');
   videoView.element.classList.toggle('hidden', view !== 'video');
+  videosView.element.classList.toggle('hidden', view !== 'videos');
 
   document.querySelectorAll('.nav-button').forEach((button) => {
     button.classList.toggle('active', (button as HTMLElement).dataset.view === view);
@@ -238,6 +245,9 @@ function showView(view: ViewName): void {
   } else if (view === 'video') {
     void videoView.activate();
     updateTitle('视频压缩');
+  } else if (view === 'videos') {
+    void videosView.activate();
+    updateTitle('视频作品');
   } else {
     modelView.activate();
     updateTitle('模型');
@@ -306,6 +316,9 @@ function bindKeyboard(): void {
     } else if (event.key === '6') {
       event.preventDefault();
       showView('video');
+    } else if (event.key === '7') {
+      event.preventDefault();
+      showView('videos');
     } else if (event.key === ',') {
       event.preventDefault();
       void settingsView.open(settings, appInfo);
@@ -359,6 +372,7 @@ async function bootstrap(): Promise<void> {
   galleryView = new FilesView('gallery', callbacks);
   texturesView = new FilesView('textures', callbacks);
   videoView = new VideoView(callbacks);
+  videosView = new FilesView('videos', callbacks);
   settingsView = new SettingsView(saveSettings, toast);
   aboutView = new AboutView(toast);
 
@@ -369,7 +383,8 @@ async function bootstrap(): Promise<void> {
     colorView.element,
     galleryView.element,
     texturesView.element,
-    videoView.element
+    videoView.element,
+    videosView.element
   );
   textureView.element.classList.add('hidden');
   modelView.element.classList.add('hidden');
@@ -377,6 +392,7 @@ async function bootstrap(): Promise<void> {
   galleryView.element.classList.add('hidden');
   texturesView.element.classList.add('hidden');
   videoView.element.classList.add('hidden');
+  videosView.element.classList.add('hidden');
   document.body.append(settingsView.element, aboutView.element);
 
   bindWindowControls();
@@ -412,7 +428,7 @@ async function bootstrap(): Promise<void> {
   const maximizeButton = document.querySelector('#btn-max') as HTMLButtonElement;
   maximizeButton.textContent = maximized ? '❐' : '□';
 
-  if (settings.restoreWorkspace && settings.recentProjects?.length) {
+  if (settings.restoreWorkspace && settings.recentProjects?.length && !window.nyxel.test?.noRestoreWorkspace) {
     window.setTimeout(() => {
       const recent = settings.recentProjects[0];
       if (recent.type === 'model') void openModelPath(recent.path);

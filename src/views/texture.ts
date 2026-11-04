@@ -119,6 +119,7 @@ export class TextureView {
   private packBusy = false;
 
   private aiOverlay: HTMLElement;
+  private aiPluginWarning: HTMLElement;
   private aiRuntime: HTMLElement;
   private aiProgress: HTMLElement;
   private aiProgressBar: HTMLElement;
@@ -247,7 +248,13 @@ export class TextureView {
               <h3>AI 超分</h3>
               <button class="ghost" data-ai-close title="关闭">×</button>
             </div>
-            <p class="pack-desc">Upscayl / Real-ESRGAN 首次使用需要下载对应运行时，下载后保存在本机，后续可离线使用。</p>
+            <div class="plugin-warning ai-plugin-warning" id="ai-plugin-warning">
+              <span class="plugin-warning-icon">!</span>
+              <div class="plugin-warning-body">
+                <strong>需要下载外部运行时</strong>
+                <span>AI 超分依赖 Upscayl / Real-ESRGAN 运行时和模型（约 33–45 MB），首次使用会联网下载，之后可离线使用。</span>
+              </div>
+            </div>
             <div class="ai-engine-row">
               <label for="ai-engine">超分引擎</label>
               <select id="ai-engine">
@@ -328,6 +335,7 @@ export class TextureView {
       a: this.element.querySelector('[data-pack-slot="a"]') as HTMLSelectElement
     };
     this.aiOverlay = this.element.querySelector('.ai-overlay') as HTMLElement;
+    this.aiPluginWarning = this.element.querySelector('#ai-plugin-warning') as HTMLElement;
     this.aiRuntime = this.element.querySelector('#ai-runtime') as HTMLElement;
     this.aiProgress = this.element.querySelector('.ai-progress') as HTMLElement;
     this.aiProgressBar = this.element.querySelector('#ai-progress-bar') as HTMLElement;
@@ -1147,6 +1155,7 @@ export class TextureView {
     const label = this.aiEngineLabel();
     const size = this.aiEngine === 'upscayl' ? '约 33 MB' : '约 45 MB';
     this.aiRuntime.classList.toggle('ready', status.available);
+    this.aiPluginWarning.classList.toggle('hidden', status.available);
     this.aiRuntime.textContent = status.available
       ? `${label} 运行时已就绪 · ${status.dir}`
       : status.downloading

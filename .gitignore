@@ -12,3 +12,4 @@ release/
 .icon-test-profile/
 .asset-test-profile/
 .asset-packaged-profile/
+store/identity.json

@@ -57,6 +57,7 @@ export class VideoView {
   private cancelButton: HTMLButtonElement;
   private openOutputButton: HTMLButtonElement;
   private runtime: HTMLElement;
+  private pluginWarning: HTMLElement;
   private runtimeText: HTMLElement;
   private runtimeBar: HTMLElement;
   private runtimePercent: HTMLElement;
@@ -77,6 +78,13 @@ export class VideoView {
         <button data-action="open-output">输出文件夹</button>
       </div>
       <div class="view-body video-body">
+        <div class="plugin-warning" id="video-plugin-warning">
+          <span class="plugin-warning-icon">!</span>
+          <div class="plugin-warning-body">
+            <strong>需要下载外部组件</strong>
+            <span>视频压缩依赖 ffmpeg 运行时（约 200 MB），首次使用会联网下载，下载后可离线使用。</span>
+          </div>
+        </div>
         <div class="video-runtime hidden" id="video-runtime">
           <div class="video-runtime-info">
             <strong>需要 ffmpeg 运行时</strong>
@@ -200,6 +208,7 @@ export class VideoView {
     this.cancelButton = this.element.querySelector('[data-action="cancel"]') as HTMLButtonElement;
     this.openOutputButton = this.element.querySelector('[data-action="show-output"]') as HTMLButtonElement;
     this.runtime = this.element.querySelector('#video-runtime') as HTMLElement;
+    this.pluginWarning = this.element.querySelector('#video-plugin-warning') as HTMLElement;
     this.runtimeText = this.element.querySelector('#video-runtime-text') as HTMLElement;
     this.runtimeBar = this.element.querySelector('#video-runtime-bar') as HTMLElement;
     this.runtimePercent = this.element.querySelector('#video-runtime-percent') as HTMLElement;
@@ -280,6 +289,7 @@ export class VideoView {
       }
       this.runtimeLabel.textContent = status.available ? 'ffmpeg 已就绪' : '未安装 ffmpeg';
       this.runtime.classList.toggle('hidden', status.available);
+      this.pluginWarning.classList.toggle('hidden', status.available);
       this.runtimeButton.disabled = status.downloading;
       this.runtimeButton.textContent = status.downloading ? '下载中…' : '下载 ffmpeg';
       if (status.progress && (status.progress.phase === 'download' || status.progress.phase === 'extract')) {
