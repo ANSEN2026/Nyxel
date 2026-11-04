@@ -39,7 +39,28 @@ export class FilesView {
   private playerVideo: HTMLVideoElement | null = null;
   private playerTitle: HTMLElement | null = null;
   private playerMeta: HTMLElement | null = null;
+  private playerStage: HTMLElement | null = null;
+  private playerResolution: HTMLElement | null = null;
+  private playerZoomLabel: HTMLElement | null = null;
+  private playerSeek: HTMLInputElement | null = null;
+  private playerCurrentTime: HTMLElement | null = null;
+  private playerDurationTime: HTMLElement | null = null;
+  private playerPlayButton: HTMLButtonElement | null = null;
+  private playerMuteButton: HTMLButtonElement | null = null;
+  private playerSeeking = false;
+  private playerSeekFrame = 0;
   private playerPath = '';
+  private playerZoom = 1;
+  private playerOffsetX = 0;
+  private playerOffsetY = 0;
+  private playerPanning = false;
+  private playerPanStart = { x: 0, y: 0, ox: 0, oy: 0 };
+  private contextMenu!: HTMLElement;
+  private contextActions = new Map<string, () => void>();
+  private moveModal: HTMLElement | null = null;
+  private moveTarget: HTMLSelectElement | null = null;
+  private moveError: HTMLElement | null = null;
+  private moveSource = '';
 
   constructor(mode: FilesMode, callbacks: ViewCallbacks) {
     this.mode = mode;
@@ -130,6 +151,18 @@ export class FilesView {
           </div>
           <button type="button" class="folder-color-reset" data-color="reset">恢复默认颜色</button>
         </div>
+        <div class="files-modal hidden" id="move-modal">
+          <div class="files-modal-card move-modal-card">
+            <h3>迁移文件夹</h3>
+            <p class="move-desc" id="move-desc"></p>
+            <select id="move-target"></select>
+            <div class="files-modal-error" id="move-error"></div>
+            <div class="files-modal-actions">
+              <button data-move="cancel" type="button">取消</button>
+              <button class="primary" data-move="confirm" type="button">迁移</button>
+            </div>
+          </div>
+        </div>
       `;
     } else {
       this.element.innerHTML = `
@@ -160,9 +193,28 @@ export class FilesView {
               </div>
               <button type="button" data-player-close title="关闭">×</button>
             </header>
-            <video id="video-player-el" controls playsinline></video>
+            <div class="video-player-stage" id="video-player-stage">
+              <video id="video-player-el" playsinline preload="auto"></video>
+              <div class="video-zoom-bar">
+                <button type="button" data-video-zoom="out" title="缩小">−</button>
+                <span id="video-zoom-label">适应</span>
+                <button type="button" data-video-zoom="in" title="放大">＋</button>
+                <button type="button" data-video-zoom="fit">适应</button>
+                <button type="button" data-video-zoom="native">1:1</button>
+              </div>
+              <div class="video-resolution" id="video-player-resolution"></div>
+            </div>
+            <div class="video-player-controls">
+              <button type="button" data-player-play title="播放 / 暂停">▶</button>
+              <span id="video-current-time">0:00</span>
+              <input id="video-seek" type="range" min="0" max="1000" step="1" value="0">
+              <span id="video-duration-time">0:00</span>
+              <button type="button" data-player-mute title="静音">静音</button>
+              <button type="button" data-player-fullscreen title="全屏">全屏</button>
+            </div>
             <footer class="video-player-foot">
               <span id="video-player-note"></span>
+              <span class="video-zoom-hint">滚轮缩放 · 拖动平移 · 双击适应</span>
               <span class="spacer"></span>
               <button type="button" data-player-show>在文件夹中显示</button>
             </footer>
@@ -184,21 +236,55 @@ export class FilesView {
     this.playerVideo = this.element.querySelector('#video-player-el');
     this.playerTitle = this.element.querySelector('#video-player-title');
     this.playerMeta = this.element.querySelector('#video-player-meta');
+    this.playerStage = this.element.querySelector('#video-player-stage');
+    this.playerResolution = this.element.querySelector('#video-player-resolution');
+    this.playerZoomLabel = this.element.querySelector('#video-zoom-label');
+    this.playerSeek = this.element.querySelector('#video-seek');
+    this.playerCurrentTime = this.element.querySelector('#video-current-time');
+    this.playerDurationTime = this.element.querySelector('#video-duration-time');
+    this.playerPlayButton = this.element.querySelector('[data-player-play]');
+    this.playerMuteButton = this.element.querySelector('[data-player-mute]');
+    this.moveModal = this.element.querySelector('#move-modal');
+    this.moveTarget = this.element.querySelector('#move-target');
+    this.moveError = this.element.querySelector('#move-error');
+
+    this.contextMenu = document.createElement('div');
+    this.contextMenu.className = 'context-menu hidden';
+    document.body.append(this.contextMenu);
+    this.contextMenu.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLElement>('[data-context-action]');
+      if (!button) return;
+      const action = this.contextActions.get(button.dataset.contextAction ?? '');
+      this.hideContextMenu();
+      action?.();
+    });
 
     this.updateZoomHint();
     this.bindEvents();
-    window.addEventListener('resize', () => this.scheduleLayout());
+    window.addEventListener('resize', () => {
+      this.scheduleLayout();
+      this.hideContextMenu();
+    });
     window.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         if (this.player && !this.player.classList.contains('hidden')) this.closePlayer();
         this.hideColorPop();
+        this.hideContextMenu();
+        this.closeMoveModal();
       }
     });
     document.addEventListener('click', (event) => {
-      if (!this.colorPop || this.colorPop.classList.contains('hidden')) return;
       const target = event.target as HTMLElement;
-      if (this.colorPop.contains(target) || target.closest('[data-folder-color]')) return;
-      this.hideColorPop();
+      if (this.colorPop && !this.colorPop.classList.contains('hidden')) {
+        if (
+          !this.colorPop.contains(target) &&
+          !target.closest('[data-folder-color]') &&
+          !target.closest('[data-context-action]')
+        ) {
+          this.hideColorPop();
+        }
+      }
+      if (!this.contextMenu.contains(target)) this.hideContextMenu();
     });
     window.nyxel.library.onChanged(() => {
       if (this.active) void this.load();
@@ -206,6 +292,25 @@ export class FilesView {
   }
 
   private bindEvents(): void {
+    this.element.addEventListener('scroll', () => this.hideContextMenu(), true);
+    this.element.addEventListener('contextmenu', (event) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('input, select, textarea')) return;
+      const folderRow = target.closest<HTMLElement>('.folder-row[data-folder]');
+      const videoCard = target.closest<HTMLElement>('[data-video-path]');
+      const fileCard = target.closest<HTMLElement>('[data-file-path]');
+      if (!folderRow && !videoCard && !fileCard) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (folderRow) {
+        this.showFolderContext(folderRow, event.clientX, event.clientY);
+      } else if (videoCard) {
+        this.showVideoContext(videoCard, event.clientX, event.clientY);
+      } else if (fileCard) {
+        this.showFileContext(fileCard, event.clientX, event.clientY);
+      }
+    });
+
     this.element.addEventListener('click', (event) => {
       const target = event.target as HTMLElement;
       const actionButton = target.closest<HTMLElement>('[data-file-action]');
@@ -292,6 +397,11 @@ export class FilesView {
         const value = button.dataset.color === 'reset' ? null : button.dataset.color ?? null;
         void this.saveFolderColor(value);
       });
+      this.moveModal?.addEventListener('click', (event) => {
+        if (event.target === this.moveModal) this.closeMoveModal();
+      });
+      this.element.querySelector('[data-move="cancel"]')?.addEventListener('click', () => this.closeMoveModal());
+      this.element.querySelector('[data-move="confirm"]')?.addEventListener('click', () => void this.confirmMoveFolder());
     }
 
     if (this.mode === 'videos') {
@@ -299,9 +409,113 @@ export class FilesView {
       this.player?.addEventListener('click', (event) => {
         if (event.target === this.player) this.closePlayer();
       });
+      this.player?.querySelectorAll<HTMLElement>('[data-video-zoom]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const action = button.dataset.videoZoom;
+          if (action === 'in') this.zoomPlayer(1.25);
+          else if (action === 'out') this.zoomPlayer(0.8);
+          else if (action === 'native') this.zoomPlayerToNative();
+          else this.resetPlayerZoom();
+        });
+      });
+      this.playerStage?.addEventListener('wheel', (event) => {
+        if (!this.player || this.player.classList.contains('hidden')) return;
+        event.preventDefault();
+        this.zoomPlayer(event.deltaY < 0 ? 1.18 : 1 / 1.18);
+      }, { passive: false });
+      this.playerVideo?.addEventListener('loadedmetadata', () => {
+        if (!this.playerVideo) return;
+        const width = this.playerVideo.videoWidth;
+        const height = this.playerVideo.videoHeight;
+        if (this.playerResolution) {
+          this.playerResolution.textContent = width && height ? `原始 ${width} × ${height}` : '';
+        }
+        this.syncPlayerTimeline();
+        this.resetPlayerZoom();
+      });
+      this.playerVideo?.addEventListener('dblclick', () => this.resetPlayerZoom());
+      this.playerVideo?.addEventListener('pointerdown', (event) => {
+        if (!this.playerVideo || this.playerZoom <= 1.01 || event.button !== 0) return;
+        const rect = this.playerVideo.getBoundingClientRect();
+        if (event.clientY > rect.bottom - 42) return;
+        this.playerPanning = true;
+        this.playerPanStart = {
+          x: event.clientX,
+          y: event.clientY,
+          ox: this.playerOffsetX,
+          oy: this.playerOffsetY
+        };
+        this.playerVideo.setPointerCapture(event.pointerId);
+        this.applyPlayerZoom();
+        event.preventDefault();
+      });
+      this.playerVideo?.addEventListener('pointermove', (event) => {
+        if (!this.playerPanning) return;
+        this.playerOffsetX = this.playerPanStart.ox + (event.clientX - this.playerPanStart.x);
+        this.playerOffsetY = this.playerPanStart.oy + (event.clientY - this.playerPanStart.y);
+        this.applyPlayerZoom();
+      });
+      const endPan = () => {
+        this.playerPanning = false;
+        this.applyPlayerZoom();
+      };
+      this.playerVideo?.addEventListener('pointerup', endPan);
+      this.playerVideo?.addEventListener('pointercancel', endPan);
       this.player?.querySelector('[data-player-close]')?.addEventListener('click', () => this.closePlayer());
       this.player?.querySelector('[data-player-show]')?.addEventListener('click', () => {
         if (this.playerPath) void window.nyxel.app.showItemInFolder(this.playerPath);
+      });
+      this.player?.querySelector('[data-player-play]')?.addEventListener('click', () => {
+        if (!this.playerVideo) return;
+        if (this.playerVideo.paused) {
+          if (this.playerVideo.ended) this.playerVideo.currentTime = 0;
+          void this.playerVideo.play().catch(() => {});
+        } else {
+          this.playerVideo.pause();
+        }
+      });
+      this.player?.querySelector('[data-player-mute]')?.addEventListener('click', () => {
+        if (!this.playerVideo || !this.playerMuteButton) return;
+        this.playerVideo.muted = !this.playerVideo.muted;
+        this.playerMuteButton.textContent = this.playerVideo.muted ? '取消静音' : '静音';
+      });
+      this.player?.querySelector('[data-player-fullscreen]')?.addEventListener('click', () => {
+        const card = this.player?.querySelector('.video-player-card') as HTMLElement | null;
+        void card?.requestFullscreen?.().catch(() => {});
+      });
+      this.playerSeek?.addEventListener('input', () => {
+        if (!this.playerVideo || !this.playerSeek) return;
+        this.playerSeeking = true;
+        const duration = this.playerVideo.duration || 0;
+        const target = (Number(this.playerSeek.value) / 1000) * duration;
+        if (this.playerCurrentTime) this.playerCurrentTime.textContent = this.formatMediaTime(target);
+        if (this.playerSeekFrame) cancelAnimationFrame(this.playerSeekFrame);
+        this.playerSeekFrame = requestAnimationFrame(() => {
+          this.playerSeekFrame = 0;
+          if (this.playerVideo && Number.isFinite(duration) && duration > 0) {
+            this.playerVideo.currentTime = target;
+          }
+        });
+      });
+      this.playerSeek?.addEventListener('change', () => {
+        if (!this.playerVideo || !this.playerSeek) return;
+        const duration = this.playerVideo.duration;
+        if (Number.isFinite(duration) && duration > 0) {
+          this.playerVideo.currentTime = (Number(this.playerSeek.value) / 1000) * duration;
+        }
+        this.playerSeeking = false;
+      });
+      this.playerVideo?.addEventListener('timeupdate', () => this.syncPlayerTimeline());
+      this.playerVideo?.addEventListener('durationchange', () => this.syncPlayerTimeline());
+      this.playerVideo?.addEventListener('seeked', () => this.syncPlayerTimeline());
+      this.playerVideo?.addEventListener('play', () => {
+        if (this.playerPlayButton) this.playerPlayButton.textContent = '❚❚';
+      });
+      this.playerVideo?.addEventListener('pause', () => {
+        if (this.playerPlayButton) this.playerPlayButton.textContent = '▶';
+      });
+      this.playerVideo?.addEventListener('ended', () => {
+        if (this.playerPlayButton) this.playerPlayButton.textContent = '▶';
       });
       this.grid.addEventListener('click', (event) => {
         const target = event.target as HTMLElement;
@@ -358,6 +572,8 @@ export class FilesView {
     this.active = false;
     this.closePlayer();
     this.hideColorPop();
+    this.hideContextMenu();
+    this.closeMoveModal();
   }
 
   private async load(): Promise<void> {
@@ -768,14 +984,160 @@ export class FilesView {
     }
   }
 
+  private showFolderContext(row: HTMLElement, x: number, y: number): void {
+    const folder = row.dataset.folder ?? '';
+    const items: Array<{ label: string; danger?: boolean; action: () => void }> = [];
+    if (folder) {
+      items.push(
+        { label: '打开', action: () => { this.currentFolder = folder; this.updateFolderActive(); void this.load(); } },
+        { label: '迁移到…', action: () => this.openMoveFolderModal(folder) },
+        { label: '图标颜色', action: () => this.openColorPopAt(folder, x, y) },
+        { label: '打开本地资源库', action: () => void this.openRoot() },
+        { label: '在资源管理器中显示', action: () => void window.nyxel.library.showFolder(folder) },
+        { label: '删除文件夹', danger: true, action: () => void this.deleteFolder(folder) }
+      );
+    } else {
+      items.push({ label: '打开本地资源库', action: () => void this.openRoot() });
+    }
+    this.openContextMenu(x, y, items);
+  }
+
+  private showVideoContext(card: HTMLElement, x: number, y: number): void {
+    const filePath = card.dataset.videoPath ?? '';
+    if (!filePath) return;
+    this.openContextMenu(x, y, [
+      { label: '播放', action: () => this.openPlayer(card) },
+      { label: '迁移到文件夹…', action: () => void this.migrateVideo(filePath) },
+      { label: '在文件夹中显示', action: () => void window.nyxel.app.showItemInFolder(filePath) },
+      { label: '打开本地资源库', action: () => void this.openRoot() },
+      { label: '删除视频', danger: true, action: () => void this.deleteFile(filePath) }
+    ]);
+  }
+
+  private showFileContext(card: HTMLElement, x: number, y: number): void {
+    const filePath = card.dataset.filePath ?? '';
+    if (!filePath) return;
+    this.openContextMenu(x, y, [
+      { label: '打开', action: () => void this.callbacks.openTexturePath(filePath) },
+      { label: '在文件夹中显示', action: () => void window.nyxel.app.showItemInFolder(filePath) },
+      { label: '打开本地资源库', action: () => void this.openRoot() },
+      { label: '删除文件', danger: true, action: () => void this.deleteFile(filePath) }
+    ]);
+  }
+
+  private openContextMenu(
+    x: number,
+    y: number,
+    items: Array<{ label: string; danger?: boolean; action: () => void }>
+  ): void {
+    this.contextActions.clear();
+    this.contextMenu.innerHTML = '';
+    items.forEach((item, index) => {
+      const key = String(index);
+      this.contextActions.set(key, item.action);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.contextAction = key;
+      button.textContent = item.label;
+      if (item.danger) button.classList.add('danger');
+      this.contextMenu.append(button);
+    });
+    this.contextMenu.classList.remove('hidden');
+    const rect = this.contextMenu.getBoundingClientRect();
+    this.contextMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    this.contextMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+  }
+
+  private hideContextMenu(): void {
+    this.contextMenu?.classList.add('hidden');
+    this.contextActions.clear();
+  }
+
+  private openMoveFolderModal(source: string): void {
+    if (!this.moveModal || !this.moveTarget) return;
+    this.moveSource = source;
+    const desc = this.moveModal.querySelector('#move-desc');
+    if (desc) desc.textContent = `把「${source.split('/').pop() ?? source}」移动到：`;
+    this.moveTarget.innerHTML = '';
+    const rootOption = document.createElement('option');
+    rootOption.value = '';
+    rootOption.textContent = '全部贴图（根目录）';
+    this.moveTarget.append(rootOption);
+    this.element.querySelectorAll<HTMLElement>('.folder-row[data-folder]').forEach((row) => {
+      const value = row.dataset.folder ?? '';
+      if (!value) return;
+      if (value === source || value.startsWith(`${source}/`)) return;
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value.split('/').join(' / ');
+      this.moveTarget?.append(option);
+    });
+    if (this.moveError) this.moveError.textContent = '';
+    this.moveModal.classList.remove('hidden');
+  }
+
+  private closeMoveModal(): void {
+    this.moveModal?.classList.add('hidden');
+    if (this.moveError) this.moveError.textContent = '';
+    this.moveSource = '';
+  }
+
+  private async confirmMoveFolder(): Promise<void> {
+    if (!this.moveTarget || !this.moveSource) return;
+    const target = this.moveTarget.value;
+    const source = this.moveSource;
+    this.closeMoveModal();
+    await this.moveFolder(source, target);
+  }
+
+  private async deleteFolder(folder: string): Promise<void> {
+    const name = folder.split('/').pop() ?? folder;
+    if (!window.confirm(`将文件夹「${name}」及其中所有文件移到回收站？`)) return;
+    try {
+      const result = await window.nyxel.library.deleteFolder(folder);
+      if (!result.ok) {
+        this.callbacks.toast(`删除失败：${result.error ?? '未知错误'}`, 'error');
+        return;
+      }
+      if (this.currentFolder === folder || this.currentFolder.startsWith(`${folder}/`)) {
+        this.currentFolder = '';
+      }
+      this.callbacks.toast('文件夹已移到回收站', 'success');
+      await this.load();
+    } catch (error) {
+      this.callbacks.toast(`删除失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private async migrateVideo(filePath: string): Promise<void> {
+    const destination = await window.nyxel.dialog.openDirectory();
+    if (!destination) return;
+    try {
+      const result = await window.nyxel.library.moveVideo(filePath, destination);
+      if (!result.ok) {
+        this.callbacks.toast(`迁移失败：${result.error ?? '未知错误'}`, 'error');
+        return;
+      }
+      if (this.playerPath === filePath) this.closePlayer();
+      this.callbacks.toast(`视频已迁移到：${destination}`, 'success');
+      await this.load();
+    } catch (error) {
+      this.callbacks.toast(`迁移失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
   private openColorPop(relative: string, anchor: HTMLElement): void {
+    const rect = anchor.getBoundingClientRect();
+    this.openColorPopAt(relative, rect.left - 8, rect.bottom + 6);
+  }
+
+  private openColorPopAt(relative: string, x: number, y: number): void {
     if (!this.colorPop) return;
     this.colorFolder = relative;
     this.colorPop.classList.remove('hidden');
-    const rect = anchor.getBoundingClientRect();
     const popRect = this.colorPop.getBoundingClientRect();
-    const left = Math.max(8, Math.min(rect.left - 8, window.innerWidth - popRect.width - 8));
-    const top = Math.min(rect.bottom + 6, window.innerHeight - popRect.height - 8);
+    const left = Math.max(8, Math.min(x, window.innerWidth - popRect.width - 8));
+    const top = Math.max(8, Math.min(y, window.innerHeight - popRect.height - 8));
     this.colorPop.style.left = `${left}px`;
     this.colorPop.style.top = `${top}px`;
   }
@@ -877,6 +1239,17 @@ export class FilesView {
     if (this.playerMeta) this.playerMeta.textContent = meta;
     const note = this.player.querySelector('#video-player-note');
     if (note) note.textContent = filePath;
+    if (this.playerResolution) this.playerResolution.textContent = '';
+    if (this.playerCurrentTime) this.playerCurrentTime.textContent = '0:00';
+    if (this.playerDurationTime) this.playerDurationTime.textContent = '0:00';
+    if (this.playerSeek) this.playerSeek.value = '0';
+    if (this.playerPlayButton) this.playerPlayButton.textContent = '▶';
+    this.playerSeeking = false;
+    if (this.playerSeekFrame) {
+      cancelAnimationFrame(this.playerSeekFrame);
+      this.playerSeekFrame = 0;
+    }
+    this.resetPlayerZoom();
     this.playerVideo.src = window.nyxel.library.mediaUrl(filePath);
     this.player.classList.remove('hidden');
     void this.playerVideo.play().catch(() => {
@@ -891,6 +1264,75 @@ export class FilesView {
     this.playerVideo.load();
     this.player.classList.add('hidden');
     this.playerPath = '';
+    this.playerSeeking = false;
+    if (this.playerSeekFrame) {
+      cancelAnimationFrame(this.playerSeekFrame);
+      this.playerSeekFrame = 0;
+    }
+    if (this.playerPlayButton) this.playerPlayButton.textContent = '▶';
+    this.resetPlayerZoom();
+  }
+
+  private resetPlayerZoom(): void {
+    this.playerZoom = 1;
+    this.playerOffsetX = 0;
+    this.playerOffsetY = 0;
+    this.playerPanning = false;
+    this.applyPlayerZoom();
+  }
+
+  private zoomPlayer(factor: number): void {
+    this.playerZoom = Math.max(0.25, Math.min(8, this.playerZoom * factor));
+    if (this.playerZoom <= 1.001) {
+      this.playerOffsetX = 0;
+      this.playerOffsetY = 0;
+    }
+    this.applyPlayerZoom();
+  }
+
+  private zoomPlayerToNative(): void {
+    if (!this.playerVideo) return;
+    const width = this.playerVideo.videoWidth;
+    const height = this.playerVideo.videoHeight;
+    const baseWidth = this.playerVideo.offsetWidth;
+    const baseHeight = this.playerVideo.offsetHeight;
+    if (!width || !height || !baseWidth || !baseHeight) return;
+    this.playerZoom = Math.max(1, Math.min(8, Math.max(width / baseWidth, height / baseHeight)));
+    this.playerOffsetX = 0;
+    this.playerOffsetY = 0;
+    this.applyPlayerZoom();
+  }
+
+  private formatMediaTime(seconds: number): string {
+    if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+    const total = Math.floor(seconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${minutes}:${pad(secs)}`;
+  }
+
+  private syncPlayerTimeline(): void {
+    if (!this.playerVideo) return;
+    const duration = Number.isFinite(this.playerVideo.duration) ? this.playerVideo.duration : 0;
+    if (!this.playerSeeking && this.playerSeek) {
+      const ratio = duration > 0 ? Math.max(0, Math.min(1, this.playerVideo.currentTime / duration)) : 0;
+      this.playerSeek.value = String(Math.round(ratio * 1000));
+    }
+    if (this.playerCurrentTime) this.playerCurrentTime.textContent = this.formatMediaTime(this.playerVideo.currentTime);
+    if (this.playerDurationTime) this.playerDurationTime.textContent = this.formatMediaTime(duration);
+  }
+
+  private applyPlayerZoom(): void {
+    if (!this.playerVideo || !this.playerZoomLabel) return;
+    this.playerVideo.style.transform = `translate(${this.playerOffsetX}px, ${this.playerOffsetY}px) scale(${this.playerZoom})`;
+    this.playerVideo.style.cursor = this.playerZoom > 1.01
+      ? (this.playerPanning ? 'grabbing' : 'grab')
+      : 'default';
+    this.playerZoomLabel.textContent = this.playerZoom <= 1.001
+      ? '适应'
+      : `${Math.round(this.playerZoom * 100)}%`;
   }
 
   private async deleteFile(filePath: string): Promise<void> {

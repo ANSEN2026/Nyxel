@@ -24,14 +24,14 @@ export class AboutView {
         </div>
         <div class="settings-body about-body">
           <div class="about-hero">
-            <img src="${iconUrl}" alt="Nyxel" draggable="false">
+            <img src="${iconUrl}" alt="Texture map" draggable="false">
             <div class="about-hero-text">
-              <h3>Nyxel</h3>
-              <p>贴图、FBX 模型与配色分析桌面工具</p>
+              <h3>Texture map</h3>
+              <p>贴图、FBX 模型、配色、视频与绘画桌面工具</p>
               <span class="about-version" id="about-version">v0.2</span>
             </div>
           </div>
-          <p class="about-desc">一个面向材质与 3D 工作流的 Windows 桌面小工具，希望能帮你少开几个软件。</p>
+          <p class="about-desc">Texture map 是一个面向材质与 3D 工作流的 Windows 桌面小工具，希望能帮你少开几个软件。</p>
 
           <div class="about-links">
             <a class="about-link" href="${BILIBILI_URL}" target="_blank" rel="noreferrer">

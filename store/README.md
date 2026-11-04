@@ -1,6 +1,6 @@
 # Microsoft Store 发布说明
 
-Nyxel 使用 electron-builder 的 `appx` 目标生成 Microsoft Store 可接受的 `.appx` 包。Store 会重新签名，因此打包阶段不需要购买代码签名证书。
+Texture map 使用 electron-builder 的 `appx` 目标生成 Microsoft Store 可接受的 `.appx` 包。Store 会重新签名，因此打包阶段不需要购买代码签名证书。内部 identityName 和旧数据目录可能仍使用 Nyxel，请以 Partner Center 实际值为准。
 
 ## 1. 注册开发者账号
 
@@ -14,7 +14,7 @@ Nyxel 使用 electron-builder 的 `appx` 目标生成 Microsoft Store 可接受�
 
 ## 2. 预留应用名称并复制身份信息
 
-在 Partner Center 创建应用、预留名称 **Nyxel**，然后打开：
+在 Partner Center 创建应用、预留名称 **Texture map**，然后打开：
 
 **应用 → 产品标识 / Product identity**
 
@@ -32,7 +32,7 @@ Nyxel 使用 electron-builder 的 `appx` 目标生成 Microsoft Store 可接受�
 {
   "identityName": "从 Partner Center 复制",
   "publisher": "CN=从 Partner Center 复制",
-  "publisherDisplayName": "Nyxel"
+  "publisherDisplayName": "Texture map"
 }
 ```
 
@@ -53,7 +53,7 @@ npm run dist:appx
 输出在 `release/`：
 
 ```
-Nyxel-<version>-x64.appx
+TextureMap-<version>-x64.appx
 ```
 
 AppX 版本由 `major.minor.patch` 加构建号组成。当前 Alpha 版本号中的 `alpha.N` 会自动作为构建号，例如 `0.2.0-alpha.13` → `0.2.13.0`。需要手动指定时设置：
@@ -67,12 +67,12 @@ npm run dist:appx
 
 ## 4. 上传
 
-1. Partner Center 中打开 Nyxel。
+1. Partner Center 中打开 Texture map。
 2. **Packages / 包** → 上传 `.appx`。
 3. 按提示填写：
    - 应用描述、分类、系统要求
    - 至少 1 张桌面截图（建议 3–5 张）
-   - 隐私政策 URL（如果收集任何数据；Nyxel 当前主要数据保存在本机）
+   - 隐私政策 URL（如果收集任何数据；Texture map 当前主要数据保存在本机）
    - 年龄分级问卷
    - 商店展示图：300×300 应用图标、截图等
 4. 提交认证。

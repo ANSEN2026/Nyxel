@@ -3642,3 +3642,343 @@ html[data-theme="light"] .home .recent-card:hover {
   background: rgba(255, 255, 255, 0.92);
   border-color: var(--accent-strong);
 }
+
+/* ------------------------------------------------------------------
+   Context menu, folder move, video zoom
+   ------------------------------------------------------------------ */
+.context-menu {
+  position: fixed;
+  z-index: 1400;
+  min-width: 160px;
+  padding: 5px;
+  border: 1px solid #3b3e44;
+  border-radius: 7px;
+  background: #242528;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.58);
+}
+
+.context-menu button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #d2d4d8;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu button:hover {
+  background: #36383d;
+  color: #fff;
+}
+
+.context-menu button.danger {
+  color: #f19a9a;
+}
+
+.context-menu button.danger:hover {
+  background: #5b2428;
+  color: #fff;
+}
+
+.move-modal-card select {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--asset-border);
+  border-radius: 5px;
+  outline: none;
+  background: #18191b;
+  color: var(--asset-text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.move-desc {
+  margin: 0 0 10px;
+  color: var(--asset-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.video-player-stage {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: min(72vh, 820px);
+  min-height: 240px;
+  overflow: hidden;
+  background: #000;
+  user-select: none;
+}
+
+.video-player-stage video {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transform-origin: center center;
+  will-change: transform;
+  background: #000;
+}
+
+.video-zoom-bar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: rgba(12, 14, 16, 0.76);
+  color: #d9dde1;
+  backdrop-filter: blur(8px);
+}
+
+.video-zoom-bar button {
+  min-width: 26px;
+  height: 24px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.video-zoom-bar button:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+#video-zoom-label {
+  min-width: 36px;
+  color: #a9d9bb;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.video-resolution {
+  position: absolute;
+  top: 13px;
+  left: 12px;
+  z-index: 3;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: rgba(12, 14, 16, 0.7);
+  color: #cfd4d8;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(6px);
+}
+
+.video-zoom-hint {
+  flex: none;
+  color: #767b82;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .video-zoom-hint {
+    display: none;
+  }
+
+  .video-player-stage {
+    height: min(64vh, 620px);
+  }
+}
+
+/* ------------------------------------------------------------------
+   Simple drawing workspace
+   ------------------------------------------------------------------ */
+.draw-toolbar {
+  gap: 8px;
+}
+
+.draw-tool-group {
+  display: flex;
+  gap: 3px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+}
+
+.draw-tool-group button {
+  border: 0;
+  background: transparent;
+}
+
+.draw-tool-group button.active {
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
+.draw-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.draw-field input[type="color"] {
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.draw-field input[type="range"] {
+  width: 74px;
+}
+
+#draw-width-value {
+  min-width: 18px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.draw-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px;
+  gap: 10px;
+  background:
+    radial-gradient(ellipse at 50% 20%, rgba(95, 213, 174, 0.06), transparent 60%),
+    var(--bg);
+}
+
+.draw-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#draw-canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.draw-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .draw-field input[type="range"] {
+    width: 56px;
+  }
+
+  .draw-foot {
+    font-size: 9px;
+  }
+}
+
+.video-player-controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 12px;
+  border-top: 1px solid #2f3135;
+  background: #1a1b1e;
+  color: #aeb2b8;
+}
+
+.video-player-controls button {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #3a3c41;
+  border-radius: 5px;
+  background: #282a2e;
+  color: #d4d6da;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.video-player-controls button:hover {
+  background: #36393d;
+  color: #fff;
+}
+
+.video-player-controls > button:first-child {
+  width: 32px;
+  padding: 0;
+  color: #b8ebcb;
+}
+
+.video-player-controls span {
+  color: #8f949b;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#video-seek {
+  flex: 1;
+  min-width: 80px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .video-player-stage {
+    height: min(58vh, 560px);
+  }
+
+  .video-player-controls {
+    gap: 6px;
+  }
+
+  .video-player-controls button {
+    padding: 0 6px;
+  }
+}
+
+.video-player-card:fullscreen {
+  width: 100vw;
+  max-height: 100vh;
+  border-radius: 0;
+}
+
+.video-player-card:fullscreen .video-player-stage {
+  height: calc(100vh - 120px);
+  min-height: 0;
+}

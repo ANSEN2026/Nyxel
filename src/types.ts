@@ -1,4 +1,4 @@
-export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video' | 'videos';
+export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video' | 'videos' | 'draw';
 export type Theme = 'dark' | 'light' | 'system';
 export type UpdateChannel = 'stable' | 'beta';
 
@@ -73,10 +73,10 @@ export interface UpdateCheckResult {
   error?: string;
 }
 
-export type VideoCodec = 'h264' | 'h265';
+export type VideoCodec = 'h264' | 'h265' | 'copy';
 export type VideoResolution = 'source' | '1080' | '720' | '480';
 export type VideoFps = 'source' | '60' | '30' | '24';
-export type VideoAudio = 'aac192' | 'aac128' | 'aac96' | 'none';
+export type VideoAudio = 'aac192' | 'aac128' | 'aac96' | 'copy' | 'none';
 
 export interface VideoInfo {
   path: string;
@@ -255,6 +255,10 @@ export interface NyxelApi {
     importVideos: () => Promise<{ ok: boolean; imported?: number; cancelled?: boolean; error?: string }>;
     moveFolder: (source: string, targetParent: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
     setFolderColor: (folder: string, color: string | null) => Promise<{ ok: boolean; error?: string }>;
+    deleteFolder: (folder: string) => Promise<{ ok: boolean; error?: string }>;
+    openFolder: (folder: string) => Promise<{ ok: boolean; error?: string }>;
+    showFolder: (folder: string) => Promise<void>;
+    moveVideo: (filePath: string, destinationDir: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
     mediaUrl: (filePath: string) => string;
     delete: (target: string) => Promise<{ ok: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;

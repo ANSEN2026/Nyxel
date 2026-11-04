@@ -22,7 +22,8 @@ interface PresetValues {
 }
 
 const PRESETS: Record<string, PresetValues> = {
-  high: { codec: 'h264', crf: 20, resolution: 'source', fps: 'source', audio: 'aac192' },
+  original: { codec: 'copy', crf: 18, resolution: 'source', fps: 'source', audio: 'copy' },
+  high: { codec: 'h264', crf: 18, resolution: 'source', fps: 'source', audio: 'aac192' },
   balanced: { codec: 'h264', crf: 23, resolution: 'source', fps: 'source', audio: 'aac128' },
   small: { codec: 'h265', crf: 28, resolution: '1080', fps: 'source', audio: 'aac96' }
 };
@@ -123,8 +124,9 @@ export class VideoView {
             <div class="video-setting-row">
               <label for="video-preset">压缩预设</label>
               <select id="video-preset">
-                <option value="high">高画质</option>
-                <option value="balanced" selected>平衡（推荐）</option>
+                <option value="original">原始画质（不重编码）</option>
+                <option value="high" selected>高画质（近无损）</option>
+                <option value="balanced">平衡（推荐）</option>
                 <option value="small">小体积</option>
                 <option value="custom">自定义</option>
               </select>
@@ -134,12 +136,13 @@ export class VideoView {
               <select id="video-codec">
                 <option value="h264">H.264（兼容性好）</option>
                 <option value="h265">H.265（体积更小）</option>
+                <option value="copy">原始画质（不重编码）</option>
               </select>
             </div>
             <div class="video-setting-row">
               <label for="video-crf">质量 CRF</label>
               <div class="video-range-wrap">
-                <input id="video-crf" type="range" min="14" max="35" step="1" value="23">
+                <input id="video-crf" type="range" min="12" max="35" step="1" value="18">
                 <span id="video-crf-value">23</span>
               </div>
             </div>
@@ -164,13 +167,14 @@ export class VideoView {
             <div class="video-setting-row">
               <label for="video-audio">音频</label>
               <select id="video-audio">
-                <option value="aac192">AAC 192k</option>
-                <option value="aac128" selected>AAC 128k</option>
+                <option value="copy">保持原始音频（不重编码）</option>
+                <option value="aac192" selected>AAC 192k</option>
+                <option value="aac128">AAC 128k</option>
                 <option value="aac96">AAC 96k</option>
                 <option value="none">移除音频</option>
               </select>
             </div>
-            <div class="video-setting-hint">CRF 越低画质越好、文件越大；H.265 通常比 H.264 更小，但兼容性稍差。</div>
+            <div class="video-setting-hint">要完全保留清晰度，请选择「原始画质（不重编码）」：只转换封装，不重新编码视频和音频。H.264/H.265 的 CRF 越低画质越好、文件越大。</div>
           </section>
 
           <section class="video-run">
@@ -216,6 +220,7 @@ export class VideoView {
     this.runtimeLabel = this.element.querySelector('#video-runtime-label') as HTMLElement;
 
     this.bindEvents();
+    this.applyPreset('high');
     window.nyxel.video.onProgress((progress) => this.onProgress(progress));
   }
 
@@ -231,7 +236,14 @@ export class VideoView {
     });
 
     this.presetSelect.addEventListener('change', () => this.applyPreset(this.presetSelect.value));
-    this.codecSelect.addEventListener('change', () => this.markCustom());
+    this.codecSelect.addEventListener('change', () => {
+      if (this.codecSelect.value === 'copy') {
+        this.applyPreset('original');
+      } else {
+        this.markCustom();
+        this.updateControlState();
+      }
+    });
     this.crfInput.addEventListener('input', () => {
       this.crfValue.textContent = this.crfInput.value;
       this.markCustom();
@@ -402,11 +414,23 @@ export class VideoView {
     this.fpsSelect.value = preset.fps;
     this.audioSelect.value = preset.audio;
     this.applyingPreset = false;
+    this.updateControlState();
   }
 
   private markCustom(): void {
     if (this.applyingPreset) return;
     this.presetSelect.value = 'custom';
+  }
+
+  private updateControlState(): void {
+    const copyMode = this.codecSelect.value === 'copy';
+    this.crfInput.disabled = this.busy || copyMode;
+    this.resolutionSelect.disabled = this.busy || copyMode;
+    this.fpsSelect.disabled = this.busy || copyMode;
+    this.presetSelect.disabled = this.busy;
+    this.codecSelect.disabled = this.busy;
+    this.audioSelect.disabled = this.busy;
+    this.outputInput.disabled = this.busy;
   }
 
   private async chooseOutputDir(): Promise<void> {
@@ -445,13 +469,14 @@ export class VideoView {
       const result = await window.nyxel.video.compress(options);
       if (result.ok && result.output) {
         this.outputPath = result.output;
+        const copyMode = options.codec === 'copy';
         const saved = this.info.size > 0 && result.size ? Math.max(0, 100 - (result.size / this.info.size) * 100) : 0;
-        this.result.textContent = `已压缩：${result.output}${result.size ? ` · ${formatBytes(result.size)}` : ''}${saved ? ` · 减少约 ${saved.toFixed(0)}%` : ''}`;
+        this.result.textContent = `${copyMode ? '已输出原画质文件' : '已压缩'}：${result.output}${result.size ? ` · ${formatBytes(result.size)}` : ''}${saved ? ` · 减少约 ${saved.toFixed(0)}%` : ''}`;
         this.result.classList.remove('hidden');
         this.openOutputButton.classList.remove('hidden');
         this.progressBar.style.width = '100%';
-        this.progressText.textContent = '压缩完成';
-        this.callbacks.toast('视频压缩完成', 'success');
+        this.progressText.textContent = copyMode ? '原画质输出完成' : '压缩完成';
+        this.callbacks.toast(copyMode ? '原画质输出完成' : '视频压缩完成', 'success');
       } else if (result.cancelled) {
         this.progressText.textContent = '已取消';
         this.callbacks.toast('已取消压缩', 'info');
@@ -488,13 +513,7 @@ export class VideoView {
     const ready = Boolean(this.info) && !this.busy;
     this.startButton.disabled = !ready || !this.status?.available;
     this.cancelButton.disabled = !this.busy;
-    this.presetSelect.disabled = this.busy;
-    this.codecSelect.disabled = this.busy;
-    this.crfInput.disabled = this.busy;
-    this.resolutionSelect.disabled = this.busy;
-    this.fpsSelect.disabled = this.busy;
-    this.audioSelect.disabled = this.busy;
-    this.outputInput.disabled = this.busy;
+    this.updateControlState();
   }
 
   private onProgress(progress: VideoProgress): void {

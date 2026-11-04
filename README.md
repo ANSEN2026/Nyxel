@@ -1,6 +1,6 @@
-# Nyxel v0.2 Alpha（贴图颜色 / 截图 / 文件管理 / 视频压缩增量）
+# Texture map v0.2 Alpha
 
-贴图、FBX 模型与配色分析桌面应用。当前是在 v0.1 MVP 基础上，按 `Nyxel-需求规格-v0.2.md` 做的 v0.2 增量版本。
+贴图、FBX 模型、配色分析、视频与绘画桌面应用。当前是在 v0.1 MVP 基础上，按 `Nyxel-需求规格-v0.2.md` 做的 v0.2 增量版本；内部数据目录和 GitHub 仓库仍保留 Nyxel 名称以兼容旧版本。
 
 - B站：https://space.bilibili.com/354642845?spm_id_from=333.1007.0.0
 - 爱发电：https://ifdian.net/a/nyxelstudio
@@ -15,6 +15,10 @@
 - **素材库样式**：图库 / 贴图资源改为深色素材浏览器，缩略图按原始比例铺排，带文件类型角标、文件名和搜索框
 - **素材库交互**：`Ctrl + 滚轮`缩放缩略图；文件夹树带层级连接线和「上一级」箭头 / 面包屑；文件夹可拖动到其他文件夹，图标支持自定义颜色
 - **视频作品**（`Ctrl+7`）：上传视频到作品区，在应用内播放，卡片上显示明显的上传日期
+- **视频播放增强**：支持 Range 流式读取、实时拖动进度、1:1 原始分辨率和滚轮缩放 / 拖拽平移
+- **视频压缩原画质**：新增“原始画质（不重编码）”预设，只转换封装，不损失清晰度
+- **文件右键菜单**：文件夹和视频支持删除、迁移、改色、打开本地资源库
+- **绘画**（`Ctrl+8`）：画笔、橡皮、颜色、粗细、撤销 / 重做、清空、打开图片和保存 PNG
 - **外部组件提示**：AI 超分和视频压缩需要下载运行时，顶部会显示淡黄色感叹号警告栏
 - **首页背景**：新增简约的流体流光背景，亮色 / 暗色主题分别适配
 - **关于我们**：左侧栏底部新增圆形感叹号按钮，展示 B站、爱发电、GitHub 和 QQ 群信息，链接可直接打开
@@ -28,7 +32,7 @@
 - 设置新增「配色」分类；`settings.json` 升级到 `schemaVersion: 2`，兼容旧配置
 - 左侧导航新增配色图标与 `Ctrl+3`
 - 左侧导航新增「图库 / 贴图资源」与 `Ctrl+4` / `Ctrl+5`
-- 左侧导航新增「视频压缩」与 `Ctrl+6`
+- 左侧导航新增「视频压缩」与 `Ctrl+6`、「视频作品」与 `Ctrl+7`、「绘画」与 `Ctrl+8`
 - **截图改为可拖拽框选区域**：多显示器各自覆盖，双击 / Enter 进入预览，Esc 取消
 - 设置新增「截图保存位置」，可单独更改截图目录
 - **模型工作区新增 UV 检视**（3D / UV 切换）：UV 标尺与 U/V 轴标记、多 UV 通道、材质分组、棋盘 / 纯色 / 当前贴图背景、2×2 象限平铺对比、越界标红、重叠检测、Texel Density、3D ↔ UV 双向选中
@@ -74,16 +78,16 @@ npm run start   # 构建后启动
 npm run dist    # 生成 NSIS 安装包
 ```
 
-也可以双击 **`启动 Nyxel.cmd`**（会优先启动 `release/win-unpacked/Nyxel.exe`）。
+也可以双击 **`启动 Texture map.cmd`**（会优先启动 `release/win-unpacked/Texture map.exe`）。
 
-> 在 Cherry Studio Agent 的终端里启动时，环境可能带有 `ELECTRON_RUN_AS_NODE=1`，会让 Electron 变成 Node。`启动 Nyxel.cmd` 和 npm 脚本已经会清空该变量。
+> 在 Cherry Studio Agent 的终端里启动时，环境可能带有 `ELECTRON_RUN_AS_NODE=1`，会让 Electron 变成 Node。启动脚本和 npm 脚本已经会清空该变量。
 
 ## 打包产物
 
-- `release/Nyxel Setup 0.2.0-alpha.12.exe`（NSIS，未签名）
-- `release/win-unpacked/Nyxel.exe`（免安装目录）
-- GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases/tag/v0.2.0-alpha.11
-- 安装时选择的目录若最后一级不是 `Nyxel`，安装器会自动创建 `Nyxel` 子文件夹；如果已经是 `Nyxel` 则直接使用，避免出现 `Nyxel\Nyxel`
+- `release/Texture map Setup 0.2.0-alpha.14.exe`（NSIS，未签名）
+- `release/win-unpacked/Texture map.exe`（免安装目录）
+- GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases
+- 安装时选择的目录若最后一级不是 `Texture map`，安装器会自动创建 `Texture map` 子文件夹
 
 ## 已知限制（相对完整规格）
 

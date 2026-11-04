@@ -1,9 +1,9 @@
 {
   "name": "nyxel",
-  "productName": "Nyxel",
-  "version": "0.2.0-alpha.13",
-  "description": "Nyxel - texture and FBX model preview",
-  "author": "Nyxel",
+  "productName": "Texture map",
+  "version": "0.2.0-alpha.14",
+  "description": "Texture map - texture, model, drawing and video toolkit",
+  "author": "Texture map",
   "private": true,
   "license": "UNLICENSED",
   "main": "dist-electron/main.js",
@@ -33,7 +33,7 @@
   },
   "build": {
     "appId": "com.nyxel.app",
-    "productName": "Nyxel",
+    "productName": "Texture map",
     "directories": {
       "output": "release"
     },

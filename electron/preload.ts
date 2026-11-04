@@ -82,6 +82,10 @@ contextBridge.exposeInMainWorld('nyxel', {
     importVideos: () => ipcRenderer.invoke('library:importVideos'),
     moveFolder: (source: string, targetParent: string) => ipcRenderer.invoke('library:moveFolder', source, targetParent),
     setFolderColor: (folder: string, color: string | null) => ipcRenderer.invoke('library:setFolderColor', folder, color),
+    deleteFolder: (folder: string) => ipcRenderer.invoke('library:deleteFolder', folder),
+    openFolder: (folder: string) => ipcRenderer.invoke('library:openFolder', folder),
+    showFolder: (folder: string) => ipcRenderer.invoke('library:showFolder', folder),
+    moveVideo: (filePath: string, destinationDir: string) => ipcRenderer.invoke('library:moveVideo', filePath, destinationDir),
     mediaUrl: (filePath: string) => `nyxel-media://local/?path=${encodeURIComponent(filePath)}`,
     delete: (target: string) => ipcRenderer.invoke('library:delete', target),
     onChanged: (callback: () => void) => {

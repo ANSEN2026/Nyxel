@@ -113,7 +113,7 @@ export class SettingsView {
               <div class="settings-label">硬件加速</div>
               <div class="settings-control">
                 <input id="set-hw" class="toggle" type="checkbox">
-                <span class="settings-hint">修改后重启 Nyxel 生效</span>
+                <span class="settings-hint">修改后重启 Texture map 生效</span>
               </div>
             </div>
             <div class="settings-row">
@@ -165,7 +165,7 @@ export class SettingsView {
           <section class="settings-section">
             <h3>关于</h3>
             <div class="about-box">
-              <div><strong>Nyxel</strong> <span id="set-version">v0.2</span> · v0.2 Alpha</div>
+              <div><strong>Texture map</strong> <span id="set-version">v0.2</span> · v0.2 Alpha</div>
               <div id="set-runtime" class="muted"></div>
               <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
                 <button data-action="check-update">检查更新</button>
@@ -253,7 +253,7 @@ export class SettingsView {
     });
 
     this.element.querySelector('[data-action="clear-cache"]')?.addEventListener('click', async () => {
-      if (!window.confirm('确定清空 Nyxel 缓存？不会删除你的原始文件。')) return;
+      if (!window.confirm('确定清空 Texture map 缓存？不会删除你的原始文件。')) return;
       try {
         await window.nyxel.app.clearCache();
         this.toast('缓存已清空', 'success');
@@ -320,7 +320,7 @@ export class SettingsView {
       this.toast('许可清单：Electron、Three.js、Vite、TypeScript；完整清单将在发布前生成', 'info');
     });
     this.element.querySelector('[data-action="privacy"]')?.addEventListener('click', () => {
-      this.toast('Nyxel 默认不联网；截图与文件只保存在本机。', 'info');
+      this.toast('Texture map 默认不联网；截图与文件只保存在本机。', 'info');
     });
   }
 

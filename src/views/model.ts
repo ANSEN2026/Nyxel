@@ -602,7 +602,7 @@ export class ModelView {
     try {
       const version = this.readFbxVersion(buffer);
       if (version !== null && version < 6400) {
-        this.showError(`FBX 版本过低：文件声明版本 ${version}，Nyxel v0.1 至少需要 6400。`);
+        this.showError(`FBX 版本过低：文件声明版本 ${version}，Texture map v0.1 至少需要 6400。`);
         this.callbacks.status.set(name, '版本过低');
         return;
       }

@@ -17,9 +17,14 @@ import {
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { unzipSync } from 'fflate';
+
+// Keep the existing AppData folder name after the Texture map rename so
+// downloaded ffmpeg / AI runtimes and Chromium caches survive upgrades.
+app.setPath('userData', path.join(app.getPath('appData'), 'Nyxel'));
 
 type Theme = 'dark' | 'light' | 'system';
 type UpdateChannel = 'stable' | 'beta';
@@ -178,7 +183,7 @@ function createWindow(): void {
     frame: false,
     backgroundColor: '#0b0d12',
     show: false,
-    title: 'Nyxel',
+    title: 'Texture map',
     icon: path.join(__dirname, '..', 'resources', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -448,6 +453,52 @@ async function writeFolderColors(colors: Record<string, string>): Promise<void> 
   );
 }
 
+const MEDIA_MIME_TYPES: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+  '.webm': 'video/webm',
+  '.avi': 'video/x-msvideo',
+  '.ts': 'video/mp2t',
+  '.flv': 'video/x-flv',
+  '.wmv': 'video/x-ms-wmv',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.tga': 'image/x-tga'
+};
+
+function mediaMime(filePath: string): string {
+  return MEDIA_MIME_TYPES[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+}
+
+function parseByteRange(header: string | null, size: number): { start: number; end: number } | null {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
+  if (!match) return null;
+  const startRaw = match[1];
+  const endRaw = match[2];
+  let start: number;
+  let end: number;
+  if (!startRaw) {
+    const suffix = Number(endRaw);
+    if (!Number.isFinite(suffix) || suffix <= 0) return null;
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(startRaw);
+    end = endRaw ? Number(endRaw) : size - 1;
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    end = Math.min(end, size - 1);
+  }
+  if (start < 0 || start >= size || end < start) return null;
+  return { start, end };
+}
+
 function registerMediaProtocol(): void {
   protocol.handle('nyxel-media', async (request) => {
     try {
@@ -459,7 +510,50 @@ function registerMediaProtocol(): void {
       if (!allowed) return new Response('Forbidden', { status: 403 });
       const stat = await fs.promises.stat(filePath);
       if (!stat.isFile()) return new Response('Not found', { status: 404 });
-      return net.fetch(pathToFileURL(filePath).toString(), { headers: request.headers });
+      const mime = mediaMime(filePath);
+      const size = stat.size;
+      const range = parseByteRange(request.headers.get('range'), size);
+      if (range) {
+        const { start, end } = range;
+        const stream = fs.createReadStream(filePath, { start, end });
+        return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
+          status: 206,
+          headers: {
+            'Content-Type': mime,
+            'Content-Length': String(end - start + 1),
+            'Content-Range': `bytes ${start}-${end}/${size}`,
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'no-store'
+          }
+        });
+      }
+      if (request.headers.get('range')) {
+        return new Response(null, {
+          status: 416,
+          headers: { 'Content-Range': `bytes */${size}`, 'Accept-Ranges': 'bytes' }
+        });
+      }
+      if (request.method === 'HEAD') {
+        return new Response(null, {
+          status: 200,
+          headers: {
+            'Content-Type': mime,
+            'Content-Length': String(size),
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'no-store'
+          }
+        });
+      }
+      const stream = fs.createReadStream(filePath);
+      return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
+        status: 200,
+        headers: {
+          'Content-Type': mime,
+          'Content-Length': String(size),
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'no-store'
+        }
+      });
     } catch {
       return new Response('Not found', { status: 404 });
     }
@@ -758,6 +852,71 @@ async function setLibraryFolderColor(folder: string, color: string | null): Prom
   await writeFolderColors(colors);
   notifyLibraryChanged();
   return { ok: true };
+}
+
+async function deleteLibraryFolder(folder: string): Promise<{ ok: boolean; error?: string }> {
+  await ensureLibraryDirs();
+  const root = texturesDir();
+  const target = resolveInside(root, folder);
+  if (!target.relative) return { ok: false, error: '不能删除资源库根目录' };
+  try {
+    const stat = await fs.promises.stat(target.target);
+    if (!stat.isDirectory()) return { ok: false, error: '只能删除文件夹' };
+    await shell.trashItem(target.target);
+    notifyLibraryChanged();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function openLibraryFolder(folder: string): Promise<{ ok: boolean; error?: string }> {
+  await ensureLibraryDirs();
+  const target = resolveInside(texturesDir(), folder);
+  try {
+    const stat = await fs.promises.stat(target.target);
+    if (!stat.isDirectory()) return { ok: false, error: '文件夹不存在' };
+    const error = await shell.openPath(target.target);
+    return error ? { ok: false, error } : { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function showLibraryFolder(folder: string): Promise<void> {
+  await ensureLibraryDirs();
+  const target = resolveInside(texturesDir(), folder);
+  shell.showItemInFolder(target.target);
+}
+
+async function moveLibraryVideo(filePath: string, destinationDir: string): Promise<{ ok: boolean; path?: string; error?: string }> {
+  await ensureLibraryDirs();
+  const source = path.resolve(String(filePath ?? ''));
+  if (!isInside(videosDir(), source)) return { ok: false, error: '只能迁移视频作品库中的文件' };
+  const targetDir = path.resolve(String(destinationDir ?? ''));
+  try {
+    const sourceStat = await fs.promises.stat(source);
+    if (!sourceStat.isFile()) return { ok: false, error: '视频文件不存在' };
+    const targetStat = await fs.promises.stat(targetDir);
+    if (!targetStat.isDirectory()) return { ok: false, error: '目标不是文件夹' };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  if (path.dirname(source) === targetDir) return { ok: false, error: '视频已经在这个文件夹里' };
+  const destination = await uniqueFilePath(targetDir, path.basename(source));
+  try {
+    await fs.promises.rename(source, destination);
+  } catch {
+    try {
+      await fs.promises.copyFile(source, destination);
+      await shell.trashItem(source);
+    } catch (error) {
+      try { await fs.promises.rm(destination, { force: true }); } catch { /* ignore */ }
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  notifyLibraryChanged();
+  return { ok: true, path: destination };
 }
 
 async function listVideos(): Promise<{ root: string; files: Array<{
@@ -1340,12 +1499,12 @@ interface VideoStatus {
 interface VideoCompressOptions {
   input: string;
   outputDir: string;
-  codec: 'h264' | 'h265';
+  codec: 'h264' | 'h265' | 'copy';
   crf: number;
   preset: string;
   resolution: 'source' | '1080' | '720' | '480';
   fps: 'source' | '60' | '30' | '24';
-  audio: 'aac192' | 'aac128' | 'aac96' | 'none';
+  audio: 'aac192' | 'aac128' | 'aac96' | 'copy' | 'none';
 }
 
 interface VideoProbeJson {
@@ -1561,33 +1720,46 @@ async function compressVideo(options: VideoCompressOptions): Promise<{ ok: boole
   const outputDir = path.resolve(options.outputDir || path.join(app.getPath('documents'), 'Nyxel', 'Videos'));
   await fs.promises.mkdir(outputDir, { recursive: true });
   const baseName = path.basename(input, path.extname(input));
-  const output = await uniqueFilePath(outputDir, `${baseName}_compressed.mp4`);
+  const copyMode = options.codec === 'copy';
+  const outputExt = copyMode ? (path.extname(input) || '.mp4') : '.mp4';
+  const output = await uniqueFilePath(
+    outputDir,
+    `${baseName}_${copyMode ? 'original' : 'compressed'}${outputExt}`
+  );
   const codec = options.codec === 'h265' ? 'libx265' : 'libx264';
   const args = [
     '-hide_banner',
     '-y',
     '-i', input,
     '-map', '0:v:0',
-    '-map', '0:a?',
-    '-c:v', codec,
-    '-preset', options.preset || 'medium',
-    '-crf', String(Math.min(35, Math.max(14, options.crf || 23))),
-    '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart'
+    '-map', '0:a?'
   ];
-  if (codec === 'libx265') args.push('-tag:v', 'hvc1');
-  if (options.resolution !== 'source') {
+  if (copyMode) {
+    args.push('-c:v', 'copy');
+  } else {
+    args.push(
+      '-c:v', codec,
+      '-preset', options.preset || 'medium',
+      '-crf', String(Math.min(35, Math.max(12, options.crf || 23))),
+      '-pix_fmt', 'yuv420p'
+    );
+    if (codec === 'libx265') args.push('-tag:v', 'hvc1');
+    if (['.mp4', '.mov', '.m4v'].includes(outputExt)) args.push('-movflags', '+faststart');
+  }
+  if (!copyMode && options.resolution !== 'source') {
     const targetHeight = Number(options.resolution);
     if (targetHeight && info.height > targetHeight) args.push('-vf', `scale=-2:${targetHeight}`);
   }
-  if (options.fps !== 'source') args.push('-r', options.fps);
+  if (!copyMode && options.fps !== 'source') args.push('-r', options.fps);
   if (options.audio === 'none') {
     args.push('-an');
+  } else if (options.audio === 'copy') {
+    args.push('-c:a', 'copy');
   } else {
     const audioBitrate = options.audio === 'aac192' ? '192k' : options.audio === 'aac96' ? '96k' : '128k';
     args.push('-c:a', 'aac', '-b:a', audioBitrate);
   }
-  args.push('-progress', 'pipe:1', '-nostats', '-loglevel', 'error', output);
+  args.push('-map_metadata', '0', '-progress', 'pipe:1', '-nostats', '-loglevel', 'error', output);
 
   videoCancelled = false;
   sendVideoProgress({ phase: 'compress', percent: 0, message: '开始压缩…' });
@@ -2341,6 +2513,16 @@ function registerIpc(): void {
 
   ipcMain.handle('library:setFolderColor', async (_event, folder: string, color: string | null) => {
     return setLibraryFolderColor(folder, color);
+  });
+
+  ipcMain.handle('library:deleteFolder', async (_event, folder: string) => deleteLibraryFolder(folder));
+
+  ipcMain.handle('library:openFolder', async (_event, folder: string) => openLibraryFolder(folder));
+
+  ipcMain.handle('library:showFolder', async (_event, folder: string) => showLibraryFolder(folder));
+
+  ipcMain.handle('library:moveVideo', async (_event, filePath: string, destinationDir: string) => {
+    return moveLibraryVideo(filePath, destinationDir);
   });
 
   ipcMain.handle('library:delete', async (_event, target: string) => {

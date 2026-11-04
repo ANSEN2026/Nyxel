@@ -21,7 +21,7 @@ const identity = {
   publisherDisplayName:
     process.env.NYXEL_STORE_PUBLISHER_DISPLAY_NAME ||
     saved.publisherDisplayName ||
-    'Nyxel'
+    'Texture map'
 };
 
 const missing = ['identityName', 'publisher'].filter((key) => !String(identity[key] || '').trim());
@@ -54,7 +54,7 @@ config.win = {
 };
 config.appx = {
   applicationId: 'Nyxel',
-  displayName: 'Nyxel',
+  displayName: 'Texture map',
   identityName: identity.identityName,
   publisher: identity.publisher,
   publisherDisplayName: identity.publisherDisplayName,
@@ -63,7 +63,7 @@ config.appx = {
   setBuildNumber: true,
   minVersion: '10.0.17763.0',
   maxVersionTested: '10.0.22621.0',
-  artifactName: 'Nyxel-${version}-${arch}.appx',
+  artifactName: 'TextureMap-${version}-${arch}.appx',
   ...(config.appx || {})
 };
 
