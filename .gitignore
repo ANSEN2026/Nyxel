@@ -10,3 +10,5 @@ release/
 .video-packaged-profile/
 .update-packaged-profile/
 .icon-test-profile/
+.asset-test-profile/
+.asset-packaged-profile/
