@@ -1,5 +1,6 @@
 import type { LibraryFile, LibraryFolder, ViewCallbacks } from '../types';
 import { formatBytes, formatTime } from '../utils';
+import { VideoNotebook } from './video-notebook';
 
 type FilesMode = 'gallery' | 'textures' | 'videos';
 
@@ -8,6 +9,7 @@ const CALENDAR_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y
 const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>';
 const FOLDER_COLORS = ['#a6d0b5', '#7dd3fc', '#a78bfa', '#fbbf24', '#fb7185', '#f97316', '#5eead4', '#cbd5e1'];
 const ZOOM_KEY = 'nyxel.files.thumbHeight';
+const COLLAPSED_KEY = 'nyxel.files.collapsedFolders';
 const MIN_THUMB = 64;
 const MAX_THUMB = 320;
 
@@ -19,7 +21,10 @@ export class FilesView {
   private active = false;
   private currentFolder = '';
   private currentFiles: LibraryFile[] = [];
+  private allFolders: LibraryFolder[] = [];
   private folderCount = 0;
+  private folderTotal = 0;
+  private collapsedFolders = new Set<string>();
   private searchQuery = '';
   private layoutQueued = false;
   private thumbHeight = Number(localStorage.getItem(ZOOM_KEY)) || 142;
@@ -49,6 +54,7 @@ export class FilesView {
   private playerMuteButton: HTMLButtonElement | null = null;
   private playerSeeking = false;
   private playerSeekFrame = 0;
+  private notebook: VideoNotebook | null = null;
   private playerPath = '';
   private playerZoom = 1;
   private playerOffsetX = 0;
@@ -65,6 +71,14 @@ export class FilesView {
   constructor(mode: FilesMode, callbacks: ViewCallbacks) {
     this.mode = mode;
     this.callbacks = callbacks;
+    try {
+      const saved = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]');
+      if (Array.isArray(saved)) {
+        this.collapsedFolders = new Set(saved.filter((item): item is string => typeof item === 'string'));
+      }
+    } catch {
+      // ignore malformed state
+    }
     this.element = document.createElement('div');
     this.element.className = `view files-view ${mode === 'gallery' ? 'gallery-view' : mode === 'textures' ? 'textures-view' : 'videos-view'}`;
 
@@ -185,7 +199,7 @@ export class FilesView {
           <div class="video-grid" id="files-grid"></div>
         </div>
         <div class="video-player hidden" id="video-player">
-          <div class="video-player-card">
+          <div class="video-player-card video-review-card">
             <header class="video-player-head">
               <div class="video-player-title">
                 <strong id="video-player-title"></strong>
@@ -193,31 +207,36 @@ export class FilesView {
               </div>
               <button type="button" data-player-close title="关闭">×</button>
             </header>
-            <div class="video-player-stage" id="video-player-stage">
-              <video id="video-player-el" playsinline preload="auto"></video>
-              <div class="video-zoom-bar">
-                <button type="button" data-video-zoom="out" title="缩小">−</button>
-                <span id="video-zoom-label">适应</span>
-                <button type="button" data-video-zoom="in" title="放大">＋</button>
-                <button type="button" data-video-zoom="fit">适应</button>
-                <button type="button" data-video-zoom="native">1:1</button>
+            <div class="video-review-body">
+              <div class="video-review-main">
+                <div class="video-player-stage" id="video-player-stage">
+                  <video id="video-player-el" playsinline preload="auto" crossorigin="anonymous"></video>
+                  <div class="video-zoom-bar">
+                    <button type="button" data-video-zoom="out" title="缩小">−</button>
+                    <span id="video-zoom-label">适应</span>
+                    <button type="button" data-video-zoom="in" title="放大">＋</button>
+                    <button type="button" data-video-zoom="fit">适应</button>
+                    <button type="button" data-video-zoom="native">1:1</button>
+                  </div>
+                  <div class="video-resolution" id="video-player-resolution"></div>
+                </div>
+                <div class="video-player-controls">
+                  <button type="button" data-player-play title="播放 / 暂停">▶</button>
+                  <span id="video-current-time">0:00</span>
+                  <input id="video-seek" type="range" min="0" max="1000" step="1" value="0">
+                  <span id="video-duration-time">0:00</span>
+                  <button type="button" data-player-mute title="静音">静音</button>
+                  <button type="button" data-player-fullscreen title="全屏">全屏</button>
+                </div>
+                <footer class="video-player-foot">
+                  <span id="video-player-note"></span>
+                  <span class="video-zoom-hint">滚轮缩放 · 拖动平移 · 双击适应</span>
+                  <span class="spacer"></span>
+                  <button type="button" data-player-show>在文件夹中显示</button>
+                </footer>
               </div>
-              <div class="video-resolution" id="video-player-resolution"></div>
+              <aside class="video-notebook" id="video-notebook"></aside>
             </div>
-            <div class="video-player-controls">
-              <button type="button" data-player-play title="播放 / 暂停">▶</button>
-              <span id="video-current-time">0:00</span>
-              <input id="video-seek" type="range" min="0" max="1000" step="1" value="0">
-              <span id="video-duration-time">0:00</span>
-              <button type="button" data-player-mute title="静音">静音</button>
-              <button type="button" data-player-fullscreen title="全屏">全屏</button>
-            </div>
-            <footer class="video-player-foot">
-              <span id="video-player-note"></span>
-              <span class="video-zoom-hint">滚轮缩放 · 拖动平移 · 双击适应</span>
-              <span class="spacer"></span>
-              <button type="button" data-player-show>在文件夹中显示</button>
-            </footer>
           </div>
         </div>
       `;
@@ -244,6 +263,15 @@ export class FilesView {
     this.playerDurationTime = this.element.querySelector('#video-duration-time');
     this.playerPlayButton = this.element.querySelector('[data-player-play]');
     this.playerMuteButton = this.element.querySelector('[data-player-mute]');
+    const notebookElement = this.element.querySelector('#video-notebook');
+    if (notebookElement) {
+      this.notebook = new VideoNotebook(
+        notebookElement as HTMLElement,
+        callbacks,
+        () => this.playerVideo?.currentTime ?? 0,
+        () => this.playerVideo
+      );
+    }
     this.moveModal = this.element.querySelector('#move-modal');
     this.moveTarget = this.element.querySelector('#move-target');
     this.moveError = this.element.querySelector('#move-error');
@@ -347,9 +375,16 @@ export class FilesView {
         button.addEventListener('click', () => void this.navigateUp());
       });
       this.folderList?.addEventListener('click', (event) => {
-        const row = (event.target as HTMLElement).closest<HTMLElement>('[data-folder]');
+        const target = event.target as HTMLElement;
+        const toggle = target.closest<HTMLElement>('[data-folder-toggle]');
+        if (toggle) {
+          event.stopPropagation();
+          this.toggleFolder(toggle.dataset.folderToggle ?? '');
+          return;
+        }
+        const row = target.closest<HTMLElement>('[data-folder]');
         if (!row) return;
-        if ((event.target as HTMLElement).closest('[data-folder-color]')) return;
+        if (target.closest('[data-folder-color]')) return;
         this.currentFolder = row.dataset.folder ?? '';
         this.updateFolderActive();
         void this.load();
@@ -611,6 +646,8 @@ export class FilesView {
       };
       this.currentFolder = result.current;
       this.folderCount = result.folders.length;
+      this.folderTotal = result.total;
+      this.allFolders = result.folders;
       this.renderFolders(result.folders, result.total);
       this.renderFiles(result.files);
       this.renderFolderPath();
@@ -856,7 +893,14 @@ export class FilesView {
   private renderFolders(folders: LibraryFolder[], total: number): void {
     if (!this.folderList) return;
     this.folderList.innerHTML = '';
-    for (const folder of folders) {
+    const visibleFolders = folders.filter((folder) => {
+      const parts = folder.relative.split('/').filter(Boolean);
+      for (let index = 1; index < parts.length; index += 1) {
+        if (this.collapsedFolders.has(parts.slice(0, index).join('/'))) return false;
+      }
+      return true;
+    });
+    for (const folder of visibleFolders) {
       const row = document.createElement('div');
       row.className = 'folder-row folder-tree-row';
       row.dataset.folder = folder.relative;
@@ -870,6 +914,21 @@ export class FilesView {
         guide.className = 'folder-guide';
         if (index === folder.depth - 1) guide.classList.add('elbow');
         row.append(guide);
+      }
+
+      const hasChildren = folders.some((item) => item.relative.startsWith(`${folder.relative}/`));
+      if (hasChildren) {
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'folder-toggle';
+        toggle.dataset.folderToggle = folder.relative;
+        toggle.title = this.collapsedFolders.has(folder.relative) ? '展开子文件夹' : '收缩子文件夹';
+        toggle.textContent = this.collapsedFolders.has(folder.relative) ? '▸' : '▾';
+        row.append(toggle);
+      } else {
+        const spacer = document.createElement('span');
+        spacer.className = 'folder-toggle folder-toggle-empty';
+        row.append(spacer);
       }
 
       const icon = document.createElement('span');
@@ -1190,6 +1249,18 @@ export class FilesView {
     });
   }
 
+  private toggleFolder(relative: string): void {
+    if (!relative) return;
+    if (this.collapsedFolders.has(relative)) {
+      this.collapsedFolders.delete(relative);
+    } else {
+      this.collapsedFolders.add(relative);
+    }
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...this.collapsedFolders]));
+    this.renderFolders(this.allFolders, this.folderTotal);
+    this.updateFolderActive();
+  }
+
   private updateFolderActive(): void {
     this.element.querySelectorAll<HTMLElement>('[data-folder]').forEach((row) => {
       row.classList.toggle('active', (row.dataset.folder ?? '') === this.currentFolder);
@@ -1252,6 +1323,7 @@ export class FilesView {
     this.resetPlayerZoom();
     this.playerVideo.src = window.nyxel.library.mediaUrl(filePath);
     this.player.classList.remove('hidden');
+    void this.notebook?.setVideo(filePath, name);
     void this.playerVideo.play().catch(() => {
       // Autoplay may be blocked; the native controls remain available.
     });
@@ -1263,6 +1335,7 @@ export class FilesView {
     this.playerVideo.removeAttribute('src');
     this.playerVideo.load();
     this.player.classList.add('hidden');
+    void this.notebook?.close();
     this.playerPath = '';
     this.playerSeeking = false;
     if (this.playerSeekFrame) {
@@ -1291,13 +1364,16 @@ export class FilesView {
   }
 
   private zoomPlayerToNative(): void {
-    if (!this.playerVideo) return;
+    if (!this.playerVideo || !this.playerStage) return;
     const width = this.playerVideo.videoWidth;
     const height = this.playerVideo.videoHeight;
-    const baseWidth = this.playerVideo.offsetWidth;
-    const baseHeight = this.playerVideo.offsetHeight;
-    if (!width || !height || !baseWidth || !baseHeight) return;
-    this.playerZoom = Math.max(1, Math.min(8, Math.max(width / baseWidth, height / baseHeight)));
+    const stageWidth = this.playerStage.clientWidth;
+    const stageHeight = this.playerStage.clientHeight;
+    if (!width || !height || !stageWidth || !stageHeight) return;
+    // The fitted content width inside an object-fit: contain video.
+    const fitWidth = Math.min(stageWidth, stageHeight * (width / height));
+    if (!fitWidth) return;
+    this.playerZoom = Math.max(0.1, Math.min(8, width / fitWidth));
     this.playerOffsetX = 0;
     this.playerOffsetY = 0;
     this.applyPlayerZoom();

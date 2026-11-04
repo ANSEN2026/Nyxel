@@ -15,6 +15,8 @@ export interface Settings {
   language: 'zh' | 'en' | 'system';
   exportDir: string;
   screenshotDir: string;
+  videoNoteDir: string;
+  audioVisualizer: boolean;
   restoreWorkspace: boolean;
   hardwareAcceleration: boolean;
   cacheDir: string;
@@ -181,6 +183,44 @@ export interface LibraryVideos {
   files: LibraryFile[];
 }
 
+export interface VideoNoteMeta {
+  path: string;
+  fileName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VideoNoteDocument {
+  version: 1;
+  videoPath: string;
+  videoName: string;
+  createdAt: string;
+  updatedAt: string;
+  text: string;
+  textHtml: string;
+  drawing: string;
+}
+
+export interface AccountUser {
+  email: string;
+  displayName: string;
+  createdAt: string;
+  signedInAt: string;
+}
+
+export interface AccountState {
+  hasAccount: boolean;
+  user: AccountUser | null;
+  email?: string;
+  storagePath: string;
+}
+
+export interface AccountActionResult {
+  ok: boolean;
+  state?: AccountState;
+  error?: string;
+}
+
 export interface AppInfo {
   version: string;
   platform: string;
@@ -215,6 +255,13 @@ export interface NyxelApi {
   settings: {
     load: () => Promise<Settings>;
     save: (settings: Settings) => Promise<Settings>;
+  };
+  account: {
+    status: () => Promise<AccountState>;
+    register: (input: { email: string; password: string; displayName?: string }) => Promise<AccountActionResult>;
+    login: (input: { email: string; password: string }) => Promise<AccountActionResult>;
+    logout: () => Promise<AccountActionResult>;
+    reset: () => Promise<AccountActionResult>;
   };
   app: {
     info: () => Promise<AppInfo>;
@@ -262,6 +309,16 @@ export interface NyxelApi {
     mediaUrl: (filePath: string) => string;
     delete: (target: string) => Promise<{ ok: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
+  };
+  notes: {
+    list: (videoPath: string) => Promise<{ ok: boolean; dir: string; notes: VideoNoteMeta[]; error?: string }>;
+    create: (videoPath: string) => Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }>;
+    read: (notePath: string) => Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }>;
+    save: (notePath: string, updates: { text?: string; textHtml?: string; drawing?: string }) => Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }>;
+    openDir: () => Promise<{ ok: boolean; dir: string; error?: string }>;
+  };
+  audio: {
+    source: () => Promise<{ id: string; name: string } | null>;
   };
 }
 

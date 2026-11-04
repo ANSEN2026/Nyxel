@@ -1,3 +1,4 @@
+import { audioMonitor } from '../lib/audio-monitor';
 import type { AppInfo, Settings, Theme, ToastApi } from '../types';
 
 export class SettingsView {
@@ -9,6 +10,8 @@ export class SettingsView {
   private toast: ToastApi;
   private body: HTMLElement;
   private updateUrl = '';
+  private audioStatus: HTMLElement | null = null;
+  private audioTimer = 0;
 
   constructor(saveHandler: (settings: Settings) => Promise<void>, toast: ToastApi) {
     this.saveHandler = saveHandler;
@@ -134,6 +137,22 @@ export class SettingsView {
               </div>
             </div>
             <div class="settings-hint">视频压缩工作区会在首次使用时下载 ffmpeg，并保存在本机运行时目录，之后可离线使用。</div>
+            <div class="settings-row" style="margin-top:10px">
+              <div class="settings-label">标题栏音乐波动</div>
+              <div class="settings-control">
+                <input id="set-audio-visualizer" class="toggle" type="checkbox">
+              </div>
+            </div>
+            <div class="settings-hint" id="set-audio-status">默认开启；监听 Windows 系统输出用于标题栏波动，只分析，不录音、不上传。关闭后不会捕获音频。</div>
+            <div class="settings-row" style="margin-top:10px">
+              <div class="settings-label">视频记事本目录</div>
+              <div class="settings-control">
+                <input id="set-video-note-dir" type="text" spellcheck="false">
+                <button data-action="browse-video-notes">浏览…</button>
+                <button data-action="open-video-notes">打开</button>
+              </div>
+            </div>
+            <div class="settings-hint">记事本默认关闭；只有在视频播放器里点击「开始复盘」才会在这里新建文档。</div>
           </section>
 
           <section class="settings-section">
@@ -180,6 +199,7 @@ export class SettingsView {
     `;
 
     this.body = this.element.querySelector('.settings-body') as HTMLElement;
+    this.audioStatus = this.element.querySelector('#set-audio-status');
     this.bind();
   }
 
@@ -196,6 +216,7 @@ export class SettingsView {
     const language = this.element.querySelector('#set-language') as HTMLSelectElement;
     const exportDir = this.element.querySelector('#set-export-dir') as HTMLInputElement;
     const screenshotDir = this.element.querySelector('#set-screenshot-dir') as HTMLInputElement;
+    const videoNoteDir = this.element.querySelector('#set-video-note-dir') as HTMLInputElement;
     const restore = this.element.querySelector('#set-restore') as HTMLInputElement;
     const hardware = this.element.querySelector('#set-hw') as HTMLInputElement;
     const channel = this.element.querySelector('#set-channel') as HTMLSelectElement;
@@ -250,6 +271,24 @@ export class SettingsView {
       if (!selected) return;
       screenshotDir.value = selected;
       this.patch({ screenshotDir: selected });
+    });
+    this.element.querySelector('[data-action="browse-video-notes"]')?.addEventListener('click', async () => {
+      const selected = await window.nyxel.dialog.openDirectory();
+      if (!selected) return;
+      videoNoteDir.value = selected;
+      this.patch({ videoNoteDir: selected });
+    });
+    this.element.querySelector('[data-action="open-video-notes"]')?.addEventListener('click', async () => {
+      const target = videoNoteDir.value.trim();
+      if (!target) return;
+      const error = await window.nyxel.app.openPath(target);
+      if (error) this.toast(`打开记事本目录失败：${error}`, 'error');
+    });
+
+    const audioVisualizer = this.element.querySelector('#set-audio-visualizer') as HTMLInputElement;
+    audioVisualizer.addEventListener('change', () => {
+      this.patch({ audioVisualizer: audioVisualizer.checked });
+      this.updateAudioStatus();
     });
 
     this.element.querySelector('[data-action="clear-cache"]')?.addEventListener('click', async () => {
@@ -331,7 +370,12 @@ export class SettingsView {
     (this.element.querySelector('#set-language') as HTMLSelectElement).value = settings.language;
     (this.element.querySelector('#set-export-dir') as HTMLInputElement).value = settings.exportDir;
     (this.element.querySelector('#set-screenshot-dir') as HTMLInputElement).value = settings.screenshotDir;
+    (this.element.querySelector('#set-video-note-dir') as HTMLInputElement).value = settings.videoNoteDir;
+    (this.element.querySelector('#set-audio-visualizer') as HTMLInputElement).checked = settings.audioVisualizer;
     (this.element.querySelector('#set-restore') as HTMLInputElement).checked = settings.restoreWorkspace;
+    this.updateAudioStatus();
+    if (this.audioTimer) window.clearInterval(this.audioTimer);
+    this.audioTimer = window.setInterval(() => this.updateAudioStatus(), 300);
     (this.element.querySelector('#set-hw') as HTMLInputElement).checked = settings.hardwareAcceleration;
     (this.element.querySelector('#set-ffmpeg') as HTMLInputElement).value = settings.ffmpegPath;
     (this.element.querySelector('#set-hotkey') as HTMLInputElement).value = settings.screenshotHotkey;
@@ -364,6 +408,36 @@ export class SettingsView {
 
   close(): void {
     this.element.classList.add('hidden');
+    if (this.audioTimer) {
+      window.clearInterval(this.audioTimer);
+      this.audioTimer = 0;
+    }
+  }
+
+  private updateAudioStatus(): void {
+    if (!this.audioStatus) return;
+    if (this.current && !this.current.audioVisualizer) {
+      this.audioStatus.textContent = '标题栏音乐波动已关闭，不会捕获系统音频。';
+      return;
+    }
+    const state = audioMonitor.getState();
+    if (state.error) {
+      this.audioStatus.textContent = `系统音频监听失败：${state.error}`;
+      return;
+    }
+    if (state.starting) {
+      this.audioStatus.textContent = '正在启动系统音频监听…';
+      return;
+    }
+    if (!state.active) {
+      this.audioStatus.textContent = '等待系统音频输出；播放声音后标题栏波动会开始跳动。';
+      return;
+    }
+    const metrics = audioMonitor.readMetrics();
+    const db = (value: number) => (value <= -99 ? '-∞' : value.toFixed(1));
+    this.audioStatus.textContent =
+      `${state.info?.label ?? '系统音频'} · ${state.info?.sampleRate ?? 0} Hz · ` +
+      `${state.info?.channels ?? 0} ch · RMS ${db(metrics.db)} dBFS · Peak ${db(metrics.peakDb)} dBFS`;
   }
 
   private patch(partial: Partial<Settings>): void {

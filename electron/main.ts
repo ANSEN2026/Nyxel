@@ -12,11 +12,13 @@ import {
   net,
   protocol,
   screen,
+  session,
   shell
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -24,7 +26,11 @@ import { unzipSync } from 'fflate';
 
 // Keep the existing AppData folder name after the Texture map rename so
 // downloaded ffmpeg / AI runtimes and Chromium caches survive upgrades.
-app.setPath('userData', path.join(app.getPath('appData'), 'Nyxel'));
+const userDataOverride = process.env.NYXEL_USER_DATA_DIR;
+app.setPath(
+  'userData',
+  userDataOverride ? path.resolve(userDataOverride) : path.join(app.getPath('appData'), 'Nyxel')
+);
 
 type Theme = 'dark' | 'light' | 'system';
 type UpdateChannel = 'stable' | 'beta';
@@ -42,6 +48,8 @@ interface Settings {
   language: 'zh' | 'en' | 'system';
   exportDir: string;
   screenshotDir: string;
+  videoNoteDir: string;
+  audioVisualizer: boolean;
   restoreWorkspace: boolean;
   hardwareAcceleration: boolean;
   cacheDir: string;
@@ -53,6 +61,39 @@ interface Settings {
   colorIgnoreNearBW: boolean;
   colorAlphaThreshold: number;
   recentProjects: RecentProject[];
+}
+
+interface StoredLocalAccount {
+  version: 1;
+  email: string;
+  displayName: string;
+  createdAt: string;
+  signedInAt?: string;
+  password: {
+    algorithm: 'scrypt';
+    salt: string;
+    hash: string;
+  };
+}
+
+interface AccountUser {
+  email: string;
+  displayName: string;
+  createdAt: string;
+  signedInAt: string;
+}
+
+interface AccountState {
+  hasAccount: boolean;
+  user: AccountUser | null;
+  email?: string;
+  storagePath: string;
+}
+
+interface AccountActionResult {
+  ok: boolean;
+  state?: AccountState;
+  error?: string;
 }
 
 interface CaptureResult {
@@ -118,6 +159,8 @@ function defaultSettings(): Settings {
     language: 'system',
     exportDir: path.join(app.getPath('documents'), 'Nyxel'),
     screenshotDir: path.join(app.getPath('documents'), 'Nyxel', 'Screenshots'),
+    videoNoteDir: path.join(app.getPath('userData'), 'VideoNotes'),
+    audioVisualizer: true,
     restoreWorkspace: true,
     hardwareAcceleration: true,
     cacheDir: path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'Nyxel', 'cache'),
@@ -174,6 +217,196 @@ function loadSettings(): Settings {
   }
 }
 
+function localAccountFile(): string {
+  return path.join(app.getPath('userData'), 'account.json');
+}
+
+function readLocalAccount(): StoredLocalAccount | null {
+  const file = localAccountFile();
+  try {
+    if (!fs.existsSync(file)) return null;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<StoredLocalAccount>;
+    if (
+      parsed.version !== 1 ||
+      typeof parsed.email !== 'string' ||
+      typeof parsed.displayName !== 'string' ||
+      typeof parsed.createdAt !== 'string' ||
+      !parsed.password ||
+      parsed.password.algorithm !== 'scrypt' ||
+      typeof parsed.password.salt !== 'string' ||
+      typeof parsed.password.hash !== 'string'
+    ) {
+      return null;
+    }
+    return {
+      version: 1,
+      email: parsed.email,
+      displayName: parsed.displayName,
+      createdAt: parsed.createdAt,
+      signedInAt: typeof parsed.signedInAt === 'string' ? parsed.signedInAt : undefined,
+      password: parsed.password
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalAccount(account: StoredLocalAccount): void {
+  const file = localAccountFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  const payload = JSON.stringify(account, null, 2);
+  fs.writeFileSync(tmp, payload, 'utf8');
+  try {
+    fs.renameSync(tmp, file);
+  } catch {
+    fs.writeFileSync(file, payload, 'utf8');
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+function localAccountState(): AccountState {
+  const account = readLocalAccount();
+  return {
+    hasAccount: Boolean(account),
+    user: account?.signedInAt
+      ? {
+          email: account.email,
+          displayName: account.displayName,
+          createdAt: account.createdAt,
+          signedInAt: account.signedInAt
+        }
+      : null,
+    email: account?.email,
+    storagePath: localAccountFile()
+  };
+}
+
+function normaliseAccountEmail(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function isAccountEmail(value: string): boolean {
+  return value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
+}
+
+function accountDisplayName(value: unknown, email: string): string {
+  const cleaned = Array.from(
+    String(value ?? '')
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  ).slice(0, 24).join('');
+  if (cleaned) return cleaned;
+  return Array.from(email.split('@')[0] ?? '').slice(0, 24).join('') || 'Texture map 用户';
+}
+
+function hashLocalPassword(password: string, salt: string): string {
+  return scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex');
+}
+
+function registerLocalAccount(input: { email?: unknown; password?: unknown; displayName?: unknown }): AccountActionResult {
+  const email = normaliseAccountEmail(input?.email);
+  const password = String(input?.password ?? '');
+  if (!isAccountEmail(email)) {
+    return { ok: false, error: '请输入有效的邮箱地址' };
+  }
+  if (password.length < 6 || password.length > 128) {
+    return { ok: false, error: '密码长度需要在 6–128 个字符之间' };
+  }
+  if (readLocalAccount()) {
+    return { ok: false, error: '本机已经有账号了，请直接登录' };
+  }
+
+  const now = new Date().toISOString();
+  const salt = randomBytes(16).toString('hex');
+  const account: StoredLocalAccount = {
+    version: 1,
+    email,
+    displayName: accountDisplayName(input?.displayName, email),
+    createdAt: now,
+    signedInAt: now,
+    password: {
+      algorithm: 'scrypt',
+      salt,
+      hash: hashLocalPassword(password, salt)
+    }
+  };
+  try {
+    writeLocalAccount(account);
+    return { ok: true, state: localAccountState() };
+  } catch (error) {
+    return { ok: false, error: `保存账号失败：${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+function loginLocalAccount(input: { email?: unknown; password?: unknown }): AccountActionResult {
+  const account = readLocalAccount();
+  if (!account) return { ok: false, error: '本机还没有账号，请先注册' };
+
+  const email = normaliseAccountEmail(input?.email);
+  const password = String(input?.password ?? '');
+  let matches = false;
+  try {
+    const expected = Buffer.from(account.password.hash, 'hex');
+    const actual = Buffer.from(hashLocalPassword(password, account.password.salt), 'hex');
+    matches = expected.length === actual.length && timingSafeEqual(expected, actual);
+  } catch {
+    matches = false;
+  }
+  if (!matches || email !== account.email) {
+    return { ok: false, error: '邮箱或密码不正确' };
+  }
+
+  try {
+    account.signedInAt = new Date().toISOString();
+    writeLocalAccount(account);
+    return { ok: true, state: localAccountState() };
+  } catch (error) {
+    return { ok: false, error: `登录失败：${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+function logoutLocalAccount(): AccountActionResult {
+  const account = readLocalAccount();
+  if (!account) return { ok: true, state: localAccountState() };
+  try {
+    delete account.signedInAt;
+    writeLocalAccount(account);
+    return { ok: true, state: localAccountState() };
+  } catch (error) {
+    return { ok: false, error: `退出失败：${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+async function resetLocalAccount(): Promise<AccountActionResult> {
+  const file = localAccountFile();
+  if (!fs.existsSync(file)) return { ok: true, state: localAccountState() };
+
+  if (mainWindow) {
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: '清除本机账号',
+      message: '确定清除本机账号吗？',
+      detail: '只会删除本机保存的邮箱和密码，不会影响贴图、视频和记事本文件。清除后可以用新邮箱重新注册。',
+      buttons: ['取消', '清除账号'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    });
+    if (result.response !== 1) {
+      return { ok: false, error: '已取消' };
+    }
+  }
+
+  try {
+    fs.rmSync(file, { force: true });
+    return { ok: true, state: localAccountState() };
+  } catch (error) {
+    return { ok: false, error: `清除失败：${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1320,
@@ -189,7 +422,8 @@ function createWindow(): void {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      autoplayPolicy: 'no-user-gesture-required'
     }
   });
 
@@ -499,6 +733,27 @@ function parseByteRange(header: string | null, size: number): { start: number; e
   return { start, end };
 }
 
+function registerAudioCapture(): void {
+  const ses = session.defaultSession;
+  ses.setDisplayMediaRequestHandler(async (_request, callback) => {
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 1, height: 1 }
+      });
+      const primaryId = String(screen.getPrimaryDisplay().id);
+      const source = sources.find((item) => item.display_id === primaryId) ?? sources[0];
+      if (!source) {
+        callback(null);
+        return;
+      }
+      callback({ video: source, audio: 'loopback' });
+    } catch {
+      callback(null);
+    }
+  });
+}
+
 function registerMediaProtocol(): void {
   protocol.handle('nyxel-media', async (request) => {
     try {
@@ -523,6 +778,8 @@ function registerMediaProtocol(): void {
             'Content-Length': String(end - start + 1),
             'Content-Range': `bytes ${start}-${end}/${size}`,
             'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*',
+            'Cross-Origin-Resource-Policy': 'cross-origin',
             'Cache-Control': 'no-store'
           }
         });
@@ -530,7 +787,11 @@ function registerMediaProtocol(): void {
       if (request.headers.get('range')) {
         return new Response(null, {
           status: 416,
-          headers: { 'Content-Range': `bytes */${size}`, 'Accept-Ranges': 'bytes' }
+          headers: {
+            'Content-Range': `bytes */${size}`,
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*'
+          }
         });
       }
       if (request.method === 'HEAD') {
@@ -540,6 +801,8 @@ function registerMediaProtocol(): void {
             'Content-Type': mime,
             'Content-Length': String(size),
             'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*',
+            'Cross-Origin-Resource-Policy': 'cross-origin',
             'Cache-Control': 'no-store'
           }
         });
@@ -551,6 +814,8 @@ function registerMediaProtocol(): void {
           'Content-Type': mime,
           'Content-Length': String(size),
           'Accept-Ranges': 'bytes',
+          'Access-Control-Allow-Origin': '*',
+          'Cross-Origin-Resource-Policy': 'cross-origin',
           'Cache-Control': 'no-store'
         }
       });
@@ -917,6 +1182,154 @@ async function moveLibraryVideo(filePath: string, destinationDir: string): Promi
   }
   notifyLibraryChanged();
   return { ok: true, path: destination };
+}
+
+interface VideoNoteMeta {
+  path: string;
+  fileName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface VideoNoteDocument {
+  version: 1;
+  videoPath: string;
+  videoName: string;
+  createdAt: string;
+  updatedAt: string;
+  text: string;
+  textHtml: string;
+  drawing: string;
+}
+
+function videoNotesDir(): string {
+  const settings = loadSettings();
+  return path.resolve(settings.videoNoteDir || path.join(app.getPath('userData'), 'VideoNotes'));
+}
+
+function safeFileBase(value: string): string {
+  return value.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80) || 'note';
+}
+
+async function ensureVideoNotesDir(): Promise<string> {
+  const dir = videoNotesDir();
+  await fs.promises.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+async function listVideoNotes(videoPath: string): Promise<{ ok: boolean; dir: string; notes: VideoNoteMeta[]; error?: string }> {
+  const dir = videoNotesDir();
+  try {
+    if (!fs.existsSync(dir)) return { ok: true, dir, notes: [] };
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    const notes: VideoNoteMeta[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.json')) continue;
+      const notePath = path.join(dir, entry.name);
+      try {
+        const parsed = JSON.parse(await fs.promises.readFile(notePath, 'utf8')) as Partial<VideoNoteDocument>;
+        if (path.resolve(String(parsed.videoPath ?? '')) !== path.resolve(videoPath)) continue;
+        notes.push({
+          path: notePath,
+          fileName: entry.name,
+          createdAt: String(parsed.createdAt ?? ''),
+          updatedAt: String(parsed.updatedAt ?? parsed.createdAt ?? '')
+        });
+      } catch {
+        // ignore malformed notes
+      }
+    }
+    notes.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return { ok: true, dir, notes };
+  } catch (error) {
+    return { ok: false, dir, notes: [], error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function createVideoNote(videoPath: string): Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }> {
+  const source = path.resolve(String(videoPath ?? ''));
+  if (!isInside(videosDir(), source)) return { ok: false, error: '只能给视频作品库中的视频创建记事本' };
+  try {
+    await ensureVideoNotesDir();
+    const stat = await fs.promises.stat(source);
+    if (!stat.isFile()) return { ok: false, error: '视频文件不存在' };
+    const dir = videoNotesDir();
+    const base = safeFileBase(path.basename(source, path.extname(source)));
+    const fileName = await uniqueFilePath(dir, `${base}_复盘_${timestamp()}.json`);
+    const now = new Date().toISOString();
+    const note: VideoNoteDocument = {
+      version: 1,
+      videoPath: source,
+      videoName: path.basename(source),
+      createdAt: now,
+      updatedAt: now,
+      text: '',
+      textHtml: '',
+      drawing: ''
+    };
+    await fs.promises.writeFile(fileName, JSON.stringify(note, null, 2), 'utf8');
+    return { ok: true, note, path: fileName };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function readVideoNote(notePath: string): Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }> {
+  try {
+    const dir = videoNotesDir();
+    const target = path.resolve(String(notePath ?? ''));
+    if (!isInside(dir, target)) return { ok: false, error: '记事本文件不在当前记事本目录中' };
+    const parsed = JSON.parse(await fs.promises.readFile(target, 'utf8')) as VideoNoteDocument;
+    if (!parsed || typeof parsed !== 'object' || !parsed.videoPath) return { ok: false, error: '记事本文件格式无效' };
+    return {
+      ok: true,
+      path: target,
+      note: {
+        version: 1,
+        videoPath: String(parsed.videoPath),
+        videoName: String(parsed.videoName ?? path.basename(parsed.videoPath)),
+        createdAt: String(parsed.createdAt ?? ''),
+        updatedAt: String(parsed.updatedAt ?? parsed.createdAt ?? ''),
+        text: String(parsed.text ?? ''),
+        textHtml: String(parsed.textHtml ?? ''),
+        drawing: String(parsed.drawing ?? '')
+      }
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function saveVideoNote(
+  notePath: string,
+  updates: { text?: string; textHtml?: string; drawing?: string }
+): Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }> {
+  try {
+    const dir = videoNotesDir();
+    const target = path.resolve(String(notePath ?? ''));
+    if (!isInside(dir, target)) return { ok: false, error: '记事本文件不在当前记事本目录中' };
+    const parsed = JSON.parse(await fs.promises.readFile(target, 'utf8')) as VideoNoteDocument;
+    const note: VideoNoteDocument = {
+      version: 1,
+      videoPath: String(parsed.videoPath ?? ''),
+      videoName: String(parsed.videoName ?? ''),
+      createdAt: String(parsed.createdAt ?? new Date().toISOString()),
+      updatedAt: new Date().toISOString(),
+      text: updates.text !== undefined ? String(updates.text) : String(parsed.text ?? ''),
+      textHtml: updates.textHtml !== undefined ? String(updates.textHtml) : String(parsed.textHtml ?? ''),
+      drawing: updates.drawing !== undefined ? String(updates.drawing) : String(parsed.drawing ?? '')
+    };
+    await fs.promises.writeFile(target, JSON.stringify(note, null, 2), 'utf8');
+    return { ok: true, note, path: target };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function openVideoNotesDir(): Promise<{ ok: boolean; dir: string; error?: string }> {
+  const dir = await ensureVideoNotesDir();
+  const error = await shell.openPath(dir);
+  return error ? { ok: false, dir, error } : { ok: true, dir };
 }
 
 async function listVideos(): Promise<{ root: string; files: Array<{
@@ -2326,6 +2739,16 @@ function registerIpc(): void {
     return merged;
   });
 
+  ipcMain.handle('account:status', () => localAccountState());
+  ipcMain.handle('account:register', (_event, input: { email?: string; password?: string; displayName?: string }) => {
+    return registerLocalAccount(input ?? {});
+  });
+  ipcMain.handle('account:login', (_event, input: { email?: string; password?: string }) => {
+    return loginLocalAccount(input ?? {});
+  });
+  ipcMain.handle('account:logout', () => logoutLocalAccount());
+  ipcMain.handle('account:reset', () => resetLocalAccount());
+
   ipcMain.handle('app:info', () => {
     const settings = loadSettings();
     return {
@@ -2525,6 +2948,28 @@ function registerIpc(): void {
     return moveLibraryVideo(filePath, destinationDir);
   });
 
+  ipcMain.handle('notes:list', async (_event, videoPath: string) => listVideoNotes(videoPath));
+
+  ipcMain.handle('notes:create', async (_event, videoPath: string) => createVideoNote(videoPath));
+
+  ipcMain.handle('notes:read', async (_event, notePath: string) => readVideoNote(notePath));
+
+  ipcMain.handle('notes:save', async (_event, notePath: string, updates: { text?: string; textHtml?: string; drawing?: string }) => {
+    return saveVideoNote(notePath, updates);
+  });
+
+  ipcMain.handle('notes:openDir', async () => openVideoNotesDir());
+
+  ipcMain.handle('audio:source', async () => {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1, height: 1 }
+    });
+    const primaryId = String(screen.getPrimaryDisplay().id);
+    const source = sources.find((item) => item.display_id === primaryId) ?? sources[0];
+    return source ? { id: source.id, name: source.name } : null;
+  });
+
   ipcMain.handle('library:delete', async (_event, target: string) => {
     const absolute = path.resolve(String(target ?? ''));
     if (!isInside(galleryDir(), absolute) && !isInside(texturesDir(), absolute) && !isInside(videosDir(), absolute)) {
@@ -2563,6 +3008,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     app.setAppUserModelId('com.nyxel.app');
     registerMediaProtocol();
+    registerAudioCapture();
     registerIpc();
     createWindow();
     const settings = loadSettings();

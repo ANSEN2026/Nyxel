@@ -30,6 +30,13 @@ contextBridge.exposeInMainWorld('nyxel', {
     load: () => ipcRenderer.invoke('settings:load'),
     save: (settings: unknown) => ipcRenderer.invoke('settings:save', settings)
   },
+  account: {
+    status: () => ipcRenderer.invoke('account:status'),
+    register: (input: { email: string; password: string; displayName?: string }) => ipcRenderer.invoke('account:register', input),
+    login: (input: { email: string; password: string }) => ipcRenderer.invoke('account:login', input),
+    logout: () => ipcRenderer.invoke('account:logout'),
+    reset: () => ipcRenderer.invoke('account:reset')
+  },
   app: {
     info: () => ipcRenderer.invoke('app:info'),
     openPath: (target: string) => ipcRenderer.invoke('app:openPath', target),
@@ -93,5 +100,15 @@ contextBridge.exposeInMainWorld('nyxel', {
       ipcRenderer.on('library:changed', listener);
       return () => ipcRenderer.removeListener('library:changed', listener);
     }
+  },
+  notes: {
+    list: (videoPath: string) => ipcRenderer.invoke('notes:list', videoPath),
+    create: (videoPath: string) => ipcRenderer.invoke('notes:create', videoPath),
+    read: (notePath: string) => ipcRenderer.invoke('notes:read', notePath),
+    save: (notePath: string, updates: { text?: string; textHtml?: string; drawing?: string }) => ipcRenderer.invoke('notes:save', notePath, updates),
+    openDir: () => ipcRenderer.invoke('notes:openDir')
+  },
+  audio: {
+    source: () => ipcRenderer.invoke('audio:source')
   }
 });

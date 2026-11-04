@@ -1,7 +1,10 @@
 import './styles.css';
 import logoUrl from './assets/app-icon-face.png';
-import type { AppInfo, RecentProject, Settings, StatusApi, ToastApi, ToastKind, ViewName } from './types';
+import { audioMonitor } from './lib/audio-monitor';
+import { startTitleWave } from './lib/title-wave';
+import type { AccountUser, AppInfo, RecentProject, Settings, StatusApi, ToastApi, ToastKind, ViewName } from './types';
 import { AboutView } from './views/about';
+import { AccountView } from './views/account';
 import { ColorView } from './views/color';
 import { DrawView } from './views/draw';
 import { FilesView } from './views/files';
@@ -16,7 +19,11 @@ const appRoot = document.querySelector('#app') as HTMLElement;
 appRoot.innerHTML = `
   <div class="shell">
     <aside class="sidebar">
-      <img class="logo" src="${logoUrl}" alt="Texture map" draggable="false" />
+      <button class="logo-button" id="btn-account" type="button" title="登录 / 注册" aria-label="登录或注册账号">
+        <img class="logo" src="${logoUrl}" alt="Texture map" draggable="false" />
+        <span class="logo-status" id="logo-status" aria-hidden="true"></span>
+        <span class="logo-tooltip" id="logo-tooltip">登录 / 注册</span>
+      </button>
       <nav class="nav">
         <button class="nav-button active" data-view="home" type="button">⌂<span class="nav-tooltip">首页 Ctrl+0</span></button>
         <button class="nav-button" data-view="texture" type="button">
@@ -62,6 +69,7 @@ appRoot.innerHTML = `
     </aside>
     <div class="main">
       <header class="titlebar" id="titlebar">
+        <canvas class="titlebar-wave" id="titlebar-wave" aria-hidden="true"></canvas>
         <div class="titlebar-title" id="titlebar-title">当前：<strong>首页</strong></div>
         <div class="titlebar-actions">
           <button id="btn-screenshot" type="button" title="截图（Ctrl+Alt+A）">⌗</button>
@@ -89,6 +97,8 @@ const statusFile = document.querySelector('#status-file') as HTMLElement;
 const statusInfo = document.querySelector('#status-info') as HTMLElement;
 const statusLog = document.querySelector('#status-log') as HTMLElement;
 const toastContainer = document.querySelector('#toast-container') as HTMLElement;
+const titleWaveCanvas = document.querySelector('#titlebar-wave') as HTMLCanvasElement | null;
+if (titleWaveCanvas) startTitleWave(titleWaveCanvas);
 
 let settings: Settings;
 let appInfo: AppInfo;
@@ -104,6 +114,7 @@ let videosView: FilesView;
 let drawView: DrawView;
 let settingsView: SettingsView;
 let aboutView: AboutView;
+let accountView: AccountView;
 
 function toast(message: string, kind: ToastKind = 'info'): void {
   const node = document.createElement('div');
@@ -132,11 +143,43 @@ function applyTheme(theme: Settings['theme']): void {
   document.documentElement.dataset.theme = resolved;
 }
 
+function applyAccountIndicator(user: AccountUser | null): void {
+  const button = document.querySelector('#btn-account') as HTMLButtonElement | null;
+  const tooltip = document.querySelector('#logo-tooltip') as HTMLElement | null;
+  const signedIn = Boolean(user);
+  button?.classList.toggle('signed-in', signedIn);
+  if (button) {
+    button.title = user ? `账号：${user.displayName}` : '登录 / 注册';
+    button.setAttribute('aria-label', user ? `账号：${user.displayName}` : '登录或注册账号');
+  }
+  if (tooltip) tooltip.textContent = user ? user.displayName : '登录 / 注册';
+}
+
+async function applyAudioMonitor(enabled: boolean, notify = false): Promise<void> {
+  titleWaveCanvas?.classList.toggle('hidden', !enabled);
+  if (!enabled) {
+    audioMonitor.stop();
+    return;
+  }
+  if (audioMonitor.isActive) return;
+  try {
+    await audioMonitor.start();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('audio monitor unavailable', message);
+    if (notify) toast(`系统音频监听未启动：${message}`, 'error');
+  }
+}
+
 async function saveSettings(next: Settings): Promise<void> {
   const previousHotkey = settings?.screenshotHotkey;
   const previousTheme = settings?.theme;
+  const previousAudio = settings?.audioVisualizer;
   settings = await window.nyxel.settings.save(next);
   if (settings.theme !== previousTheme) applyTheme(settings.theme);
+  if (settings.audioVisualizer !== previousAudio) {
+    void applyAudioMonitor(settings.audioVisualizer, true);
+  }
   if (settings.screenshotHotkey !== previousHotkey) {
     const result = await window.nyxel.screenshot.setHotkey(settings.screenshotHotkey);
     if (!result.ok) toast(`截图热键 ${settings.screenshotHotkey} 注册失败`, 'error');
@@ -289,6 +332,7 @@ function bindWindowControls(): void {
 
   document.querySelector('#btn-min')?.addEventListener('click', () => void window.nyxel.window.minimize());
   document.querySelector('#btn-close')?.addEventListener('click', () => void window.nyxel.window.close());
+  document.querySelector('#btn-account')?.addEventListener('click', () => void accountView.open());
   document.querySelector('#btn-settings')?.addEventListener('click', () => void settingsView.open(settings, appInfo));
   document.querySelector('#btn-about')?.addEventListener('click', () => aboutView.open(appInfo));
   document.querySelector('#btn-screenshot')?.addEventListener('click', () => void captureScreenshot());
@@ -392,6 +436,7 @@ async function bootstrap(): Promise<void> {
   drawView = new DrawView(callbacks);
   settingsView = new SettingsView(saveSettings, toast);
   aboutView = new AboutView(toast);
+  accountView = new AccountView(toast, applyAccountIndicator);
 
   workspace.append(
     homeView.element,
@@ -412,7 +457,7 @@ async function bootstrap(): Promise<void> {
   videoView.element.classList.add('hidden');
   videosView.element.classList.add('hidden');
   drawView.element.classList.add('hidden');
-  document.body.append(settingsView.element, aboutView.element);
+  document.body.append(settingsView.element, aboutView.element, accountView.element);
 
   bindWindowControls();
   bindKeyboard();
@@ -438,6 +483,10 @@ async function bootstrap(): Promise<void> {
 
   showView('home');
   status.set('就绪', '', '');
+  void window.nyxel.account.status()
+    .then((state) => applyAccountIndicator(state.user))
+    .catch(() => applyAccountIndicator(null));
+  void applyAudioMonitor(settings.audioVisualizer, false);
 
   if (!appInfo.hotkeyRegistered) {
     toast(`截图热键 ${settings.screenshotHotkey} 注册失败，可能已被其他程序占用`, 'error');
