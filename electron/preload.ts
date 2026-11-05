@@ -61,6 +61,16 @@ contextBridge.exposeInMainWorld('nyxel', {
       return () => ipcRenderer.removeListener('video:progress', listener);
     }
   },
+  download: {
+    defaultDir: () => ipcRenderer.invoke('download:defaultDir'),
+    start: (options: unknown) => ipcRenderer.invoke('download:start', options),
+    cancel: () => ipcRenderer.invoke('download:cancel'),
+    onProgress: (callback: (progress: unknown) => void) => {
+      const listener = (_event: unknown, progress: unknown) => callback(progress);
+      ipcRenderer.on('download:progress', listener);
+      return () => ipcRenderer.removeListener('download:progress', listener);
+    }
+  },
   screenshot: {
     capture: () => ipcRenderer.invoke('screenshot:capture'),
     setHotkey: (accelerator: string) => ipcRenderer.invoke('screenshot:setHotkey', accelerator),

@@ -20,6 +20,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
+import type { FileHandle } from 'node:fs/promises';
+import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as httpFetch, type Dispatcher } from 'undici';
 import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { unzipSync } from 'fflate';
@@ -2682,6 +2684,545 @@ async function upscaleWithAi(
   }
 }
 
+interface DownloadTaskState {
+  cancelled: boolean;
+  controllers: Set<AbortController>;
+  downloaded: number;
+  total: number;
+  lastTick: number;
+  lastBytes: number;
+  timer: NodeJS.Timeout | null;
+  threads: number;
+  startedAt: number;
+  useChromium: boolean;
+  failure: boolean;
+  dispatcher: Dispatcher | null;
+}
+
+let activeDownload: DownloadTaskState | null = null;
+
+const downloadAgentOptions = {
+  connections: 64,
+  pipelining: 1,
+  keepAliveTimeout: 30_000,
+  headersTimeout: 60_000,
+  bodyTimeout: 0,
+  connectTimeout: 20_000
+};
+const proxyConfigured = Boolean(
+  process.env.HTTPS_PROXY || process.env.https_proxy
+  || process.env.HTTP_PROXY || process.env.http_proxy
+);
+const downloadDispatcher = proxyConfigured
+  ? new EnvHttpProxyAgent(downloadAgentOptions)
+  : new Agent(downloadAgentOptions);
+
+function sendDownloadProgress(progress: {
+  phase: 'probe' | 'download' | 'done' | 'error' | 'cancel';
+  percent: number;
+  downloaded: number;
+  total: number;
+  speed: number;
+  threads: number;
+  message?: string;
+  output?: string;
+}): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('download:progress', progress);
+}
+
+function sanitizeDownloadFilename(filename: string): string {
+  const base = path.basename(String(filename ?? '').trim())
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/[. ]+$/g, '');
+  if (!base) throw new Error('文件名不能为空');
+  return base;
+}
+
+function parseContentRange(value: string | null): { start: number; end: number; total: number } | null {
+  if (!value) return null;
+  const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(value.trim());
+  if (!match) return null;
+  return {
+    start: Number(match[1]),
+    end: Number(match[2]),
+    total: match[3] === '*' ? 0 : Number(match[3])
+  };
+}
+
+const downloadRequestHeaders = {
+  Accept: '*/*',
+  'Accept-Encoding': 'identity',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) TextureMapDownloader/1.0'
+};
+
+async function configureDownloadProxy(url: string, state: DownloadTaskState): Promise<void> {
+  try {
+    const resolved = await session.defaultSession.resolveProxy(url);
+    const entries = String(resolved ?? '').split(';').map((entry) => entry.trim()).filter(Boolean);
+    const proxyEntry = entries.find((entry) => /^(PROXY|HTTPS|SOCKS4|SOCKS5?)\s+/i.test(entry));
+    if (!proxyEntry) return;
+    const [kind, address] = proxyEntry.split(/\s+/);
+    if (!address) return;
+    if (/^SOCKS/i.test(kind)) {
+      // undici 没有内置 SOCKS 代理，交给 Chromium 网络栈处理系统代理。
+      state.useChromium = true;
+      return;
+    }
+    const scheme = kind.toUpperCase() === 'HTTPS' ? 'https' : 'http';
+    state.dispatcher = new ProxyAgent({
+      uri: `${scheme}://${address}`,
+      ...downloadAgentOptions
+    });
+  } catch { /* use direct/env proxy */ }
+}
+
+async function probeDownload(
+  url: string,
+  state: DownloadTaskState,
+  fallbackToChromium = true
+): Promise<{ total: number; ranges: boolean }> {
+  const runProbe = async (useChromium: boolean): Promise<{ total: number; ranges: boolean }> => {
+    const request = (init: Parameters<typeof httpFetch>[1]) => (
+      useChromium
+        ? net.fetch(url, init as RequestInit)
+        : httpFetch(url, { ...init, dispatcher: state.dispatcher ?? downloadDispatcher })
+    );
+    let total = 0;
+    let ranges = false;
+    try {
+      const controller = new AbortController();
+      state.controllers.add(controller);
+      try {
+        const response = await request({
+          method: 'HEAD',
+          redirect: 'follow',
+          headers: downloadRequestHeaders,
+          signal: controller.signal
+        });
+        if (response.ok) {
+          total = Number(response.headers.get('content-length') ?? 0) || 0;
+          ranges = String(response.headers.get('accept-ranges') ?? '').toLowerCase().includes('bytes') && total > 0;
+        }
+      } finally {
+        state.controllers.delete(controller);
+      }
+    } catch { /* some servers reject HEAD */ }
+
+    if (!total || !ranges) {
+      const controller = new AbortController();
+      state.controllers.add(controller);
+      try {
+        const response = await request({
+          redirect: 'follow',
+          headers: { ...downloadRequestHeaders, Range: 'bytes=0-0' },
+          signal: controller.signal
+        });
+        if (!response.ok) throw new Error(`服务器返回 HTTP ${response.status}`);
+        if (response.status === 206) {
+          const range = parseContentRange(response.headers.get('content-range'));
+          if (range?.total) {
+            total = range.total;
+            ranges = true;
+          }
+        } else {
+          total = Number(response.headers.get('content-length') ?? 0) || 0;
+          ranges = false;
+        }
+        try { await response.body?.cancel(); } catch { /* ignore */ }
+      } finally {
+        state.controllers.delete(controller);
+      }
+    }
+    return { total, ranges };
+  };
+
+  if (state.useChromium) return runProbe(true);
+  try {
+    return await runProbe(false);
+  } catch (error) {
+    if (state.cancelled || !fallbackToChromium) throw error;
+    state.useChromium = true;
+    return await runProbe(true);
+  }
+}
+
+function downloadRequest(url: string, state: DownloadTaskState, init: Parameters<typeof httpFetch>[1]) {
+  return state.useChromium
+    ? net.fetch(url, init as RequestInit)
+    : httpFetch(url, { ...init, dispatcher: state.dispatcher ?? downloadDispatcher });
+}
+
+async function downloadRangeToFile(
+  url: string,
+  start: number,
+  end: number,
+  handle: FileHandle,
+  state: DownloadTaskState,
+  onWritten?: (bytes: number) => void
+): Promise<void> {
+  const controller = new AbortController();
+  state.controllers.add(controller);
+  const bufferLimit = 1024 * 1024;
+  let pending: Buffer[] = [];
+  let pendingLength = 0;
+  let offset = start;
+  const flush = async (): Promise<void> => {
+    if (!pendingLength) return;
+    const output = pending.length === 1 ? pending[0] : Buffer.concat(pending, pendingLength);
+    await handle.write(output, 0, output.length, offset);
+    offset += output.length;
+    state.downloaded += output.length;
+    onWritten?.(output.length);
+    pending = [];
+    pendingLength = 0;
+  };
+  try {
+    const response = await downloadRequest(url, state, {
+      redirect: 'follow',
+      headers: { ...downloadRequestHeaders, Range: `bytes=${start}-${end}` },
+      signal: controller.signal
+    });
+    if (response.status !== 206 || !response.body) {
+      throw new Error(`服务器未返回分段内容（HTTP ${response.status}）`);
+    }
+    const contentRange = parseContentRange(response.headers.get('content-range'));
+    if (!contentRange || contentRange.start !== start || contentRange.end !== end) {
+      throw new Error('下载源返回了错误的分段范围');
+    }
+    if (contentRange.total && state.total && contentRange.total !== state.total) {
+      throw new Error('下载源文件大小不一致');
+    }
+    const expected = end - start + 1;
+    let received = 0;
+    const reader = response.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (state.cancelled || state.failure) throw new Error('cancelled');
+      if (value?.length) {
+        received += value.length;
+        if (received > expected) throw new Error('下载源返回的分段内容超出请求范围');
+        pending.push(Buffer.from(value));
+        pendingLength += value.length;
+        if (pendingLength >= bufferLimit) await flush();
+      }
+    }
+    await flush();
+  } finally {
+    state.controllers.delete(controller);
+  }
+}
+
+async function downloadRangeWithRetry(
+  urls: string[],
+  chunkIndex: number,
+  start: number,
+  end: number,
+  handle: FileHandle,
+  state: DownloadTaskState
+): Promise<void> {
+  const maxAttempts = Math.max(3, urls.length + 1);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (state.cancelled || state.failure) throw new Error('cancelled');
+    const url = urls[(chunkIndex + attempt - 1) % urls.length];
+    let written = 0;
+    try {
+      await downloadRangeToFile(url, start, end, handle, state, (bytes) => { written += bytes; });
+      return;
+    } catch (error) {
+      state.downloaded = Math.max(0, state.downloaded - written);
+      if (state.cancelled || state.failure) throw error;
+      if (attempt >= maxAttempts) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const rateLimited = /HTTP (429|503)/.test(message);
+      await new Promise((resolve) => setTimeout(resolve, (rateLimited ? 1200 : 250) * attempt));
+    }
+  }
+}
+
+async function downloadSingleToFile(url: string, partPath: string, state: DownloadTaskState): Promise<void> {
+  const controller = new AbortController();
+  state.controllers.add(controller);
+  const handle = await fs.promises.open(partPath, 'w');
+  try {
+    const response = await downloadRequest(url, state, {
+      redirect: 'follow',
+      headers: downloadRequestHeaders,
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`服务器返回 HTTP ${response.status}`);
+    const headerTotal = Number(response.headers.get('content-length') ?? 0) || 0;
+    if (headerTotal > 0) state.total = headerTotal;
+    if (!response.body) throw new Error('服务器没有返回文件内容');
+    const reader = response.body.getReader();
+    const bufferLimit = 1024 * 1024;
+    let pending: Buffer[] = [];
+    let pendingLength = 0;
+    let offset = 0;
+    const flush = async (): Promise<void> => {
+      if (!pendingLength) return;
+      const output = pending.length === 1 ? pending[0] : Buffer.concat(pending, pendingLength);
+      await handle.write(output, 0, output.length, offset);
+      offset += output.length;
+      state.downloaded += output.length;
+      pending = [];
+      pendingLength = 0;
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (state.cancelled) throw new Error('cancelled');
+      if (value?.length) {
+        pending.push(Buffer.from(value));
+        pendingLength += value.length;
+        if (pendingLength >= bufferLimit) await flush();
+      }
+    }
+    await flush();
+  } finally {
+    state.controllers.delete(controller);
+    await handle.close();
+  }
+}
+
+async function runDownload(options: {
+  url: string;
+  mirrors?: string[];
+  directory: string;
+  filename: string;
+  threads: number;
+}): Promise<{ ok: boolean; output?: string; size?: number; threads?: number; error?: string; cancelled?: boolean }> {
+  if (activeDownload) return { ok: false, error: '已有下载任务正在进行' };
+  const rawUrl = String(options.url ?? '').trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return { ok: false, error: '下载地址格式不正确' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, error: '只支持 HTTP / HTTPS 下载地址' };
+  }
+  const directory = path.resolve(String(options.directory ?? '').trim());
+  let filename: string;
+  try {
+    filename = sanitizeDownloadFilename(options.filename);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  const target = path.join(directory, filename);
+  if (path.dirname(target) !== directory) return { ok: false, error: '保存路径无效' };
+  await fs.promises.mkdir(directory, { recursive: true });
+  if (fs.existsSync(target)) {
+    if (!mainWindow) return { ok: false, error: '窗口不可用' };
+    const answer = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: '文件已存在',
+      message: `「${filename}」已经存在，是否覆盖？`,
+      buttons: ['覆盖', '取消'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true
+    });
+    if (answer.response !== 0) return { ok: false, cancelled: true };
+    await fs.promises.rm(target, { force: true });
+  }
+
+  const partPath = `${target}.part`;
+  await fs.promises.rm(partPath, { force: true });
+  const state: DownloadTaskState = {
+    cancelled: false,
+    controllers: new Set(),
+    downloaded: 0,
+    total: 0,
+    lastTick: Date.now(),
+    lastBytes: 0,
+    timer: null,
+    threads: 1,
+    startedAt: 0,
+    useChromium: false,
+    failure: false,
+    dispatcher: null
+  };
+  activeDownload = state;
+
+  const emit = (phase: 'probe' | 'download' | 'done' | 'error' | 'cancel', message?: string): void => {
+    const now = Date.now();
+    const elapsed = Math.max(0.001, (now - state.lastTick) / 1000);
+    let speed = 0;
+    if (phase === 'download') {
+      speed = Math.max(0, (state.downloaded - state.lastBytes) / elapsed);
+      state.lastTick = now;
+      state.lastBytes = state.downloaded;
+    } else if (phase === 'done' && state.startedAt) {
+      speed = state.downloaded / Math.max(0.001, (now - state.startedAt) / 1000);
+    }
+    sendDownloadProgress({
+      phase,
+      percent: state.total > 0 ? Math.min(100, (state.downloaded / state.total) * 100) : 0,
+      downloaded: state.downloaded,
+      total: state.total,
+      speed,
+      threads: state.threads,
+      message,
+      output: phase === 'done' ? target : undefined
+    });
+  };
+
+  try {
+    emit('probe', '正在检测服务器与网络代理…');
+    await configureDownloadProxy(parsed.toString(), state);
+    const probe = await probeDownload(parsed.toString(), state);
+    state.total = probe.total;
+    const requestedValue = Math.floor(Number(options.threads));
+    const requested = requestedValue > 0 ? Math.min(64, requestedValue) : 64;
+    let usedThreads = 1;
+
+    const sourceUrls = [parsed.toString()];
+    if (probe.ranges && probe.total > 0 && Array.isArray(options.mirrors) && options.mirrors.length) {
+      emit('probe', '正在校验备用下载地址…');
+      const seen = new Set(sourceUrls);
+      for (const rawMirror of options.mirrors.slice(0, 8)) {
+        try {
+          const mirror = new URL(String(rawMirror ?? '').trim());
+          if (mirror.protocol !== 'http:' && mirror.protocol !== 'https:') continue;
+          const mirrorUrl = mirror.toString();
+          if (seen.has(mirrorUrl)) continue;
+          seen.add(mirrorUrl);
+          const mirrorProbe = await probeDownload(mirrorUrl, state, false);
+          if (mirrorProbe.ranges && mirrorProbe.total === probe.total) {
+            sourceUrls.push(mirrorUrl);
+          }
+        } catch { /* ignore invalid mirror */ }
+      }
+    }
+    const sourceNote = sourceUrls.length > 1 ? `（${sourceUrls.length} 个下载源）` : '';
+
+    state.lastTick = Date.now();
+    state.lastBytes = 0;
+    state.startedAt = Date.now();
+    state.timer = setInterval(() => emit('download', `正在下载${sourceNote}…`), 200);
+    emit('download', `正在下载${sourceNote}…`);
+
+    if (probe.ranges && probe.total > 0 && requested > 1) {
+      const chunkSize = Math.max(512 * 1024, Math.min(8 * 1024 * 1024, Math.ceil(probe.total / (requested * 4))));
+      const chunks: Array<{ start: number; end: number }> = [];
+      for (let start = 0; start < probe.total; start += chunkSize) {
+        chunks.push({ start, end: Math.min(probe.total - 1, start + chunkSize - 1) });
+      }
+      const workerCount = Math.min(requested, chunks.length);
+      const handle = await fs.promises.open(partPath, 'w');
+      try {
+        await handle.truncate(probe.total);
+        state.threads = 1;
+        let nextChunk = 0;
+        let workerError: unknown = null;
+        let activeWorkers = 0;
+        let rampReleased = false;
+        let releaseRamp: () => void = () => {};
+        const rampDone = new Promise<void>((resolve) => { releaseRamp = resolve; });
+        const releaseRampOnce = (): void => {
+          if (rampReleased) return;
+          rampReleased = true;
+          releaseRamp();
+        };
+        const waitForRamp = (delay: number): Promise<void> => new Promise((resolve) => {
+          const timer = setTimeout(resolve, delay);
+          rampDone.then(() => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+        const worker = async (): Promise<void> => {
+          while (!state.cancelled && !state.failure) {
+            const chunkIndex = nextChunk;
+            const chunk = chunks[chunkIndex];
+            nextChunk += 1;
+            if (!chunk) return;
+            if (nextChunk >= chunks.length) releaseRampOnce();
+            activeWorkers += 1;
+            state.threads = Math.max(state.threads, activeWorkers);
+            try {
+              await downloadRangeWithRetry(sourceUrls, chunkIndex, chunk.start, chunk.end, handle, state);
+            } catch (error) {
+              if (state.cancelled) return;
+              if (!workerError) workerError = error;
+              state.failure = true;
+              releaseRampOnce();
+              for (const controller of state.controllers) {
+                try { controller.abort(); } catch { /* ignore */ }
+              }
+              return;
+            } finally {
+              activeWorkers -= 1;
+            }
+          }
+        };
+        const startWorker = async (index: number): Promise<void> => {
+          if (index >= 16) {
+            await waitForRamp(Math.min(1800, (index - 15) * 80));
+          }
+          if (state.cancelled || state.failure) return;
+          await worker();
+        };
+        try {
+          await Promise.all(Array.from({ length: workerCount }, (_, index) => startWorker(index)));
+          if (workerError) throw workerError;
+          usedThreads = state.threads;
+        } catch (error) {
+          if (state.cancelled) throw error;
+          await handle.close();
+          await fs.promises.rm(partPath, { force: true });
+          state.downloaded = 0;
+          state.threads = 1;
+          state.useChromium = true;
+          state.failure = false;
+          emit('download', '多线程不可用，已回退单线程…');
+          await downloadSingleToFile(parsed.toString(), partPath, state);
+          usedThreads = 1;
+        }
+      } finally {
+        try { await handle.close(); } catch { /* already closed */ }
+      }
+    } else {
+      state.threads = 1;
+      await downloadSingleToFile(parsed.toString(), partPath, state);
+    }
+
+    if (state.cancelled) throw new Error('cancelled');
+    if (state.total > 0 && state.downloaded < state.total) {
+      throw new Error(`下载不完整：${state.downloaded} / ${state.total} 字节`);
+    }
+    if (state.timer) clearInterval(state.timer);
+    state.timer = null;
+    await fs.promises.rename(partPath, target);
+    emit('done', '下载完成');
+    const stat = await fs.promises.stat(target);
+    return { ok: true, output: target, size: stat.size, threads: usedThreads };
+  } catch (error) {
+    if (state.timer) clearInterval(state.timer);
+    state.timer = null;
+    for (const controller of state.controllers) {
+      try { controller.abort(); } catch { /* ignore */ }
+    }
+    await fs.promises.rm(partPath, { force: true });
+    if (state.cancelled) {
+      emit('cancel', '已取消下载');
+      return { ok: false, cancelled: true };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    emit('error', message);
+    return { ok: false, error: message };
+  } finally {
+    if (state.timer) clearInterval(state.timer);
+    if (state.dispatcher) {
+      try { await state.dispatcher.close(); } catch { /* ignore */ }
+    }
+    activeDownload = null;
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
   ipcMain.handle('window:toggleMaximize', () => {
@@ -2731,6 +3272,27 @@ function registerIpc(): void {
     if (!mainWindow) return null;
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] });
     return result.canceled ? null : result.filePaths[0];
+  });
+
+  ipcMain.handle('download:defaultDir', async () => {
+    const dir = path.join(app.getPath('downloads'), 'Texture map');
+    await fs.promises.mkdir(dir, { recursive: true });
+    return dir;
+  });
+
+  ipcMain.handle('download:start', async (_event, options: { url: string; mirrors?: string[]; directory: string; filename: string; threads: number }) => {
+    return runDownload(options);
+  });
+
+  ipcMain.handle('download:cancel', () => {
+    if (!activeDownload) return false;
+    activeDownload.cancelled = true;
+    if (activeDownload.timer) clearInterval(activeDownload.timer);
+    activeDownload.timer = null;
+    for (const controller of activeDownload.controllers) {
+      try { controller.abort(); } catch { /* ignore */ }
+    }
+    return true;
   });
 
   ipcMain.handle('file:read', async (_event, filePath: string) => {

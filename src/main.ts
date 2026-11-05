@@ -6,6 +6,7 @@ import type { AccountUser, AppInfo, RecentProject, Settings, StatusApi, ToastApi
 import { AboutView } from './views/about';
 import { AccountView } from './views/account';
 import { ColorView } from './views/color';
+import { DownloadView } from './views/download';
 import { DrawView } from './views/draw';
 import { FilesView } from './views/files';
 import { HomeView } from './views/home';
@@ -61,6 +62,10 @@ appRoot.innerHTML = `
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.2-1 10.9-10.9a2.1 2.1 0 0 0-3-3L5.2 16z"/><path d="m13.8 6.5 3.7 3.7M4 20l1-4.2"/></svg>
           <span class="nav-tooltip">绘画 Ctrl+8</span>
         </button>
+        <button class="nav-button" data-view="download" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/></svg>
+          <span class="nav-tooltip">下载 Ctrl+9</span>
+        </button>
       </nav>
       <div class="sidebar-bottom">
         <button class="about-button" id="btn-about" type="button" title="关于我们">!</button>
@@ -90,6 +95,19 @@ appRoot.innerHTML = `
       </footer>
     </div>
   </div>
+  <aside class="sponsor-card" id="sponsor-card" aria-label="赞助支持 Texture map" hidden>
+    <button class="sponsor-close" type="button" data-sponsor-close aria-label="关闭赞助提示">×</button>
+    <div class="sponsor-top">
+      <span class="sponsor-avatar" aria-hidden="true">爱</span>
+      <div class="sponsor-copy">
+        <strong>喜欢 Texture map？</strong>
+        <p>可以请开发者喝杯咖啡，支持它继续更新。</p>
+      </div>
+    </div>
+    <a class="sponsor-cta" href="https://ifdian.net/a/nyxelstudio" target="_blank" rel="noreferrer">
+      去爱发电支持 <span aria-hidden="true">↗</span>
+    </a>
+  </aside>
   <div class="toast-container" id="toast-container"></div>
 `;
 
@@ -99,8 +117,77 @@ const statusFile = document.querySelector('#status-file') as HTMLElement;
 const statusInfo = document.querySelector('#status-info') as HTMLElement;
 const statusLog = document.querySelector('#status-log') as HTMLElement;
 const toastContainer = document.querySelector('#toast-container') as HTMLElement;
+const sponsorCard = document.querySelector('#sponsor-card') as HTMLElement | null;
 const titleWaveCanvas = document.querySelector('#titlebar-wave') as HTMLCanvasElement | null;
 if (titleWaveCanvas) startTitleWave(titleWaveCanvas);
+
+const SPONSOR_VISIBLE_MS = 12_000;
+let sponsorDismissTimer: number | null = null;
+let sponsorCollapseTimer: number | null = null;
+
+function clearSponsorTimers(): void {
+  if (sponsorDismissTimer !== null) {
+    window.clearTimeout(sponsorDismissTimer);
+    sponsorDismissTimer = null;
+  }
+  if (sponsorCollapseTimer !== null) {
+    window.clearTimeout(sponsorCollapseTimer);
+    sponsorCollapseTimer = null;
+  }
+}
+
+function scheduleSponsorDismiss(): void {
+  if (sponsorDismissTimer !== null) window.clearTimeout(sponsorDismissTimer);
+  sponsorDismissTimer = window.setTimeout(() => dismissSponsorCard(), SPONSOR_VISIBLE_MS);
+}
+
+function dismissSponsorCard(): void {
+  if (!sponsorCard) return;
+  clearSponsorTimers();
+  sponsorCard.classList.remove('show');
+  toastContainer.classList.remove('sponsor-offset');
+  sponsorCollapseTimer = window.setTimeout(() => {
+    if (!sponsorCard.classList.contains('show')) sponsorCard.hidden = true;
+    sponsorCollapseTimer = null;
+  }, 240);
+}
+
+function showSponsorCard(): void {
+  if (!sponsorCard) return;
+  clearSponsorTimers();
+  sponsorCard.hidden = false;
+  toastContainer.classList.add('sponsor-offset');
+  void sponsorCard.offsetWidth;
+  sponsorCard.classList.add('show');
+  scheduleSponsorDismiss();
+}
+
+if (sponsorCard) {
+  sponsorCard.querySelector('[data-sponsor-close]')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    dismissSponsorCard();
+  });
+  sponsorCard.addEventListener('pointerenter', () => {
+    if (sponsorDismissTimer !== null) {
+      window.clearTimeout(sponsorDismissTimer);
+      sponsorDismissTimer = null;
+    }
+  });
+  sponsorCard.addEventListener('pointerleave', () => {
+    if (sponsorCard.classList.contains('show')) scheduleSponsorDismiss();
+  });
+  sponsorCard.addEventListener('focusin', () => {
+    if (sponsorDismissTimer !== null) {
+      window.clearTimeout(sponsorDismissTimer);
+      sponsorDismissTimer = null;
+    }
+  });
+  sponsorCard.addEventListener('focusout', (event) => {
+    if (sponsorCard.classList.contains('show') && !sponsorCard.contains(event.relatedTarget as Node | null)) {
+      scheduleSponsorDismiss();
+    }
+  });
+}
 
 let settings: Settings;
 let appInfo: AppInfo;
@@ -114,6 +201,7 @@ let texturesView: FilesView;
 let videoView: VideoView;
 let videosView: FilesView;
 let drawView: DrawView;
+let downloadView: DownloadView;
 let settingsView: SettingsView;
 let aboutView: AboutView;
 let accountView: AccountView;
@@ -266,6 +354,7 @@ function showView(view: ViewName): void {
   if (currentView === 'video') videoView.deactivate();
   if (currentView === 'videos') videosView.deactivate();
   if (currentView === 'draw') drawView.deactivate();
+  if (currentView === 'download') downloadView.deactivate();
 
   currentView = view;
   homeView.element.classList.toggle('hidden', view !== 'home');
@@ -277,6 +366,7 @@ function showView(view: ViewName): void {
   videoView.element.classList.toggle('hidden', view !== 'video');
   videosView.element.classList.toggle('hidden', view !== 'videos');
   drawView.element.classList.toggle('hidden', view !== 'draw');
+  downloadView.element.classList.toggle('hidden', view !== 'download');
 
   document.querySelectorAll('.nav-button').forEach((button) => {
     button.classList.toggle('active', (button as HTMLElement).dataset.view === view);
@@ -306,6 +396,9 @@ function showView(view: ViewName): void {
   } else if (view === 'draw') {
     drawView.activate();
     updateTitle('绘画');
+  } else if (view === 'download') {
+    downloadView.activate();
+    updateTitle('下载');
   } else {
     modelView.activate();
     updateTitle('模型');
@@ -381,6 +474,9 @@ function bindKeyboard(): void {
     } else if (event.key === '8') {
       event.preventDefault();
       showView('draw');
+    } else if (event.key === '9') {
+      event.preventDefault();
+      showView('download');
     } else if (event.key === ',') {
       event.preventDefault();
       void settingsView.open(settings, appInfo);
@@ -436,6 +532,7 @@ async function bootstrap(): Promise<void> {
   videoView = new VideoView(callbacks);
   videosView = new FilesView('videos', callbacks);
   drawView = new DrawView(callbacks);
+  downloadView = new DownloadView(callbacks);
   settingsView = new SettingsView(saveSettings, toast);
   aboutView = new AboutView(toast);
   accountView = new AccountView(toast, applyAccountIndicator);
@@ -449,7 +546,8 @@ async function bootstrap(): Promise<void> {
     texturesView.element,
     videoView.element,
     videosView.element,
-    drawView.element
+    drawView.element,
+    downloadView.element
   );
   textureView.element.classList.add('hidden');
   modelView.element.classList.add('hidden');
@@ -459,6 +557,7 @@ async function bootstrap(): Promise<void> {
   videoView.element.classList.add('hidden');
   videosView.element.classList.add('hidden');
   drawView.element.classList.add('hidden');
+  downloadView.element.classList.add('hidden');
   document.body.append(settingsView.element, aboutView.element, accountView.element);
 
   bindWindowControls();
@@ -485,6 +584,7 @@ async function bootstrap(): Promise<void> {
 
   showView('home');
   status.set('就绪', '', '');
+  window.setTimeout(() => showSponsorCard(), 1000);
   void window.nyxel.account.status()
     .then((state) => applyAccountIndicator(state.user))
     .catch(() => applyAccountIndicator(null));

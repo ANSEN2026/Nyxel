@@ -360,6 +360,7 @@ export class AccountView {
       this.passwordInput.value = '';
       this.confirmInput.value = '';
       const user = result.state.user;
+      this.onLogin?.(user);
       this.toast(
         register
           ? `本机账号已创建，欢迎 ${user?.displayName ?? ''}`

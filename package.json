@@ -1,7 +1,7 @@
 {
   "name": "nyxel",
   "productName": "Texture map",
-  "version": "0.2.0-alpha.17",
+  "version": "0.2.0",
   "description": "Texture map - texture, model, drawing and video toolkit",
   "author": "Texture map",
   "private": true,
@@ -18,7 +18,8 @@
   },
   "dependencies": {
     "fflate": "^0.8.3",
-    "three": "^0.187.0"
+    "three": "^0.187.0",
+    "undici": "^7.30.2"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

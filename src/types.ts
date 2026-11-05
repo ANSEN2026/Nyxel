@@ -1,4 +1,4 @@
-export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video' | 'videos' | 'draw';
+export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video' | 'videos' | 'draw' | 'download';
 export type Theme = 'dark' | 'light' | 'system';
 export type UpdateChannel = 'stable' | 'beta';
 
@@ -137,6 +137,34 @@ export interface VideoCompressResult {
   ok: boolean;
   output?: string;
   size?: number;
+  error?: string;
+  cancelled?: boolean;
+}
+
+export interface DownloadOptions {
+  url: string;
+  mirrors?: string[];
+  directory: string;
+  filename: string;
+  threads: number;
+}
+
+export interface DownloadProgress {
+  phase: 'probe' | 'download' | 'done' | 'error' | 'cancel';
+  percent: number;
+  downloaded: number;
+  total: number;
+  speed: number;
+  threads: number;
+  message?: string;
+  output?: string;
+}
+
+export interface DownloadResult {
+  ok: boolean;
+  output?: string;
+  size?: number;
+  threads?: number;
   error?: string;
   cancelled?: boolean;
 }
@@ -293,6 +321,12 @@ export interface NyxelApi {
     compress: (options: VideoCompressOptions) => Promise<VideoCompressResult>;
     cancel: () => Promise<boolean>;
     onProgress: (callback: (progress: VideoProgress) => void) => () => void;
+  };
+  download: {
+    defaultDir: () => Promise<string>;
+    start: (options: DownloadOptions) => Promise<DownloadResult>;
+    cancel: () => Promise<boolean>;
+    onProgress: (callback: (progress: DownloadProgress) => void) => () => void;
   };
   screenshot: {
     capture: () => Promise<{ ok: boolean; path?: string; copied?: boolean; error?: string; cancelled?: boolean }>;

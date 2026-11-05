@@ -184,7 +184,7 @@ export class SettingsView {
           <section class="settings-section">
             <h3>关于</h3>
             <div class="about-box">
-              <div><strong>Texture map</strong> <span id="set-version">v0.2</span> · v0.2 Alpha</div>
+              <div><strong>Texture map</strong> <span id="set-version">v0.2</span> · v0.2 正式版</div>
               <div id="set-runtime" class="muted"></div>
               <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
                 <button data-action="check-update">检查更新</button>

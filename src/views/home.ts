@@ -17,7 +17,7 @@ export class HomeView {
       <div class="home-hero">
         <img class="hero-mark" src="${heroUrl}" alt="Texture map" draggable="false" />
         <h1>Texture map</h1>
-        <p>贴图 · 模型 · 视频 · 绘画 · v0.2 Alpha</p>
+        <p>贴图 · 模型 · 视频 · 绘画 · v0.2 正式版</p>
         <div class="home-actions">
           <button class="primary" data-action="open-texture">打开贴图</button>
           <button data-action="open-model">打开模型</button>
