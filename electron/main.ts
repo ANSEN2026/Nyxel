@@ -2737,6 +2737,45 @@ function registerIpc(): void {
     return fs.promises.readFile(filePath);
   });
 
+  ipcMain.handle('file:openProject', async (_event, filePath?: string) => {
+    if (!mainWindow) return null;
+    const testPath = process.env.NYXEL_TEST_PROJECT_OPEN;
+    let target = filePath || testPath || '';
+    if (!target) {
+      const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openFile'],
+        filters: [{ name: 'Texture map Project', extensions: ['tmproj'] }]
+      });
+      if (result.canceled || !result.filePaths.length) return null;
+      target = result.filePaths[0];
+    }
+    const data = await fs.promises.readFile(target);
+    return { path: target, data: new Uint8Array(data) };
+  });
+
+  ipcMain.handle('file:saveProject', async (_event, data: Uint8Array, suggestedName: string) => {
+    if (!mainWindow) return null;
+    const settings = loadSettings();
+    await fs.promises.mkdir(settings.exportDir, { recursive: true });
+    const requested = path.basename(String(suggestedName || 'texture_map.tmproj'));
+    const base = requested.replace(/\.[^.]+$/, '') || 'texture_map';
+    const testTarget = process.env.NYXEL_TEST_PROJECT_SAVE;
+    const target = testTarget || (await (async () => {
+      const result = await dialog.showSaveDialog(mainWindow!, {
+        defaultPath: path.join(settings.exportDir, `${base}.tmproj`),
+        filters: [{ name: 'Texture map Project', extensions: ['tmproj'] }],
+        properties: ['createDirectory', 'showOverwriteConfirmation']
+      });
+      if (result.canceled || !result.filePath) return null;
+      return result.filePath.toLowerCase().endsWith('.tmproj')
+        ? result.filePath
+        : `${result.filePath}.tmproj`;
+    })());
+    if (!target) return null;
+    await fs.promises.writeFile(target, Buffer.from(data));
+    return target;
+  });
+
   ipcMain.handle('file:savePng', async (_event, data: Uint8Array, suggestedName: string) => {
     if (!mainWindow) return null;
     const settings = loadSettings();
@@ -2749,6 +2788,31 @@ function registerIpc(): void {
     const target = result.filePath.toLowerCase().endsWith('.png')
       ? result.filePath
       : `${result.filePath}.png`;
+    await fs.promises.writeFile(target, Buffer.from(data));
+    return target;
+  });
+
+  ipcMain.handle('file:saveVideo', async (_event, data: Uint8Array, suggestedName: string, extension: 'mp4' | 'webm') => {
+    if (!mainWindow) return null;
+    const ext = extension === 'mp4' ? 'mp4' : 'webm';
+    const settings = loadSettings();
+    await fs.promises.mkdir(settings.exportDir, { recursive: true });
+    const requested = path.basename(String(suggestedName || `texture_map.${ext}`));
+    const base = requested.replace(/\.[^.]+$/, '') || 'texture_map';
+    const testTarget = process.env.NYXEL_TEST_VIDEO_SAVE;
+    if (testTarget) {
+      await fs.promises.writeFile(testTarget, Buffer.from(data));
+      return testTarget;
+    }
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: path.join(settings.exportDir, `${base}.${ext}`),
+      filters: [{ name: ext === 'mp4' ? 'MP4 Video' : 'WebM Video', extensions: [ext] }],
+      properties: ['createDirectory', 'showOverwriteConfirmation']
+    });
+    if (result.canceled || !result.filePath) return null;
+    const target = result.filePath.toLowerCase().endsWith(`.${ext}`)
+      ? result.filePath
+      : `${result.filePath}.${ext}`;
     await fs.promises.writeFile(target, Buffer.from(data));
     return target;
   });

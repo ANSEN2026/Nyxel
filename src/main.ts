@@ -72,7 +72,9 @@ appRoot.innerHTML = `
         <canvas class="titlebar-wave" id="titlebar-wave" aria-hidden="true"></canvas>
         <div class="titlebar-title" id="titlebar-title">当前：<strong>首页</strong></div>
         <div class="titlebar-actions">
-          <button id="btn-screenshot" type="button" title="截图（Ctrl+Alt+A）">⌗</button>
+          <button id="btn-screenshot" type="button" title="截图（Ctrl+Alt+A）">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6.5" r="2.4"/><circle cx="6" cy="17.5" r="2.4"/><path d="M8.2 7.6 20 18.5M8.2 16.4 20 5.5"/></svg>
+          </button>
           <button id="btn-settings" type="button" title="设置（Ctrl+,）">⚙</button>
           <button id="btn-min" type="button" title="最小化">─</button>
           <button id="btn-max" type="button" title="最大化">□</button>

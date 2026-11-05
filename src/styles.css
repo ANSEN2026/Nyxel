@@ -66,6 +66,17 @@ body {
   font-family: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+select,
+[contenteditable='true'],
+.notebook-rich-text {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 button,
@@ -5826,20 +5837,184 @@ html[data-theme="light"] .home .recent-card:hover {
 }
 
 /* Photoshop-like standalone drawing workspace */
+.draw-view {
+  position: relative;
+}
+
+.draw-start-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 28%, rgba(166, 208, 181, 0.08), transparent 42%),
+    #141414;
+}
+
+.draw-start-screen.hidden {
+  display: none;
+}
+
+.draw-start-card {
+  width: min(520px, 100%);
+  padding: 26px 28px;
+  border: 1px solid #343434;
+  border-radius: 14px;
+  background: #1b1b1b;
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.55);
+  text-align: center;
+}
+
+.draw-start-mark {
+  width: 62px;
+  height: 62px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 16px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.draw-start-mark svg {
+  width: 38px;
+  height: 38px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.draw-start-card h2 {
+  margin: 0 0 8px;
+  color: #ededed;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.draw-start-card > p {
+  margin: 0;
+  color: #8d8d8d;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.draw-start-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.draw-start-actions button {
+  min-width: 118px;
+  height: 34px;
+}
+
+.draw-start-recent {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid #303030;
+  text-align: left;
+}
+
+.draw-start-recent-title {
+  margin-bottom: 8px;
+  color: #7f7f7f;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#draw-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 178px;
+  overflow-y: auto;
+}
+
+.draw-recent-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #333333;
+  border-radius: 6px;
+  background: #212121;
+  text-align: left;
+}
+
+.draw-recent-item:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.draw-recent-item strong {
+  max-width: 100%;
+  overflow: hidden;
+  color: #d7d7d7;
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draw-recent-item small {
+  width: 100%;
+  overflow: hidden;
+  color: #747474;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draw-start-empty {
+  margin: 0;
+  color: #666666;
+  font-size: 10px;
+}
+
 .draw-body {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) 230px;
+  grid-template-columns: var(--draw-rail-width, 54px) 4px minmax(0, 1fr) 4px var(--draw-inspector-width, 250px);
   grid-template-rows: minmax(0, 1fr);
-  gap: 10px;
-  padding: 12px;
+  gap: 4px;
+  padding: 8px;
+}
+
+.draw-resizer {
+  align-self: stretch;
+  width: 4px;
+  border-radius: 3px;
+  background: transparent;
+  cursor: col-resize;
+  transition: background 0.12s ease;
+}
+
+.draw-resizer:hover,
+.draw-body.is-resizing-layout .draw-resizer {
+  background: var(--accent-soft);
+}
+
+.draw-body.is-resizing-layout {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .draw-workarea {
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 
 .draw-rail {
@@ -5883,12 +6058,309 @@ html[data-theme="light"] .home .recent-card:hover {
   color: var(--accent-fg);
 }
 
-.draw-inspector {
+.draw-rail button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.draw-rail .draw-tool-group {
+  position: relative;
+}
+
+.draw-group-icon {
+  display: grid;
+  place-items: center;
+}
+
+.draw-tool-caret {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  color: #8a8a8a;
+  font-size: 7px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.draw-tool-menu {
+  position: fixed;
+  z-index: 90;
+  width: 196px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid #454545;
+  border-radius: 7px;
+  background: #222222;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+
+.draw-tool-menu.hidden {
+  display: none;
+}
+
+.draw-tool-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #d2d2d2;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.draw-tool-menu button:hover,
+.draw-tool-menu button.active {
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
+.draw-tool-menu button svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.draw-tool-menu button em {
+  margin-left: auto;
+  color: #7d7d7d;
+  font-style: normal;
+  font-size: 10px;
+}
+
+.draw-collapsible {
+  padding: 0;
+  overflow: hidden;
+}
+
+.draw-panel-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 0;
+  background: #262626;
+  color: #9a9a9a;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.draw-panel-head:hover {
+  background: #2d2d2d;
+  border-color: transparent;
+}
+
+.draw-panel-head-left {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.draw-panel-grip {
+  padding: 0 2px;
+  color: #6e6e6e;
+  font-size: 12px;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;
+}
+
+.draw-panel-grip:hover {
+  color: #c4c4c4;
+}
+
+.draw-panel-title {
+  color: #a5a5a5;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.draw-panel-head-split {
+  padding: 0;
+  gap: 4px;
+  cursor: default;
+}
+
+.draw-panel-head-split .draw-panel-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.draw-panel-head-split .draw-panel-toggle:hover {
+  background: #2d2d2d;
+}
+
+.draw-prop-reset {
+  flex: none;
+  height: 20px;
+  margin-right: 7px;
+  padding: 0 7px;
+  border: 1px solid #3d3d3d;
+  border-radius: 4px;
+  background: #262626;
+  color: #b8b8b8;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.draw-prop-reset:hover {
+  border-color: var(--accent-border);
+  color: #fff;
+}
+
+.draw-panel-caret {
+  color: #808080;
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.draw-collapsible.collapsed .draw-panel-caret {
+  transform: rotate(-90deg);
+}
+
+.draw-panel-body {
+  padding: 8px;
+  background: #1b1b1b;
+  border-top: 1px solid #303030;
+}
+
+.draw-collapsible.collapsed .draw-panel-body {
+  display: none;
+}
+
+.draw-collapsible.is-panel-dragging {
+  opacity: 0.72;
+  border-color: var(--accent-border);
+}
+
+.draw-body.is-panel-reordering {
+  user-select: none;
+  cursor: grabbing;
+}
+
+.draw-rail-colors {
+  position: relative;
+  width: 38px;
+  height: 46px;
+  flex: none;
+  margin: 3px 0;
+}
+
+.draw-rail-color {
+  position: absolute;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #555;
+  border-radius: 3px;
+  background: transparent;
+  appearance: none;
+  cursor: pointer;
+}
+
+.draw-rail-color::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.draw-rail-color::-webkit-color-swatch {
+  border: 0;
+  border-radius: 2px;
+}
+
+.draw-rail-color.fg {
+  top: 0;
+  left: 0;
+  z-index: 2;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
+}
+
+.draw-rail-color.bg {
+  right: 0;
+  bottom: 0;
+}
+
+.draw-rail-color:hover {
+  border-color: var(--accent);
+}
+
+.draw-rail .draw-swap-colors {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  z-index: 3;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: #262626;
+  color: #a7a7a7;
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.draw-rail .draw-swap-colors:hover {
+  border: 0;
+  color: var(--accent);
+  background: #303030;
+}
+
+.draw-side {
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  padding: 9px;
+  gap: 5px;
+}
+
+.draw-inspector {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
   overflow-y: auto;
   border: 1px solid #363636;
   border-radius: 8px;
@@ -5918,9 +6390,27 @@ html[data-theme="light"] .home .recent-card:hover {
 }
 
 /* Drawing timeline and layers */
+.draw-timeline-resizer {
+  flex: none;
+  height: 5px;
+  margin: -3px 0 -3px;
+  border-radius: 3px;
+  cursor: ns-resize;
+  transition: background 0.12s ease;
+}
+
+.draw-timeline-resizer:hover,
+.draw-timeline-resizer:active {
+  background: var(--accent-soft);
+}
+
+.draw-timeline.is-resizing-layout {
+  cursor: ns-resize;
+}
+
 .draw-timeline {
   flex: none;
-  height: 178px;
+  height: var(--draw-timeline-height, 178px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -5989,11 +6479,24 @@ html[data-theme="light"] .home .recent-card:hover {
   font-size: 8px;
 }
 
+#draw-timeline-export {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
 .draw-timeline-body {
   flex: 1;
   min-height: 0;
   padding: 0 12px 8px;
   overflow-y: auto;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.draw-timeline-body.is-scrubbing {
+  cursor: ew-resize;
+  user-select: none;
 }
 
 .draw-timeline-scale {
@@ -6075,6 +6578,20 @@ html[data-theme="light"] .home .recent-card:hover {
 .draw-timeline-handle.start { left: 0; }
 .draw-timeline-handle.end { right: 0; }
 
+.draw-timeline-keyframe {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: 9px;
+  height: 9px;
+  margin-left: -4.5px;
+  border: 1px solid #101010;
+  background: var(--accent);
+  box-shadow: 0 0 5px rgba(166, 208, 181, 0.75);
+  transform: translateY(-50%) rotate(45deg);
+  pointer-events: none;
+}
+
 .draw-timeline-playhead {
   position: absolute;
   top: 0;
@@ -6097,11 +6614,250 @@ html[data-theme="light"] .home .recent-card:hover {
   clip-path: polygon(0 0, 100% 0, 50% 100%);
 }
 
+.draw-brush-size {
+  margin-top: 9px;
+}
+
+.draw-prop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.draw-prop-head h4 {
+  margin: 0;
+}
+
+.draw-prop-head button {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid #3d3d3d;
+  border-radius: 4px;
+  background: #262626;
+  color: #b8b8b8;
+  font: inherit;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.draw-prop-head button:hover {
+  border-color: var(--accent-border);
+  color: #fff;
+}
+
+.draw-blend-row {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+  color: #a0a0a0;
+  font-size: 9px;
+}
+
+.draw-blend-row select {
+  width: 100%;
+  height: 24px;
+  min-width: 0;
+  padding: 0 5px;
+  border: 1px solid #3d3d3d;
+  border-radius: 4px;
+  outline: none;
+  background: #161719;
+  color: #d8d8d8;
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.draw-blend-row select:hover,
+.draw-blend-row select:focus {
+  border-color: var(--accent-border);
+}
+
+.draw-blend-row select:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.draw-prop-row {
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr) 40px 22px;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  color: #a0a0a0;
+  font-size: 9px;
+}
+
+.draw-kf-button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #676767;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.draw-kf-button:hover {
+  border-color: #3d3d3d;
+  background: #282828;
+  color: var(--accent);
+}
+
+.draw-kf-button.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
+.draw-kf-button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.draw-quick-fill-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.draw-quick-fill-row button {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.draw-quick-fill-row button:hover {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.draw-quick-fill-row span {
+  color: #6e6e6e;
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.draw-prop-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.draw-prop-row input[type="range"]:disabled {
+  opacity: 0.4;
+}
+
+.draw-prop-row strong {
+  color: #dadada;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.draw-layer-resizer {
+  flex: none;
+  height: 5px;
+  margin: -3px 0 -3px;
+  border-radius: 3px;
+  cursor: ns-resize;
+  transition: background 0.12s ease;
+}
+
+.draw-layer-resizer:hover,
+.draw-layer-resizer:active {
+  background: var(--accent-soft);
+}
+
+.draw-layer-panel {
+  position: relative;
+  flex: none;
+  height: var(--draw-layers-height, 170px);
+  min-height: 84px;
+  display: flex;
+  flex-direction: column;
+  background: #1b1b1b;
+}
+
+.draw-layer-width-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  z-index: 4;
+  width: 6px;
+  border-radius: 3px;
+  cursor: col-resize;
+  transition: background 0.12s ease;
+}
+
+.draw-layer-width-grip:hover,
+.draw-layer-width-grip:active {
+  background: var(--accent-soft);
+}
+
+.draw-layer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.draw-layer-head h4 {
+  margin: 0;
+}
+
+.draw-layer-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.draw-layer-actions button {
+  width: 24px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #3d3d3d;
+  border-radius: 4px;
+  background: #262626;
+  color: #c9c9c9;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.draw-layer-actions button:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
 .draw-layer-list {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 180px;
   overflow-y: auto;
 }
 
@@ -6125,7 +6881,39 @@ html[data-theme="light"] .home .recent-card:hover {
   background: rgba(166, 208, 181, 0.12);
 }
 
+.draw-layer-grip {
+  width: 13px;
+  flex: none;
+  color: #6a6a6a;
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+  cursor: grab;
+  user-select: none;
+}
+
+.draw-layer-grip:hover {
+  color: #d0d0d0;
+}
+
+.draw-layer-thumb {
+  width: 48px;
+  height: 30px;
+  flex: none;
+  border: 1px solid #3d3d3d;
+  border-radius: 3px;
+  background-color: #2a2a2a;
+  background-image:
+    linear-gradient(45deg, #333 25%, transparent 25%),
+    linear-gradient(-45deg, #333 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #333 75%),
+    linear-gradient(-45deg, transparent 75%, #333 75%);
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+  background-size: 8px 8px;
+}
+
 .draw-layer-eye,
+.draw-layer-duplicate,
 .draw-layer-remove {
   width: 20px;
   height: 20px;
@@ -6141,9 +6929,20 @@ html[data-theme="light"] .home .recent-card:hover {
 }
 
 .draw-layer-eye:hover,
+.draw-layer-duplicate:hover,
 .draw-layer-remove:hover {
   background: #383838;
   color: #fff;
+}
+
+.draw-layer-row.is-layer-dragging {
+  opacity: 0.6;
+  border-color: var(--accent-border);
+}
+
+.draw-layer-list.is-reordering-layers {
+  cursor: grabbing;
+  user-select: none;
 }
 
 .draw-layer-remove {
@@ -6168,7 +6967,216 @@ html[data-theme="light"] .home .recent-card:hover {
 }
 
 .draw-layer-name small {
+  overflow: hidden;
   color: #6e6e6e;
   font-size: 8px;
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Drawing video export */
+.draw-view.is-exporting .draw-rail,
+.draw-view.is-exporting .draw-side,
+.draw-view.is-exporting .draw-toolbar {
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.draw-export-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(10, 10, 10, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.draw-export-overlay.hidden {
+  display: none;
+}
+
+.draw-export-card {
+  width: min(330px, 82%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid #3d3d3d;
+  border-radius: 10px;
+  background: #1b1b1b;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+
+.draw-export-card strong {
+  color: #f0f0f0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.draw-export-card p {
+  min-height: 14px;
+  margin: 0;
+  color: #9a9a9a;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.draw-export-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #2c2c2c;
+}
+
+.draw-export-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.12s linear;
+}
+
+.draw-export-card button {
+  align-self: flex-end;
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid #444;
+  border-radius: 5px;
+  background: #2a2a2a;
+  color: #d8d8d8;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.draw-export-card button:hover {
+  border-color: var(--accent-border);
+  color: #fff;
+}
+
+/* Larger drawing workspace text */
+.draw-view .notebook-rail-label {
+  font-size: 9px;
+}
+
+.draw-side .notebook-panel h4 {
+  font-size: 11px;
+}
+
+.draw-side .notebook-panel-row {
+  font-size: 11px;
+}
+
+.draw-side .notebook-panel-row strong {
+  font-size: 11px;
+}
+
+.draw-side .notebook-view-row {
+  font-size: 11px;
+}
+
+.draw-side .notebook-view-row strong {
+  font-size: 11px;
+}
+
+.draw-side .notebook-view-row button {
+  font-size: 10px;
+}
+
+.draw-side .notebook-view-hint {
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.draw-side .draw-prop-head button {
+  font-size: 10px;
+}
+
+.draw-side .draw-blend-row {
+  font-size: 11px;
+}
+
+.draw-side .draw-blend-row select {
+  font-size: 10px;
+}
+
+.draw-side .draw-prop-row {
+  font-size: 10.5px;
+}
+
+.draw-side .draw-prop-row strong {
+  font-size: 10.5px;
+}
+
+.draw-side .draw-kf-button {
+  font-size: 12px;
+}
+
+.draw-side .draw-quick-fill-row button {
+  font-size: 10px;
+}
+
+.draw-side .draw-quick-fill-row span {
+  font-size: 9.5px;
+}
+
+.draw-side .draw-layer-actions button {
+  font-size: 13px;
+}
+
+.draw-side .draw-layer-eye,
+.draw-side .draw-layer-remove {
+  font-size: 12px;
+}
+
+.draw-side .draw-layer-name strong {
+  font-size: 11px;
+}
+
+.draw-side .draw-layer-name small {
+  font-size: 10px;
+}
+
+.draw-view .draw-timeline-bar {
+  font-size: 10.5px;
+}
+
+.draw-view .draw-timeline-bar button {
+  font-size: 11px;
+}
+
+.draw-view .draw-timeline-hint {
+  font-size: 9px;
+}
+
+.draw-view #draw-timeline-duration {
+  font-size: 11px;
+}
+
+.draw-view .draw-timeline-tick {
+  font-size: 9.5px;
+}
+
+.draw-view .draw-timeline-clip {
+  font-size: 9.5px;
+}
+
+.draw-view .draw-foot {
+  font-size: 11px;
+}
+
+.draw-view .draw-export-card strong {
+  font-size: 14px;
+}
+
+.draw-view .draw-export-card p {
+  font-size: 10.5px;
+}
+
+.draw-view .draw-export-card button {
+  font-size: 11px;
 }

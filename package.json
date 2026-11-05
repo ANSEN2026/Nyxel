@@ -1,7 +1,7 @@
 {
   "name": "nyxel",
   "productName": "Texture map",
-  "version": "0.2.0-alpha.16",
+  "version": "0.2.0-alpha.17",
   "description": "Texture map - texture, model, drawing and video toolkit",
   "author": "Texture map",
   "private": true,
