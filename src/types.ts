@@ -1,4 +1,4 @@
-export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video' | 'videos' | 'draw' | 'download';
+export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video' | 'videos' | 'draw' | 'download' | 'notes';
 export type Theme = 'dark' | 'light' | 'system';
 export type UpdateChannel = 'stable' | 'beta';
 
@@ -78,7 +78,7 @@ export interface UpdateCheckResult {
 export type VideoCodec = 'h264' | 'h265' | 'copy';
 export type VideoResolution = 'source' | '1080' | '720' | '480';
 export type VideoFps = 'source' | '60' | '30' | '24';
-export type VideoAudio = 'aac192' | 'aac128' | 'aac96' | 'copy' | 'none';
+export type VideoAudio = 'aac192' | 'aac128' | 'aac96' | 'aac64' | 'copy' | 'none';
 
 export interface VideoInfo {
   path: string;
@@ -240,6 +240,42 @@ export interface VideoNoteDocument {
   canvasHeight?: number;
 }
 
+export interface MemoMeta {
+  path: string;
+  title: string;
+  preview: string;
+  createdAt: string;
+  updatedAt: string;
+  size: number;
+}
+
+export interface MemoDocument {
+  version: 1;
+  id: string;
+  title: string;
+  html: string;
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoList {
+  dir: string;
+  notes: MemoMeta[];
+}
+
+export interface MemoResult {
+  ok: boolean;
+  note?: MemoDocument;
+  path?: string;
+  cancelled?: boolean;
+  error?: string;
+}
+
+export interface MemoImportResult extends MemoResult {
+  imported?: number;
+}
+
 export interface AccountUser {
   email: string;
   displayName: string;
@@ -346,6 +382,9 @@ export interface NyxelApi {
     textures: (folder: string) => Promise<LibraryTextures>;
     createFolder: (parent: string, name: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
     importTextures: (folder: string) => Promise<{ ok: boolean; imported?: number; cancelled?: boolean; error?: string }>;
+    importDroppedTextures: (paths: string[], folder: string) => Promise<{ ok: boolean; imported?: number; folders?: number; skipped?: number; error?: string }>;
+    moveImage: (filePath: string, folder: string) => Promise<{ ok: boolean; path?: string; moved?: boolean; error?: string }>;
+    getPathForFile: (file: File) => string;
     videos: () => Promise<LibraryVideos>;
     importVideos: () => Promise<{ ok: boolean; imported?: number; cancelled?: boolean; error?: string }>;
     moveFolder: (source: string, targetParent: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
@@ -357,6 +396,17 @@ export interface NyxelApi {
     mediaUrl: (filePath: string) => string;
     delete: (target: string) => Promise<{ ok: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
+  };
+  memo: {
+    list: () => Promise<MemoList>;
+    create: () => Promise<MemoResult>;
+    read: (filePath: string) => Promise<MemoResult>;
+    save: (filePath: string, updates: { title: string; html: string; text: string }) => Promise<MemoResult>;
+    delete: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
+    exportNote: (filePath: string) => Promise<{ ok: boolean; path?: string; cancelled?: boolean; error?: string }>;
+    importNote: () => Promise<MemoImportResult>;
+    importPaths: (paths: string[]) => Promise<MemoImportResult>;
+    openDir: () => Promise<{ ok: boolean; dir: string; error?: string }>;
   };
   notes: {
     list: (videoPath: string) => Promise<{ ok: boolean; dir: string; notes: VideoNoteMeta[]; error?: string }>;

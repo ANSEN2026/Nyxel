@@ -2,7 +2,7 @@ import './styles.css';
 import logoUrl from './assets/app-icon-face.png';
 import { audioMonitor } from './lib/audio-monitor';
 import { startTitleWave } from './lib/title-wave';
-import type { AccountUser, AppInfo, RecentProject, Settings, StatusApi, ToastApi, ToastKind, ViewName } from './types';
+import type { AccountUser, AppInfo, RecentProject, Settings, StatusApi, ToastApi, ToastKind, UpdateCheckResult, ViewName } from './types';
 import { AboutView } from './views/about';
 import { AccountView } from './views/account';
 import { ColorView } from './views/color';
@@ -11,6 +11,7 @@ import { DrawView } from './views/draw';
 import { FilesView } from './views/files';
 import { HomeView } from './views/home';
 import { ModelView } from './views/model';
+import { NotesView } from './views/notes';
 import { SettingsView } from './views/settings';
 import { TextureView } from './views/texture';
 import { VideoView } from './views/video';
@@ -45,6 +46,10 @@ appRoot.innerHTML = `
         <button class="nav-button" data-view="textures" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           <span class="nav-tooltip">贴图资源 Ctrl+5</span>
+        </button>
+        <button class="nav-button" data-view="notes" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h9l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 20V5a1.5 1.5 0 0 1 1-1.5Z"/><path d="M15 3.5V8h4M8 12h7M8 15.5h7"/></svg>
+          <span class="nav-tooltip">备忘录 Ctrl+Shift+N</span>
         </button>
         <div class="nav-divider"></div>
         <div class="nav-section-title">媒体</div>
@@ -86,6 +91,16 @@ appRoot.innerHTML = `
           <button id="btn-close" class="close" type="button" title="关闭">×</button>
         </div>
       </header>
+      <div class="update-banner hidden" id="update-banner">
+        <span class="update-banner-icon" aria-hidden="true">↑</span>
+        <div class="update-banner-text">
+          <strong id="update-banner-title">发现新版本</strong>
+          <span id="update-banner-sub"></span>
+        </div>
+        <a class="update-banner-action" id="update-banner-action" href="https://github.com/ANSEN2026/Nyxel/releases" target="_blank" rel="noreferrer">下载更新</a>
+        <button type="button" id="update-banner-dismiss">稍后</button>
+        <button type="button" class="update-banner-close" id="update-banner-close" aria-label="关闭更新提示">×</button>
+      </div>
       <section class="workspace" id="workspace"></section>
       <footer class="statusbar">
         <span class="status-dot"></span>
@@ -118,8 +133,56 @@ const statusInfo = document.querySelector('#status-info') as HTMLElement;
 const statusLog = document.querySelector('#status-log') as HTMLElement;
 const toastContainer = document.querySelector('#toast-container') as HTMLElement;
 const sponsorCard = document.querySelector('#sponsor-card') as HTMLElement | null;
+const updateBanner = document.querySelector('#update-banner') as HTMLElement | null;
+const updateBannerTitle = document.querySelector('#update-banner-title') as HTMLElement | null;
+const updateBannerSub = document.querySelector('#update-banner-sub') as HTMLElement | null;
+const updateBannerAction = document.querySelector('#update-banner-action') as HTMLAnchorElement | null;
 const titleWaveCanvas = document.querySelector('#titlebar-wave') as HTMLCanvasElement | null;
 if (titleWaveCanvas) startTitleWave(titleWaveCanvas);
+
+let updateCheckInFlight = false;
+let lastAutoUpdateCheck = 0;
+let pendingUpdateVersion = '';
+let dismissedUpdateVersion = '';
+
+function showUpdateBanner(result: UpdateCheckResult): void {
+  if (!updateBanner || !result.latestVersion) return;
+  pendingUpdateVersion = result.latestVersion;
+  if (updateBannerTitle) updateBannerTitle.textContent = `发现新版本 v${result.latestVersion}`;
+  if (updateBannerSub) {
+    updateBannerSub.textContent = `当前 v${result.currentVersion}${result.channel === 'beta' ? ' · 测试频道' : ''}`;
+  }
+  if (updateBannerAction) {
+    updateBannerAction.href = result.downloadUrl || result.releaseUrl || 'https://github.com/ANSEN2026/Nyxel/releases';
+  }
+  updateBanner.classList.remove('hidden');
+}
+
+function dismissUpdateBanner(): void {
+  updateBanner?.classList.add('hidden');
+  if (pendingUpdateVersion) dismissedUpdateVersion = pendingUpdateVersion;
+}
+
+async function autoCheckForUpdates(): Promise<void> {
+  if (updateCheckInFlight || !navigator.onLine) return;
+  const now = Date.now();
+  if (now - lastAutoUpdateCheck < 5 * 60 * 1000) return;
+  lastAutoUpdateCheck = now;
+  updateCheckInFlight = true;
+  try {
+    const result = await window.nyxel.update.check();
+    if (!result.ok || !result.hasUpdate || !result.latestVersion) return;
+    if (result.latestVersion === dismissedUpdateVersion) return;
+    showUpdateBanner(result);
+  } catch {
+    // Offline or GitHub unavailable: update checks stay silent.
+  } finally {
+    updateCheckInFlight = false;
+  }
+}
+
+document.querySelector('#update-banner-dismiss')?.addEventListener('click', dismissUpdateBanner);
+document.querySelector('#update-banner-close')?.addEventListener('click', dismissUpdateBanner);
 
 const SPONSOR_VISIBLE_MS = 12_000;
 let sponsorDismissTimer: number | null = null;
@@ -202,6 +265,7 @@ let videoView: VideoView;
 let videosView: FilesView;
 let drawView: DrawView;
 let downloadView: DownloadView;
+let notesView: NotesView;
 let settingsView: SettingsView;
 let aboutView: AboutView;
 let accountView: AccountView;
@@ -355,6 +419,7 @@ function showView(view: ViewName): void {
   if (currentView === 'videos') videosView.deactivate();
   if (currentView === 'draw') drawView.deactivate();
   if (currentView === 'download') downloadView.deactivate();
+  if (currentView === 'notes') notesView.deactivate();
 
   currentView = view;
   homeView.element.classList.toggle('hidden', view !== 'home');
@@ -367,6 +432,7 @@ function showView(view: ViewName): void {
   videosView.element.classList.toggle('hidden', view !== 'videos');
   drawView.element.classList.toggle('hidden', view !== 'draw');
   downloadView.element.classList.toggle('hidden', view !== 'download');
+  notesView.element.classList.toggle('hidden', view !== 'notes');
 
   document.querySelectorAll('.nav-button').forEach((button) => {
     button.classList.toggle('active', (button as HTMLElement).dataset.view === view);
@@ -399,6 +465,9 @@ function showView(view: ViewName): void {
   } else if (view === 'download') {
     downloadView.activate();
     updateTitle('下载');
+  } else if (view === 'notes') {
+    void notesView.activate();
+    updateTitle('备忘录');
   } else {
     modelView.activate();
     updateTitle('模型');
@@ -447,6 +516,11 @@ function bindWindowControls(): void {
 function bindKeyboard(): void {
   window.addEventListener('keydown', (event) => {
     if (!event.ctrlKey || event.altKey) return;
+    if (event.shiftKey && event.key.toLowerCase() === 'n') {
+      event.preventDefault();
+      showView('notes');
+      return;
+    }
     if (event.key === '0') {
       event.preventDefault();
       showView('home');
@@ -533,6 +607,7 @@ async function bootstrap(): Promise<void> {
   videosView = new FilesView('videos', callbacks);
   drawView = new DrawView(callbacks);
   downloadView = new DownloadView(callbacks);
+  notesView = new NotesView(callbacks);
   settingsView = new SettingsView(saveSettings, toast);
   aboutView = new AboutView(toast);
   accountView = new AccountView(toast, applyAccountIndicator);
@@ -547,7 +622,8 @@ async function bootstrap(): Promise<void> {
     videoView.element,
     videosView.element,
     drawView.element,
-    downloadView.element
+    downloadView.element,
+    notesView.element
   );
   textureView.element.classList.add('hidden');
   modelView.element.classList.add('hidden');
@@ -558,6 +634,7 @@ async function bootstrap(): Promise<void> {
   videosView.element.classList.add('hidden');
   drawView.element.classList.add('hidden');
   downloadView.element.classList.add('hidden');
+  notesView.element.classList.add('hidden');
   document.body.append(settingsView.element, aboutView.element, accountView.element);
 
   bindWindowControls();
@@ -585,6 +662,14 @@ async function bootstrap(): Promise<void> {
   showView('home');
   status.set('就绪', '', '');
   window.setTimeout(() => showSponsorCard(), 1000);
+  window.setTimeout(() => void autoCheckForUpdates(), 3500);
+  window.addEventListener('online', () => {
+    lastAutoUpdateCheck = 0;
+    void autoCheckForUpdates();
+  });
+  window.setInterval(() => {
+    if (!document.hidden) void autoCheckForUpdates();
+  }, 6 * 60 * 60 * 1000);
   void window.nyxel.account.status()
     .then((state) => applyAccountIndicator(state.user))
     .catch(() => applyAccountIndicator(null));
@@ -597,14 +682,6 @@ async function bootstrap(): Promise<void> {
   const maximized = await window.nyxel.window.isMaximized();
   const maximizeButton = document.querySelector('#btn-max') as HTMLButtonElement;
   maximizeButton.textContent = maximized ? '❐' : '□';
-
-  if (settings.restoreWorkspace && settings.recentProjects?.length && !window.nyxel.test?.noRestoreWorkspace) {
-    window.setTimeout(() => {
-      const recent = settings.recentProjects[0];
-      if (recent.type === 'model') void openModelPath(recent.path);
-      else void openTexturePath(recent.path);
-    }, 500);
-  }
 }
 
 void bootstrap();

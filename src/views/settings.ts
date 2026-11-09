@@ -102,12 +102,6 @@ export class SettingsView {
               </div>
             </div>
             <div class="settings-hint">截图后会先打开预览窗口，可标记、批准，再选择最终保存位置；这里只是保存对话框的默认目录。</div>
-            <div class="settings-row">
-              <div class="settings-label">启动时恢复上次工作区</div>
-              <div class="settings-control">
-                <input id="set-restore" class="toggle" type="checkbox">
-              </div>
-            </div>
           </section>
 
           <section class="settings-section">
@@ -217,7 +211,6 @@ export class SettingsView {
     const exportDir = this.element.querySelector('#set-export-dir') as HTMLInputElement;
     const screenshotDir = this.element.querySelector('#set-screenshot-dir') as HTMLInputElement;
     const videoNoteDir = this.element.querySelector('#set-video-note-dir') as HTMLInputElement;
-    const restore = this.element.querySelector('#set-restore') as HTMLInputElement;
     const hardware = this.element.querySelector('#set-hw') as HTMLInputElement;
     const channel = this.element.querySelector('#set-channel') as HTMLSelectElement;
     const colorCount = this.element.querySelector('#set-color-count') as HTMLSelectElement;
@@ -236,9 +229,6 @@ export class SettingsView {
     });
     screenshotDir.addEventListener('change', () => {
       this.patch({ screenshotDir: screenshotDir.value.trim() });
-    });
-    restore.addEventListener('change', () => {
-      this.patch({ restoreWorkspace: restore.checked });
     });
     hardware.addEventListener('change', () => {
       this.patch({ hardwareAcceleration: hardware.checked });
@@ -372,7 +362,6 @@ export class SettingsView {
     (this.element.querySelector('#set-screenshot-dir') as HTMLInputElement).value = settings.screenshotDir;
     (this.element.querySelector('#set-video-note-dir') as HTMLInputElement).value = settings.videoNoteDir;
     (this.element.querySelector('#set-audio-visualizer') as HTMLInputElement).checked = settings.audioVisualizer;
-    (this.element.querySelector('#set-restore') as HTMLInputElement).checked = settings.restoreWorkspace;
     this.updateAudioStatus();
     if (this.audioTimer) window.clearInterval(this.audioTimer);
     this.audioTimer = window.setInterval(() => this.updateAudioStatus(), 300);

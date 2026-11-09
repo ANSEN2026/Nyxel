@@ -1,7 +1,7 @@
 {
   "name": "nyxel",
   "productName": "Texture map",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Texture map - texture, model, drawing and video toolkit",
   "author": "Texture map",
   "private": true,
@@ -19,7 +19,8 @@
   "dependencies": {
     "fflate": "^0.8.3",
     "three": "^0.187.0",
-    "undici": "^7.30.2"
+    "undici": "^7.30.2",
+    "unpdf": "^1.9.1"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
@@ -44,7 +45,14 @@
       "electron/selector.html",
       "electron/editor.html",
       "resources/**/*",
+      "!resources/official-textures/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/official-textures",
+        "to": "official-textures"
+      }
     ],
     "win": {
       "target": [

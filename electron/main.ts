@@ -20,11 +20,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
+import type { Dirent } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as httpFetch, type Dispatcher } from 'undici';
 import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { unzipSync } from 'fflate';
+import { extractText } from 'unpdf';
 
 // Keep the existing AppData folder name after the Texture map rename so
 // downloaded ffmpeg / AI runtimes and Chromium caches survive upgrades.
@@ -163,7 +165,7 @@ function defaultSettings(): Settings {
     screenshotDir: path.join(app.getPath('documents'), 'Nyxel', 'Screenshots'),
     videoNoteDir: path.join(app.getPath('userData'), 'VideoNotes'),
     audioVisualizer: true,
-    restoreWorkspace: true,
+    restoreWorkspace: false,
     hardwareAcceleration: true,
     cacheDir: path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'Nyxel', 'cache'),
     ffmpegPath: '',
@@ -635,6 +637,52 @@ async function ensureLibraryDirs(): Promise<void> {
   ]);
 }
 
+const OFFICIAL_TEXTURE_PACK_VERSION = 1;
+
+function officialTexturePackSource(): string {
+  const packaged = path.join(process.resourcesPath, 'official-textures', '官方贴图');
+  if (fs.existsSync(packaged)) return packaged;
+  return path.join(app.getAppPath(), 'resources', 'official-textures', '官方贴图');
+}
+
+async function copyDirectoryMissing(source: string, target: string): Promise<void> {
+  await fs.promises.mkdir(target, { recursive: true });
+  const entries = await fs.promises.readdir(source, { withFileTypes: true });
+  for (const entry of entries) {
+    const sourcePath = path.join(source, entry.name);
+    const targetPath = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      await copyDirectoryMissing(sourcePath, targetPath);
+    } else if (entry.isFile() && !fs.existsSync(targetPath)) {
+      await fs.promises.copyFile(sourcePath, targetPath);
+    }
+  }
+}
+
+async function seedOfficialTextures(): Promise<void> {
+  const source = officialTexturePackSource();
+  if (!fs.existsSync(source)) return;
+  const marker = path.join(app.getPath('userData'), 'official-textures.json');
+  try {
+    const previous = JSON.parse(await fs.promises.readFile(marker, 'utf8')) as { version?: number };
+    if (Number(previous.version) >= OFFICIAL_TEXTURE_PACK_VERSION) return;
+  } catch {
+    // First run or an unreadable marker: seed the built-in pack.
+  }
+  try {
+    await ensureLibraryDirs();
+    await copyDirectoryMissing(source, path.join(texturesDir(), '官方贴图'));
+    await fs.promises.writeFile(
+      marker,
+      JSON.stringify({ version: OFFICIAL_TEXTURE_PACK_VERSION, seededAt: new Date().toISOString() }, null, 2),
+      'utf8'
+    );
+    notifyLibraryChanged();
+  } catch (error) {
+    console.warn('official textures seed failed', error);
+  }
+}
+
 function isInside(root: string, target: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(target));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -1099,6 +1147,129 @@ async function moveLibraryFolder(source: string, targetParent: string): Promise<
   }
 }
 
+async function uniqueDirectoryPath(parent: string, name: string): Promise<string> {
+  const safeName = String(name || '导入文件夹').replace(/[\\/:*?"<>|]/g, '_').trim() || '导入文件夹';
+  let candidate = path.join(parent, safeName);
+  let index = 1;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(parent, `${safeName} (${index})`);
+    index += 1;
+  }
+  return candidate;
+}
+
+async function copyImageDirectory(source: string, target: string): Promise<number> {
+  await fs.promises.mkdir(target, { recursive: true });
+  let count = 0;
+  let entries: Dirent[];
+  try {
+    entries = await fs.promises.readdir(source, { withFileTypes: true });
+  } catch {
+    return count;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const sourcePath = path.join(source, entry.name);
+    const targetPath = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      count += await copyImageDirectory(sourcePath, targetPath);
+    } else if (entry.isFile() && isLibraryImage(entry.name)) {
+      const destination = await uniqueFilePath(target, entry.name);
+      await fs.promises.copyFile(sourcePath, destination);
+      count += 1;
+    }
+  }
+  return count;
+}
+
+async function importDroppedTextures(
+  paths: string[],
+  folder: string
+): Promise<{ ok: boolean; imported?: number; folders?: number; skipped?: number; error?: string }> {
+  await ensureLibraryDirs();
+  const root = texturesDir();
+  let target: string;
+  try {
+    target = resolveInside(root, folder).target;
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  await fs.promises.mkdir(target, { recursive: true });
+  const sources = [...new Set(
+    (Array.isArray(paths) ? paths : [])
+      .map((item) => path.resolve(String(item ?? '')))
+      .filter(Boolean)
+  )].slice(0, 200);
+  if (!sources.length) return { ok: false, error: '没有收到可导入的文件' };
+
+  let imported = 0;
+  let folders = 0;
+  let skipped = 0;
+  for (const source of sources) {
+    if (isInside(root, source)) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const stat = await fs.promises.stat(source);
+      if (stat.isDirectory()) {
+        const destination = await uniqueDirectoryPath(target, path.basename(source));
+        await fs.promises.mkdir(destination, { recursive: true });
+        folders += 1;
+        imported += await copyImageDirectory(source, destination);
+      } else if (stat.isFile() && isLibraryImage(source)) {
+        const destination = await uniqueFilePath(target, path.basename(source));
+        await fs.promises.copyFile(source, destination);
+        imported += 1;
+      } else {
+        skipped += 1;
+      }
+    } catch {
+      skipped += 1;
+    }
+  }
+  if (imported || folders) notifyLibraryChanged();
+  return { ok: true, imported, folders, skipped };
+}
+
+async function moveLibraryImage(
+  filePath: string,
+  folder: string
+): Promise<{ ok: boolean; path?: string; moved?: boolean; error?: string }> {
+  await ensureLibraryDirs();
+  const root = texturesDir();
+  const source = path.resolve(String(filePath ?? ''));
+  if (!isInside(root, source)) return { ok: false, error: '只能移动资源库中的图片' };
+  let targetDir: string;
+  try {
+    targetDir = resolveInside(root, folder).target;
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  try {
+    const stat = await fs.promises.stat(source);
+    if (!stat.isFile() || !isLibraryImage(source)) return { ok: false, error: '只能移动图片文件' };
+    await fs.promises.mkdir(targetDir, { recursive: true });
+    if (path.dirname(source) === targetDir) return { ok: true, path: source, moved: false };
+    const destination = await uniqueFilePath(targetDir, path.basename(source));
+    try {
+      await fs.promises.rename(source, destination);
+    } catch {
+      try {
+        await fs.promises.copyFile(source, destination);
+        await shell.trashItem(source);
+      } catch (error) {
+        try { await fs.promises.rm(destination, { force: true }); } catch { /* ignore */ }
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    notifyLibraryChanged();
+    return { ok: true, path: destination, moved: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 async function setLibraryFolderColor(folder: string, color: string | null): Promise<{ ok: boolean; error?: string }> {
   await ensureLibraryDirs();
   const root = texturesDir();
@@ -1184,6 +1355,381 @@ async function moveLibraryVideo(filePath: string, destinationDir: string): Promi
   }
   notifyLibraryChanged();
   return { ok: true, path: destination };
+}
+
+interface MemoFileDocument {
+  version: 1;
+  id: string;
+  title: string;
+  html: string;
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function memoDir(): string {
+  return process.env.NYXEL_NOTES_DIR || path.join(app.getPath('documents'), 'Nyxel', 'Notes');
+}
+
+async function ensureMemoDir(): Promise<void> {
+  await fs.promises.mkdir(memoDir(), { recursive: true });
+}
+
+function memoId(): string {
+  return `${Date.now().toString(36)}-${randomBytes(5).toString('hex')}`;
+}
+
+function validDateString(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toISOString() : fallback;
+}
+
+function stripBom(value: string): string {
+  return value.charCodeAt(0) === 0xFEFF ? value.slice(1) : value;
+}
+
+async function parseMemoFile(filePath: string): Promise<MemoFileDocument> {
+  const stat = await fs.promises.stat(filePath);
+  if (!stat.isFile()) throw new Error('备忘录不是一个文件');
+  if (stat.size > 32 * 1024 * 1024) throw new Error('备忘录文件过大');
+  const raw = JSON.parse(stripBom(await fs.promises.readFile(filePath, 'utf8')));
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('备忘录格式无效');
+  const createdAt = validDateString(raw.createdAt, stat.birthtime.toISOString());
+  const updatedAt = validDateString(raw.updatedAt, stat.mtime.toISOString());
+  return {
+    version: 1,
+    id: typeof raw.id === 'string' && raw.id ? raw.id : memoId(),
+    title: String(raw.title ?? '').slice(0, 200),
+    html: String(raw.html ?? '').slice(0, 24 * 1024 * 1024),
+    text: String(raw.text ?? '').slice(0, 2 * 1024 * 1024),
+    createdAt,
+    updatedAt
+  };
+}
+
+function memoMeta(doc: MemoFileDocument, filePath: string, size: number) {
+  return {
+    path: filePath,
+    title: doc.title,
+    preview: doc.text.replace(/\s+/g, ' ').trim().slice(0, 160),
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    size
+  };
+}
+
+async function listMemos(): Promise<{ dir: string; notes: ReturnType<typeof memoMeta>[] }> {
+  await ensureMemoDir();
+  const root = memoDir();
+  const entries = await fs.promises.readdir(root, { withFileTypes: true });
+  const notes = (await Promise.all(entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.tmnote'))
+    .map(async (entry) => {
+      const filePath = path.join(root, entry.name);
+      try {
+        const stat = await fs.promises.stat(filePath);
+        const doc = await parseMemoFile(filePath);
+        return memoMeta(doc, filePath, stat.size);
+      } catch {
+        return null;
+      }
+    })))
+    .filter((note): note is NonNullable<typeof note> => note !== null)
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+  return { dir: root, notes };
+}
+
+async function createMemo(): Promise<{ ok: boolean; note?: MemoFileDocument; path?: string; error?: string }> {
+  await ensureMemoDir();
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const doc: MemoFileDocument = {
+    version: 1,
+    id: memoId(),
+    title: '',
+    html: '',
+    text: '',
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString()
+  };
+  try {
+    const target = await uniqueFilePath(memoDir(), `备忘录-${stamp}-${doc.id.slice(-4)}.tmnote`);
+    await fs.promises.writeFile(target, JSON.stringify(doc, null, 2), 'utf8');
+    return { ok: true, note: doc, path: target };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function readMemo(filePath: string): Promise<{ ok: boolean; note?: MemoFileDocument; path?: string; error?: string }> {
+  const target = path.resolve(String(filePath ?? ''));
+  if (!isInside(memoDir(), target)) return { ok: false, error: '只能读取备忘录文件夹中的文件' };
+  try {
+    return { ok: true, note: await parseMemoFile(target), path: target };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function saveMemo(
+  filePath: string,
+  updates: { title?: string; html?: string; text?: string }
+): Promise<{ ok: boolean; note?: MemoFileDocument; path?: string; error?: string }> {
+  const target = path.resolve(String(filePath ?? ''));
+  if (!isInside(memoDir(), target) || !target.toLowerCase().endsWith('.tmnote')) {
+    return { ok: false, error: '备忘录路径无效' };
+  }
+  try {
+    const existing = await parseMemoFile(target);
+    const html = String(updates.html ?? '');
+    if (html.length > 24 * 1024 * 1024) {
+      return { ok: false, error: '备忘录内容过大，请减少图片数量或尺寸' };
+    }
+    const now = new Date().toISOString();
+    const note: MemoFileDocument = {
+      version: 1,
+      id: existing.id,
+      title: String(updates.title ?? '').slice(0, 200),
+      html,
+      text: String(updates.text ?? '').slice(0, 2 * 1024 * 1024),
+      createdAt: existing.createdAt,
+      updatedAt: now
+    };
+    await fs.promises.writeFile(target, JSON.stringify(note, null, 2), 'utf8');
+    return { ok: true, note, path: target };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function deleteMemo(filePath: string): Promise<{ ok: boolean; error?: string }> {
+  const target = path.resolve(String(filePath ?? ''));
+  if (!isInside(memoDir(), target) || !target.toLowerCase().endsWith('.tmnote')) {
+    return { ok: false, error: '只能删除备忘录文件夹中的文件' };
+  }
+  try {
+    await shell.trashItem(target);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function safeMemoName(title: string): string {
+  const clean = title.trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '');
+  return (clean || '备忘录').slice(0, 80);
+}
+
+async function exportMemo(filePath: string): Promise<{ ok: boolean; path?: string; cancelled?: boolean; error?: string }> {
+  const source = await readMemo(filePath);
+  if (!source.ok || !source.note) return { ok: false, error: source.error ?? '读取备忘录失败' };
+  const testTarget = process.env.NYXEL_TEST_MEMO_EXPORT;
+  let result: Electron.SaveDialogReturnValue;
+  if (testTarget) {
+    result = { canceled: false, filePath: testTarget };
+  } else {
+    const options: Electron.SaveDialogOptions = {
+      title: '导出备忘录',
+      defaultPath: path.join(app.getPath('documents'), `${safeMemoName(source.note.title)}.tmnote`),
+      filters: [{ name: 'Texture map 备忘录', extensions: ['tmnote'] }]
+    };
+    result = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, options)
+      : await dialog.showSaveDialog(options);
+  }
+  if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+  try {
+    if (path.resolve(result.filePath) !== path.resolve(source.path ?? '')) {
+      await fs.promises.copyFile(source.path ?? filePath, result.filePath);
+    }
+    return { ok: true, path: result.filePath };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function decodeMemoEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' '
+  };
+  return value.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, entity: string) => {
+    if (entity.startsWith('#x') || entity.startsWith('#X')) {
+      const code = Number.parseInt(entity.slice(2), 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+    }
+    if (entity.startsWith('#')) {
+      const code = Number(entity.slice(1));
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+    }
+    return named[entity.toLowerCase()] ?? match;
+  });
+}
+
+function memoTextFromHtml(html: string): string {
+  const withoutHidden = html
+    .replace(/<(script|style|noscript)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|h[1-6]|tr|blockquote)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ');
+  return decodeMemoEntities(withoutHidden)
+    .replace(/ /g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function memoTitleFromText(text: string, fallback: string): string {
+  const firstLine = text.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? '';
+  return (firstLine.replace(/^#+\s*/, '').slice(0, 200) || fallback).trim();
+}
+
+function rtfToPlainText(rtf: string): string {
+  let text = rtf.replace(/\\'([0-9a-f]{2})/gi, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+  text = text.replace(/\\u(-?\d+)\??/g, (_match, value: string) => {
+    const code = Number(value);
+    return String.fromCharCode(code < 0 ? code + 65536 : code);
+  });
+  text = text.replace(/\\par[d]?\b/g, '\n')
+    .replace(/\\tab\b/g, '\t')
+    .replace(/\\[a-z]+-?\d*\s?/gi, '')
+    .replace(/[{}]/g, '');
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function importedMemo(
+  title: string,
+  html: string,
+  text: string,
+  createdAt: string
+): MemoFileDocument {
+  const now = new Date().toISOString();
+  return {
+    version: 1,
+    id: memoId(),
+    title: title.slice(0, 200),
+    html,
+    text,
+    createdAt,
+    updatedAt: now
+  };
+}
+
+async function memoDocsFromImportFile(source: string): Promise<MemoFileDocument[]> {
+  const ext = path.extname(source).toLowerCase();
+  const fallbackTitle = path.basename(source, path.extname(source)) || '导入备忘录';
+  if (ext === '.tmnote') return [await parseMemoFile(source)];
+  if (!['.pdf', '.txt', '.md', '.html', '.htm', '.rtf', '.enex'].includes(ext)) return [];
+  const stat = await fs.promises.stat(source);
+  if (!stat.isFile()) return [];
+  if (stat.size > 64 * 1024 * 1024) throw new Error('导入文件过大');
+  const createdAt = stat.birthtime.toISOString();
+
+  if (ext === '.pdf') {
+    const result = await extractText(new Uint8Array(await fs.promises.readFile(source)), { mergePages: true });
+    const text = String(result.text ?? '').replace(/\u0000/g, '').trim();
+    if (!text) throw new Error('PDF 中没有可提取的文字，可能是扫描件');
+    return [importedMemo(memoTitleFromText(text, fallbackTitle), '', text, createdAt)];
+  }
+
+  if (ext === '.txt' || ext === '.md') {
+    const text = stripBom(await fs.promises.readFile(source, 'utf8')).trim();
+    if (!text) return [];
+    return [importedMemo(memoTitleFromText(text, fallbackTitle), '', text, createdAt)];
+  }
+
+  if (ext === '.html' || ext === '.htm') {
+    const html = stripBom(await fs.promises.readFile(source, 'utf8'));
+    const text = memoTextFromHtml(html);
+    const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)
+      ?? /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
+    const title = titleMatch ? memoTextFromHtml(titleMatch[1]) : memoTitleFromText(text, fallbackTitle);
+    if (!text && !html.trim()) return [];
+    return [importedMemo(title || fallbackTitle, html, text, createdAt)];
+  }
+
+  if (ext === '.rtf') {
+    const text = rtfToPlainText(stripBom(await fs.promises.readFile(source, 'utf8')));
+    if (!text) return [];
+    return [importedMemo(memoTitleFromText(text, fallbackTitle), '', text, createdAt)];
+  }
+
+  const xml = stripBom(await fs.promises.readFile(source, 'utf8'));
+  const notes: MemoFileDocument[] = [];
+  for (const match of xml.matchAll(/<note\b[^>]*>([\s\S]*?)<\/note>/gi)) {
+    const block = match[1];
+    const titleRaw = /<title>([\s\S]*?)<\/title>/i.exec(block)?.[1] ?? '';
+    const contentRaw = /<content>([\s\S]*?)<\/content>/i.exec(block)?.[1] ?? '';
+    const unwrap = (value: string) => value.replace(/^\s*<!\[CDATA\[/, '').replace(/\]\]>\s*$/, '');
+    const html = unwrap(contentRaw);
+    const text = memoTextFromHtml(html);
+    const title = memoTextFromHtml(unwrap(titleRaw)) || memoTitleFromText(text, fallbackTitle);
+    if (!text && !html.trim()) continue;
+    notes.push(importedMemo(title, html, text, createdAt));
+    if (notes.length >= 100) break;
+  }
+  if (!notes.length) {
+    const text = memoTextFromHtml(xml);
+    if (text) notes.push(importedMemo(memoTitleFromText(text, fallbackTitle), '', text, createdAt));
+  }
+  return notes;
+}
+
+async function importMemoPaths(
+  paths: string[]
+): Promise<{ ok: boolean; imported?: number; note?: MemoFileDocument; path?: string; error?: string }> {
+  await ensureMemoDir();
+  const candidates = (Array.isArray(paths) ? paths : [])
+    .map((item) => path.resolve(String(item ?? '')))
+    .filter((item) => !isInside(memoDir(), item))
+    .slice(0, 100);
+  if (!candidates.length) return { ok: false, error: '没有可导入的备忘录文件' };
+  let imported = 0;
+  let lastNote: MemoFileDocument | undefined;
+  let lastPath = '';
+  let lastError = '';
+  for (const source of candidates) {
+    try {
+      const docs = await memoDocsFromImportFile(source);
+      for (const doc of docs) {
+        const now = new Date().toISOString();
+        const note: MemoFileDocument = {
+          ...doc,
+          id: memoId(),
+          updatedAt: now
+        };
+        const baseName = source.toLowerCase().endsWith('.tmnote')
+          ? path.basename(source)
+          : `${safeMemoName(note.title || path.basename(source, path.extname(source)))}.tmnote`;
+        const target = await uniqueFilePath(memoDir(), baseName);
+        await fs.promises.writeFile(target, JSON.stringify(note, null, 2), 'utf8');
+        imported += 1;
+        lastNote = note;
+        lastPath = target;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  if (!imported) return { ok: false, error: lastError || '没有可导入的有效备忘录' };
+  return { ok: true, imported, note: lastNote, path: lastPath };
+}
+
+async function importMemoDialog(): Promise<{ ok: boolean; imported?: number; note?: MemoFileDocument; path?: string; cancelled?: boolean; error?: string }> {
+  const options: Electron.OpenDialogOptions = {
+    title: '导入备忘录',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: '备忘录与 iPad 导出文件', extensions: ['tmnote', 'pdf', 'txt', 'md', 'html', 'htm', 'rtf', 'enex'] },
+      { name: '所有文件', extensions: ['*'] }
+    ]
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled) return { ok: false, cancelled: true };
+  return importMemoPaths(result.filePaths);
 }
 
 interface VideoNoteMeta {
@@ -1525,6 +2071,20 @@ function compareVersions(left: string, right: string): number {
 
 async function checkForUpdates(): Promise<UpdateCheckResult> {
   const currentVersion = app.getVersion();
+  const testVersion = process.env.NYXEL_TEST_UPDATE_VERSION;
+  if (testVersion) {
+    return {
+      ok: true,
+      currentVersion,
+      latestVersion: testVersion,
+      latestTag: `v${testVersion}`,
+      hasUpdate: compareVersions(`v${testVersion}`, currentVersion) > 0,
+      releaseUrl: 'https://github.com/ANSEN2026/Nyxel/releases',
+      downloadUrl: 'https://github.com/ANSEN2026/Nyxel/releases',
+      channel: 'stable',
+      message: `发现新版本 v${testVersion}`
+    };
+  }
   if (process.windowsStore) {
     return {
       ok: false,
@@ -1863,9 +2423,23 @@ function registerScreenshotShortcut(accelerator: string): boolean {
   return ok;
 }
 
-const AI_RUNTIME_URL = 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip';
+const AI_RUNTIME_URL = process.env.NYXEL_AI_RUNTIME_URL || 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip';
+const AI_RUNTIME_URLS = process.env.NYXEL_AI_RUNTIME_URL
+  ? [AI_RUNTIME_URL]
+  : [
+    AI_RUNTIME_URL,
+    `https://ghproxy.net/${AI_RUNTIME_URL}`,
+    `https://gh-proxy.com/${AI_RUNTIME_URL}`
+  ];
 const AI_MODEL_NAME = 'realesrgan-x4plus';
-const UPSCAYL_BIN_URL = 'https://github.com/upscayl/upscayl-ncnn/releases/download/20251207-174704/upscayl-bin-20251207-174704-windows.zip';
+const UPSCAYL_BIN_URL = process.env.NYXEL_UPSCAYL_BIN_URL || 'https://github.com/upscayl/upscayl-ncnn/releases/download/20251207-174704/upscayl-bin-20251207-174704-windows.zip';
+const UPSCAYL_BIN_URLS = process.env.NYXEL_UPSCAYL_BIN_URL
+  ? [UPSCAYL_BIN_URL]
+  : [
+    UPSCAYL_BIN_URL,
+    `https://ghproxy.net/${UPSCAYL_BIN_URL}`,
+    `https://gh-proxy.com/${UPSCAYL_BIN_URL}`
+  ];
 const UPSCAYL_MODEL_NAME = 'upscayl-standard-4x';
 const UPSCAYL_MODELS = ['upscayl-standard-4x', 'ultrasharp-4x', 'ultramix-balanced-4x', 'remacri-4x'];
 const UPSCAYL_MODEL_BASES = [
@@ -1923,12 +2497,14 @@ function sendAiProgress(progress: AiProgress): void {
   }
 }
 
-const FFMPEG_BUILD_URL = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip';
-const FFMPEG_DOWNLOAD_URLS = [
-  FFMPEG_BUILD_URL,
-  `https://ghproxy.net/${FFMPEG_BUILD_URL}`,
-  `https://gh-proxy.com/${FFMPEG_BUILD_URL}`
-];
+const FFMPEG_BUILD_URL = process.env.NYXEL_FFMPEG_URL || 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip';
+const FFMPEG_DOWNLOAD_URLS = process.env.NYXEL_FFMPEG_URL
+  ? [FFMPEG_BUILD_URL]
+  : [
+    FFMPEG_BUILD_URL,
+    `https://ghproxy.net/${FFMPEG_BUILD_URL}`,
+    `https://gh-proxy.com/${FFMPEG_BUILD_URL}`
+  ];
 
 let videoDownloading = false;
 let videoProgress: VideoProgress | null = null;
@@ -1973,7 +2549,7 @@ interface VideoCompressOptions {
   preset: string;
   resolution: 'source' | '1080' | '720' | '480';
   fps: 'source' | '60' | '30' | '24';
-  audio: 'aac192' | 'aac128' | 'aac96' | 'copy' | 'none';
+  audio: 'aac192' | 'aac128' | 'aac96' | 'aac64' | 'copy' | 'none';
 }
 
 interface VideoProbeJson {
@@ -2048,50 +2624,22 @@ async function downloadFfmpegRuntime(): Promise<{ ok: boolean; error?: string; s
     await fs.promises.mkdir(runtime, { recursive: true });
     sendVideoProgress({ phase: 'download', percent: 0, message: '连接 ffmpeg 下载服务器…' });
 
-    let zip: Buffer | null = null;
-    let lastError: Error | null = null;
-    for (const url of FFMPEG_DOWNLOAD_URLS) {
-      try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('无法读取下载数据');
-        const total = Number(response.headers.get('content-length') ?? 0);
-        const handle = await fs.promises.open(zipPath, 'w');
-        let received = 0;
-        let lastReport = 0;
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (!value) continue;
-            await handle.write(value);
-            received += value.byteLength;
-            const now = Date.now();
-            if (now - lastReport > 180) {
-              lastReport = now;
-              const percent = total ? Math.min(78, (received / total) * 78) : 0;
-              sendVideoProgress({
-                phase: 'download',
-                percent,
-                message: total
-                  ? `下载 ffmpeg ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`
-                  : `下载 ffmpeg ${(received / 1048576).toFixed(1)} MB`
-              });
-            }
-          }
-        } finally {
-          await handle.close();
-        }
-        zip = await fs.promises.readFile(zipPath);
-        break;
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        await fs.promises.rm(zipPath, { force: true }).catch(() => undefined);
+    await downloadFileAccelerated({
+      urls: FFMPEG_DOWNLOAD_URLS,
+      targetPath: zipPath,
+      threads: 32,
+      onProgress: (received, total) => {
+        const percent = total ? Math.min(78, (received / total) * 78) : 0;
+        sendVideoProgress({
+          phase: 'download',
+          percent,
+          message: total
+            ? `下载 ffmpeg ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`
+            : `下载 ffmpeg ${(received / 1048576).toFixed(1)} MB`
+        });
       }
-    }
-
-    if (!zip) throw lastError ?? new Error('ffmpeg 下载失败');
+    });
+    const zip = await fs.promises.readFile(zipPath);
 
     sendVideoProgress({ phase: 'extract', percent: 82, message: '解压 ffmpeg…' });
     const entries = unzipSync(new Uint8Array(zip), {
@@ -2225,7 +2773,13 @@ async function compressVideo(options: VideoCompressOptions): Promise<{ ok: boole
   } else if (options.audio === 'copy') {
     args.push('-c:a', 'copy');
   } else {
-    const audioBitrate = options.audio === 'aac192' ? '192k' : options.audio === 'aac96' ? '96k' : '128k';
+    const audioBitrate = options.audio === 'aac192'
+      ? '192k'
+      : options.audio === 'aac96'
+        ? '96k'
+        : options.audio === 'aac64'
+          ? '64k'
+          : '128k';
     args.push('-c:a', 'aac', '-b:a', audioBitrate);
   }
   args.push('-map_metadata', '0', '-progress', 'pipe:1', '-nostats', '-loglevel', 'error', output);
@@ -2348,30 +2902,17 @@ async function downloadRealESRGANRuntime(): Promise<AiStatus> {
   const runtime = aiRuntimeDir('realesrgan');
   const staging = `${runtime}-staging`;
   const finalStaging = `${runtime}-final`;
+  const zipPath = path.join(os.tmpdir(), `nyxel-realesrgan-${process.pid}.zip`);
 
   try {
     await fs.promises.mkdir(runtime, { recursive: true });
     sendAiProgress({ phase: 'download', percent: 0, message: '连接 Real-ESRGAN 下载服务器…' });
 
-    const response = await fetch(AI_RUNTIME_URL);
-    if (!response.ok) throw new Error(`下载失败：HTTP ${response.status}`);
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('无法读取下载数据');
-
-    const total = Number(response.headers.get('content-length') ?? 0);
-    const chunks: Uint8Array[] = [];
-    let received = 0;
-    let lastReport = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        chunks.push(value);
-        received += value.length;
-      }
-      const now = Date.now();
-      if (now - lastReport > 150) {
-        lastReport = now;
+    await downloadFileAccelerated({
+      urls: AI_RUNTIME_URLS,
+      targetPath: zipPath,
+      threads: 32,
+      onProgress: (received, total) => {
         const percent = total ? Math.min(80, (received / total) * 80) : 0;
         sendAiProgress({
           phase: 'download',
@@ -2381,9 +2922,9 @@ async function downloadRealESRGANRuntime(): Promise<AiStatus> {
             : `下载运行时 ${(received / 1048576).toFixed(1)} MB`
         });
       }
-    }
+    });
 
-    const zip = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+    const zip = await fs.promises.readFile(zipPath);
     sendAiProgress({ phase: 'extract', percent: 82, message: '解压运行时…' });
     await fs.promises.rm(staging, { recursive: true, force: true });
     await fs.promises.mkdir(staging, { recursive: true });
@@ -2441,6 +2982,7 @@ async function downloadRealESRGANRuntime(): Promise<AiStatus> {
     throw error;
   } finally {
     aiDownloading = false;
+    await fs.promises.rm(zipPath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -2487,16 +3029,24 @@ async function downloadUpscaylRuntime(model?: string): Promise<AiStatus> {
 
     if (!fs.existsSync(aiExePath('upscayl'))) {
       sendAiProgress({ phase: 'download', percent: 0, message: '连接 Upscayl 下载服务器…' });
-      const binaryZip = await fetchUrlBuffer(UPSCAYL_BIN_URL, (received, total) => {
-        const percent = total ? Math.min(10, (received / total) * 10) : 0;
-        sendAiProgress({
-          phase: 'download',
-          percent,
-          message: total
-            ? `下载 Upscayl 运行时 ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`
-            : `下载 Upscayl 运行时 ${(received / 1048576).toFixed(1)} MB`
-        });
+      const binaryZipPath = path.join(os.tmpdir(), `nyxel-upscayl-${process.pid}.zip`);
+      tempFiles.push(binaryZipPath);
+      await downloadFileAccelerated({
+        urls: UPSCAYL_BIN_URLS,
+        targetPath: binaryZipPath,
+        threads: 32,
+        onProgress: (received, total) => {
+          const percent = total ? Math.min(10, (received / total) * 10) : 0;
+          sendAiProgress({
+            phase: 'download',
+            percent,
+            message: total
+              ? `下载 Upscayl 运行时 ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`
+              : `下载 Upscayl 运行时 ${(received / 1048576).toFixed(1)} MB`
+          });
+        }
       });
+      const binaryZip = await fs.promises.readFile(binaryZipPath);
 
       sendAiProgress({ phase: 'extract', percent: 11, message: '解压 Upscayl…' });
       const entries = unzipSync(new Uint8Array(binaryZip));
@@ -2526,39 +3076,29 @@ async function downloadUpscaylRuntime(model?: string): Promise<AiStatus> {
         : existingSize >= 1048576;
       if (validExisting) continue;
 
-      let downloaded: Buffer | null = null;
-      let lastError: unknown = null;
-      for (const base of UPSCAYL_MODEL_BASES) {
-        try {
-          downloaded = await fetchUrlBuffer(`${base}/${modelName}.${extension}`, (received, total) => {
-            const fraction = total ? received / total : 0;
-            const percent = extension === 'param'
-              ? 12 + fraction * 2
-              : 14 + fraction * 80;
-            sendAiProgress({
-              phase: 'download',
-              percent,
-              message: total
-                ? `下载 Upscayl 模型 ${modelName} ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`
-                : `下载 Upscayl 模型 ${modelName} ${(received / 1048576).toFixed(1)} MB`
-            });
-          });
-          if (extension === 'param' && downloaded.length < 1000) throw new Error('模型参数文件无效');
-          if (extension === 'bin' && downloaded.length < 1048576) throw new Error('模型权重文件无效');
-          break;
-        } catch (error) {
-          lastError = error;
-          downloaded = null;
-        }
-      }
-      if (!downloaded) {
-        throw new Error(
-          `Upscayl 模型下载失败：${lastError instanceof Error ? lastError.message : String(lastError)}`
-        );
-      }
       const temp = path.join(modelsDir, `${modelName}.${extension}.tmp`);
       tempFiles.push(temp);
-      await fs.promises.writeFile(temp, downloaded);
+      await downloadFileAccelerated({
+        urls: UPSCAYL_MODEL_BASES.map((base) => `${base}/${modelName}.${extension}`),
+        targetPath: temp,
+        threads: extension === 'bin' ? 32 : 4,
+        onProgress: (received, total) => {
+          const fraction = total ? received / total : 0;
+          const percent = extension === 'param'
+            ? 12 + fraction * 2
+            : 14 + fraction * 80;
+          sendAiProgress({
+            phase: 'download',
+            percent,
+            message: total
+              ? `下载 Upscayl 模型 ${modelName} ${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`
+              : `下载 Upscayl 模型 ${modelName} ${(received / 1048576).toFixed(1)} MB`
+          });
+        }
+      });
+      const downloadedSize = (await fs.promises.stat(temp)).size;
+      if (extension === 'param' && downloadedSize < 1000) throw new Error('模型参数文件无效');
+      if (extension === 'bin' && downloadedSize < 1048576) throw new Error('模型权重文件无效');
       await fs.promises.rm(target, { force: true });
       await fs.promises.rename(temp, target);
     }
@@ -2576,6 +3116,9 @@ async function downloadUpscaylRuntime(model?: string): Promise<AiStatus> {
     throw error;
   } finally {
     aiDownloading = false;
+    for (const file of tempFiles) {
+      await fs.promises.rm(file, { force: true }).catch(() => undefined);
+    }
   }
 }
 async function downloadAiRuntime(engine: AiEngine, model?: string): Promise<AiStatus> {
@@ -2937,6 +3480,145 @@ async function downloadRangeWithRetry(
       const message = error instanceof Error ? error.message : String(error);
       const rateLimited = /HTTP (429|503)/.test(message);
       await new Promise((resolve) => setTimeout(resolve, (rateLimited ? 1200 : 250) * attempt));
+    }
+  }
+}
+
+/**
+ * Shared fast downloader for plugin/runtime assets.
+ * Uses the same range queue, mirror rotation and proxy handling as the manual downloader.
+ */
+async function downloadFileAccelerated(options: {
+  urls: string[];
+  targetPath: string;
+  threads?: number;
+  onProgress?: (received: number, total: number) => void;
+}): Promise<{ size: number; sources: number }> {
+  const target = path.resolve(options.targetPath);
+  const partPath = `${target}.part`;
+  const urls = [...new Set(options.urls.map((url) => String(url ?? '').trim()).filter(Boolean))];
+  if (!urls.length) throw new Error('没有可用的下载地址');
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  await fs.promises.rm(partPath, { force: true });
+
+  const state: DownloadTaskState = {
+    cancelled: false,
+    controllers: new Set(),
+    downloaded: 0,
+    total: 0,
+    lastTick: Date.now(),
+    lastBytes: 0,
+    timer: null,
+    threads: 1,
+    startedAt: Date.now(),
+    useChromium: false,
+    failure: false,
+    dispatcher: null
+  };
+  let progressTimer: NodeJS.Timeout | null = null;
+
+  try {
+    await configureDownloadProxy(urls[0], state);
+
+    let primary: { url: string; total: number; ranges: boolean } | null = null;
+    let lastError: unknown = null;
+    for (let index = 0; index < urls.length; index += 1) {
+      try {
+        const probe = await probeDownload(urls[index], state, index === 0);
+        if (probe.total > 0) {
+          primary = { url: urls[index], ...probe };
+          break;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!primary) {
+      throw lastError instanceof Error ? lastError : new Error('无法连接下载服务器');
+    }
+
+    state.total = primary.total;
+    const sources = [primary.url];
+    if (primary.ranges) {
+      for (const url of urls) {
+        if (url === primary.url) continue;
+        try {
+          const probe = await probeDownload(url, state, false);
+          if (probe.ranges && probe.total === primary.total) sources.push(url);
+        } catch { /* skip unavailable mirror */ }
+      }
+    }
+
+    progressTimer = setInterval(() => {
+      options.onProgress?.(state.downloaded, state.total);
+    }, 150);
+    options.onProgress?.(0, state.total);
+
+    if (primary.ranges && state.total > 0) {
+      const threads = Math.max(1, Math.min(32, Math.floor(options.threads ?? 32) || 32));
+      const chunkSize = Math.max(512 * 1024, Math.min(4 * 1024 * 1024, Math.ceil(state.total / (threads * 3))));
+      const chunks: Array<{ start: number; end: number }> = [];
+      for (let start = 0; start < state.total; start += chunkSize) {
+        chunks.push({ start, end: Math.min(state.total - 1, start + chunkSize - 1) });
+      }
+
+      const handle = await fs.promises.open(partPath, 'w');
+      let multiError: unknown = null;
+      try {
+        await handle.truncate(state.total);
+        let nextChunk = 0;
+        const worker = async (): Promise<void> => {
+          while (!state.cancelled && !state.failure) {
+            const chunkIndex = nextChunk;
+            const chunk = chunks[chunkIndex];
+            nextChunk += 1;
+            if (!chunk) return;
+            try {
+              await downloadRangeWithRetry(sources, chunkIndex, chunk.start, chunk.end, handle, state);
+            } catch (error) {
+              if (state.failure) return;
+              state.failure = true;
+              multiError = error;
+              for (const controller of state.controllers) {
+                try { controller.abort(); } catch { /* ignore */ }
+              }
+              return;
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(threads, chunks.length) }, () => worker()));
+      } catch (error) {
+        multiError = error;
+      } finally {
+        try { await handle.close(); } catch { /* already closed */ }
+      }
+
+      if (multiError) {
+        await fs.promises.rm(partPath, { force: true });
+        state.failure = false;
+        state.downloaded = 0;
+        state.useChromium = true;
+        await downloadSingleToFile(primary.url, partPath, state);
+      }
+    } else {
+      await downloadSingleToFile(primary.url, partPath, state);
+    }
+
+    const stat = await fs.promises.stat(partPath);
+    if (state.total > 0 && stat.size !== state.total) {
+      throw new Error(`下载不完整：${stat.size} / ${state.total} 字节`);
+    }
+    await fs.promises.rm(target, { force: true });
+    await fs.promises.rename(partPath, target);
+    options.onProgress?.(stat.size, stat.size || state.total);
+    return { size: stat.size, sources: sources.length };
+  } catch (error) {
+    await fs.promises.rm(partPath, { force: true }).catch(() => undefined);
+    throw error;
+  } finally {
+    if (progressTimer) clearInterval(progressTimer);
+    for (const controller of state.controllers) {
+      try { controller.abort(); } catch { /* ignore */ }
     }
   }
 }
@@ -3606,6 +4288,10 @@ function registerIpc(): void {
     return importLibraryTextures(folder);
   });
 
+  ipcMain.handle('library:importDroppedTextures', async (_event, paths: string[], folder: string) => {
+    return importDroppedTextures(paths, folder);
+  });
+
   ipcMain.handle('library:videos', async () => listVideos());
 
   ipcMain.handle('library:importVideos', async () => importLibraryVideos());
@@ -3626,6 +4312,26 @@ function registerIpc(): void {
 
   ipcMain.handle('library:moveVideo', async (_event, filePath: string, destinationDir: string) => {
     return moveLibraryVideo(filePath, destinationDir);
+  });
+
+  ipcMain.handle('library:moveImage', async (_event, filePath: string, folder: string) => {
+    return moveLibraryImage(filePath, folder);
+  });
+
+  ipcMain.handle('memo:list', async () => listMemos());
+  ipcMain.handle('memo:create', async () => createMemo());
+  ipcMain.handle('memo:read', async (_event, filePath: string) => readMemo(filePath));
+  ipcMain.handle('memo:save', async (_event, filePath: string, updates: { title?: string; html?: string; text?: string }) => {
+    return saveMemo(filePath, updates);
+  });
+  ipcMain.handle('memo:delete', async (_event, filePath: string) => deleteMemo(filePath));
+  ipcMain.handle('memo:export', async (_event, filePath: string) => exportMemo(filePath));
+  ipcMain.handle('memo:import', async () => importMemoDialog());
+  ipcMain.handle('memo:importPaths', async (_event, paths: string[]) => importMemoPaths(paths));
+  ipcMain.handle('memo:openDir', async () => {
+    await ensureMemoDir();
+    const error = await shell.openPath(memoDir());
+    return error ? { ok: false, dir: memoDir(), error } : { ok: true, dir: memoDir() };
   });
 
   ipcMain.handle('notes:list', async (_event, videoPath: string) => listVideoNotes(videoPath));
@@ -3693,6 +4399,7 @@ if (!gotLock) {
     registerAudioCapture();
     registerIpc();
     createWindow();
+    void seedOfficialTextures();
     const settings = loadSettings();
     if (!registerScreenshotShortcut(settings.screenshotHotkey)) {
       mainWindow?.webContents.send('screenshot:done', {

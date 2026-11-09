@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 contextBridge.exposeInMainWorld('nyxel', {
   platform: process.platform,
@@ -98,6 +98,9 @@ contextBridge.exposeInMainWorld('nyxel', {
     textures: (folder: string) => ipcRenderer.invoke('library:textures', folder),
     createFolder: (parent: string, name: string) => ipcRenderer.invoke('library:createFolder', parent, name),
     importTextures: (folder: string) => ipcRenderer.invoke('library:importTextures', folder),
+    importDroppedTextures: (paths: string[], folder: string) => ipcRenderer.invoke('library:importDroppedTextures', paths, folder),
+    moveImage: (filePath: string, folder: string) => ipcRenderer.invoke('library:moveImage', filePath, folder),
+    getPathForFile: (file: File) => webUtils.getPathForFile(file),
     videos: () => ipcRenderer.invoke('library:videos'),
     importVideos: () => ipcRenderer.invoke('library:importVideos'),
     moveFolder: (source: string, targetParent: string) => ipcRenderer.invoke('library:moveFolder', source, targetParent),
@@ -113,6 +116,17 @@ contextBridge.exposeInMainWorld('nyxel', {
       ipcRenderer.on('library:changed', listener);
       return () => ipcRenderer.removeListener('library:changed', listener);
     }
+  },
+  memo: {
+    list: () => ipcRenderer.invoke('memo:list'),
+    create: () => ipcRenderer.invoke('memo:create'),
+    read: (filePath: string) => ipcRenderer.invoke('memo:read', filePath),
+    save: (filePath: string, updates: unknown) => ipcRenderer.invoke('memo:save', filePath, updates),
+    delete: (filePath: string) => ipcRenderer.invoke('memo:delete', filePath),
+    exportNote: (filePath: string) => ipcRenderer.invoke('memo:export', filePath),
+    importNote: () => ipcRenderer.invoke('memo:import'),
+    importPaths: (paths: string[]) => ipcRenderer.invoke('memo:importPaths', paths),
+    openDir: () => ipcRenderer.invoke('memo:openDir')
   },
   notes: {
     list: (videoPath: string) => ipcRenderer.invoke('notes:list', videoPath),

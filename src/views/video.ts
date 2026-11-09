@@ -23,9 +23,9 @@ interface PresetValues {
 
 const PRESETS: Record<string, PresetValues> = {
   original: { codec: 'copy', crf: 18, resolution: 'source', fps: 'source', audio: 'copy' },
-  high: { codec: 'h264', crf: 18, resolution: 'source', fps: 'source', audio: 'aac192' },
-  balanced: { codec: 'h264', crf: 23, resolution: 'source', fps: 'source', audio: 'aac128' },
-  small: { codec: 'h265', crf: 28, resolution: '1080', fps: 'source', audio: 'aac96' }
+  high: { codec: 'h264', crf: 20, resolution: 'source', fps: 'source', audio: 'aac192' },
+  balanced: { codec: 'h264', crf: 25, resolution: '1080', fps: 'source', audio: 'aac96' },
+  small: { codec: 'h265', crf: 32, resolution: '720', fps: '30', audio: 'aac64' }
 };
 
 export class VideoView {
@@ -125,9 +125,9 @@ export class VideoView {
               <label for="video-preset">压缩预设</label>
               <select id="video-preset">
                 <option value="original">原始画质（不重编码）</option>
-                <option value="high" selected>高画质（近无损）</option>
-                <option value="balanced">平衡（推荐）</option>
-                <option value="small">小体积</option>
+                <option value="high">高画质（近无损）</option>
+                <option value="balanced" selected>平衡（推荐，体积更小）</option>
+                <option value="small">小体积（720p / 30fps）</option>
                 <option value="custom">自定义</option>
               </select>
             </div>
@@ -171,10 +171,11 @@ export class VideoView {
                 <option value="aac192" selected>AAC 192k</option>
                 <option value="aac128">AAC 128k</option>
                 <option value="aac96">AAC 96k</option>
+                <option value="aac64">AAC 64k（更小）</option>
                 <option value="none">移除音频</option>
               </select>
             </div>
-            <div class="video-setting-hint">要完全保留清晰度，请选择「原始画质（不重编码）」：只转换封装，不重新编码视频和音频。H.264/H.265 的 CRF 越低画质越好、文件越大。</div>
+            <div class="video-setting-hint">「平衡」会把分辨率限制在 1080p 并使用更小的音频码率；「小体积」使用 H.265、720p、30fps 和 AAC 64k，文件会明显更小，但需要较新的播放器。要完全保留清晰度，请选择「原始画质（不重编码）」。</div>
           </section>
 
           <section class="video-run">
@@ -220,7 +221,7 @@ export class VideoView {
     this.runtimeLabel = this.element.querySelector('#video-runtime-label') as HTMLElement;
 
     this.bindEvents();
-    this.applyPreset('high');
+    this.applyPreset('balanced');
     window.nyxel.video.onProgress((progress) => this.onProgress(progress));
   }
 
@@ -452,7 +453,7 @@ export class VideoView {
       outputDir: this.outputDir || this.status.defaultOutputDir,
       codec: this.codecSelect.value as VideoCodec,
       crf: Number(this.crfInput.value) || 23,
-      preset: 'medium',
+      preset: 'slow',
       resolution: this.resolutionSelect.value as VideoResolution,
       fps: this.fpsSelect.value as VideoFps,
       audio: this.audioSelect.value as VideoAudio

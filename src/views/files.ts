@@ -67,6 +67,15 @@ export class FilesView {
   private moveTarget: HTMLSelectElement | null = null;
   private moveError: HTMLElement | null = null;
   private moveSource = '';
+  private longPressTimer: number | null = null;
+  private longPressCard: HTMLElement | null = null;
+  private longPressStart = { x: 0, y: 0 };
+  private longPressActive = false;
+  private longPressPath = '';
+  private longPressGhost: HTMLElement | null = null;
+  private longPressTarget: HTMLElement | null = null;
+  private suppressFileClick = false;
+  private externalDropTarget: HTMLElement | null = null;
 
   constructor(mode: FilesMode, callbacks: ViewCallbacks) {
     this.mode = mode;
@@ -115,6 +124,7 @@ export class FilesView {
             <input id="files-search" type="search" placeholder="搜索素材" spellcheck="false">
           </div>
           <span class="zoom-hint" data-zoom-hint>Ctrl + 滚轮缩放</span>
+          <span class="zoom-hint">单击打开 · 长按拖动 · 可拖入图片 / 文件夹</span>
           <span class="spacer"></span>
           <button class="primary" data-action="import">导入贴图</button>
           <button data-action="refresh">刷新</button>
@@ -321,6 +331,7 @@ export class FilesView {
 
   private bindEvents(): void {
     this.element.addEventListener('scroll', () => this.hideContextMenu(), true);
+    if (this.mode === 'textures') this.bindFileInteractions();
     this.element.addEventListener('contextmenu', (event) => {
       const target = event.target as HTMLElement;
       if (target.closest('input, select, textarea')) return;
@@ -340,6 +351,12 @@ export class FilesView {
     });
 
     this.element.addEventListener('click', (event) => {
+      if (this.suppressFileClick) {
+        this.suppressFileClick = false;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const target = event.target as HTMLElement;
       const actionButton = target.closest<HTMLElement>('[data-file-action]');
       const card = target.closest<HTMLElement>('[data-file-path]');
@@ -575,6 +592,192 @@ export class FilesView {
     }
   }
 
+  private bindFileInteractions(): void {
+    this.element.addEventListener('pointerdown', (event) => this.startFileLongPress(event));
+    window.addEventListener('pointermove', (event) => this.moveFileLongPress(event), { passive: false });
+    window.addEventListener('pointerup', (event) => void this.finishFileLongPress(event));
+    window.addEventListener('pointercancel', () => this.cancelFileLongPress());
+    window.addEventListener('blur', () => this.cancelFileLongPress());
+    this.element.addEventListener('dragenter', (event) => this.onExternalFileDrag(event));
+    this.element.addEventListener('dragover', (event) => this.onExternalFileDrag(event));
+    this.element.addEventListener('dragleave', (event) => {
+      if (!this.element.contains(event.relatedTarget as Node | null)) this.clearExternalDrop();
+    });
+    this.element.addEventListener('drop', (event) => void this.onExternalFileDrop(event));
+  }
+
+  private startFileLongPress(event: PointerEvent): void {
+    if (event.button !== 0 || this.dragFolder) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('button, a, input, select, textarea')) return;
+    const card = target.closest<HTMLElement>('[data-file-path]');
+    if (!card || !this.grid.contains(card)) return;
+    const filePath = card.dataset.filePath ?? '';
+    if (!filePath) return;
+    this.cancelFileLongPress();
+    this.longPressCard = card;
+    this.longPressPath = filePath;
+    this.longPressStart = { x: event.clientX, y: event.clientY };
+    this.longPressTimer = window.setTimeout(() => {
+      this.longPressTimer = null;
+      this.activateFileLongPress(event.clientX, event.clientY);
+    }, 360);
+  }
+
+  private activateFileLongPress(x: number, y: number): void {
+    if (!this.longPressCard) return;
+    this.longPressActive = true;
+    this.suppressFileClick = true;
+    this.longPressCard.classList.add('long-press-dragging');
+    const ghost = document.createElement('div');
+    ghost.className = 'asset-drag-ghost';
+    ghost.textContent = this.longPressCard.querySelector('.asset-name')?.textContent ?? '拖动图片';
+    document.body.append(ghost);
+    this.longPressGhost = ghost;
+    this.positionFileGhost(x, y);
+    this.updateLongPressFolder(x, y);
+  }
+
+  private moveFileLongPress(event: PointerEvent): void {
+    if (!this.longPressCard) return;
+    if (!this.longPressActive) {
+      if (Math.hypot(event.clientX - this.longPressStart.x, event.clientY - this.longPressStart.y) > 8) {
+        this.cancelFileLongPress();
+      }
+      return;
+    }
+    event.preventDefault();
+    this.positionFileGhost(event.clientX, event.clientY);
+    this.updateLongPressFolder(event.clientX, event.clientY);
+  }
+
+  private positionFileGhost(x: number, y: number): void {
+    if (!this.longPressGhost) return;
+    this.longPressGhost.style.left = `${x + 14}px`;
+    this.longPressGhost.style.top = `${y + 14}px`;
+  }
+
+  private updateLongPressFolder(x: number, y: number): void {
+    const element = document.elementFromPoint(x, y) as HTMLElement | null;
+    const row = element?.closest<HTMLElement>('.folder-row[data-folder]') ?? null;
+    const next = row && this.element.contains(row) ? row : null;
+    if (next === this.longPressTarget) return;
+    this.longPressTarget?.classList.remove('folder-drop-target');
+    this.longPressTarget = next;
+    this.longPressTarget?.classList.add('folder-drop-target');
+  }
+
+  private async finishFileLongPress(_event: PointerEvent): Promise<void> {
+    if (!this.longPressCard) return;
+    if (!this.longPressActive) {
+      this.cancelFileLongPress();
+      return;
+    }
+    const targetRow = this.longPressTarget;
+    const filePath = this.longPressPath;
+    this.clearLongPressState();
+    window.setTimeout(() => { this.suppressFileClick = false; }, 450);
+    if (!targetRow) return;
+    const folder = targetRow.dataset.folder ?? '';
+    try {
+      const result = await window.nyxel.library.moveImage(filePath, folder);
+      if (!result.ok) {
+        this.callbacks.toast(`移动失败：${result.error ?? '未知错误'}`, 'error');
+        return;
+      }
+      if (!result.moved) {
+        this.callbacks.toast('图片已经在这个文件夹里', 'info');
+        return;
+      }
+      this.callbacks.toast('图片已移动到目标文件夹', 'success');
+      await this.load();
+    } catch (error) {
+      this.callbacks.toast(`移动失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private cancelFileLongPress(): void {
+    if (this.longPressTimer !== null) {
+      window.clearTimeout(this.longPressTimer);
+      this.longPressTimer = null;
+    }
+    this.clearLongPressState();
+    this.suppressFileClick = false;
+  }
+
+  private clearLongPressState(): void {
+    this.longPressGhost?.remove();
+    this.longPressGhost = null;
+    this.longPressTarget?.classList.remove('folder-drop-target');
+    this.longPressTarget = null;
+    this.longPressCard?.classList.remove('long-press-dragging');
+    this.longPressCard = null;
+    this.longPressPath = '';
+    this.longPressActive = false;
+  }
+
+  private isExternalFileDrag(event: DragEvent): boolean {
+    if (this.dragFolder) return false;
+    const types = event.dataTransfer?.types;
+    return Boolean(types && Array.from(types).includes('Files'));
+  }
+
+  private onExternalFileDrag(event: DragEvent): void {
+    if (!this.isExternalFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    this.element.classList.add('file-drop-active');
+    const target = event.target as HTMLElement;
+    const row = target.closest<HTMLElement>('.folder-row[data-folder]') ?? null;
+    const next = row && this.element.contains(row) ? row : null;
+    if (next !== this.externalDropTarget) {
+      this.externalDropTarget?.classList.remove('folder-drop-target');
+      this.externalDropTarget = next;
+      this.externalDropTarget?.classList.add('folder-drop-target');
+    }
+  }
+
+  private clearExternalDrop(): void {
+    this.element.classList.remove('file-drop-active');
+    this.externalDropTarget?.classList.remove('folder-drop-target');
+    this.externalDropTarget = null;
+  }
+
+  private async onExternalFileDrop(event: DragEvent): Promise<void> {
+    if (!this.isExternalFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const target = event.target as HTMLElement;
+    const row = target.closest<HTMLElement>('.folder-row[data-folder]') ?? this.externalDropTarget;
+    const targetFolder = row && this.element.contains(row)
+      ? row.dataset.folder ?? this.currentFolder
+      : this.currentFolder;
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    this.clearExternalDrop();
+    if (!files.length) return;
+    const paths = files.map((file) => {
+      try { return window.nyxel.library.getPathForFile(file); } catch { return ''; }
+    }).filter(Boolean);
+    if (!paths.length) {
+      this.callbacks.toast('无法读取拖入的文件路径', 'error');
+      return;
+    }
+    try {
+      const result = await window.nyxel.library.importDroppedTextures(paths, targetFolder);
+      if (!result.ok) {
+        this.callbacks.toast(`导入失败：${result.error ?? '未知错误'}`, 'error');
+        return;
+      }
+      const folderText = result.folders ? `，${result.folders} 个文件夹` : '';
+      this.callbacks.toast(`已导入 ${result.imported ?? 0} 张图片${folderText}`, 'success');
+      this.currentFolder = targetFolder;
+      await this.load();
+    } catch (error) {
+      this.callbacks.toast(`导入失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
   private bindZoom(): void {
     if (this.mode === 'videos') return;
     this.element.addEventListener('wheel', (event) => {
@@ -693,7 +896,7 @@ export class FilesView {
       : this.mode === 'gallery'
         ? '还没有截图记录。完成一次截图后会自动出现在这里。'
         : this.mode === 'textures'
-          ? '还没有贴图。点「导入贴图」把图片复制到资源库。'
+          ? '还没有贴图。点「导入贴图」，或直接把图片 / 整个文件夹拖进这里。'
           : '还没有视频作品。点「上传视频」把视频放进作品区。';
     if (this.mode === 'videos') {
       for (const file of filtered) {
@@ -724,6 +927,9 @@ export class FilesView {
     card.className = 'asset-card';
     card.dataset.filePath = file.path;
     card.dataset.aspect = '1.6';
+    card.title = this.mode === 'textures'
+      ? '单击打开贴图；长按并拖动到左侧文件夹可移动'
+      : '单击打开图片';
 
     const thumb = document.createElement('div');
     thumb.className = 'asset-thumb';
@@ -1014,6 +1220,7 @@ export class FilesView {
       row.classList.remove('folder-drop-target');
     });
     row.addEventListener('drop', (event) => {
+      if (!this.dragFolder) return;
       event.preventDefault();
       event.stopPropagation();
       row.classList.remove('folder-drop-target');

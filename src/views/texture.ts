@@ -27,8 +27,10 @@ const VERTEX_SHADER = `
 
 const FRAGMENT_SHADER = `
   uniform sampler2D uTexture;
+  uniform sampler2D uCurve;
   uniform int uChannel;
-  uniform int uMono;
+  uniform int uLevels;
+  uniform int uCurves;
   uniform float uBlack;
   uniform float uWhite;
   uniform float uGamma;
@@ -39,12 +41,16 @@ const FRAGMENT_SHADER = `
     else if (uChannel == 2) color = vec4(vec3(color.g), 1.0);
     else if (uChannel == 3) color = vec4(vec3(color.b), 1.0);
     else if (uChannel == 4) color = vec4(vec3(color.a), 1.0);
-    if (uMono == 1) {
-      float gray = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+    if (uLevels == 1) {
       float range = max(0.0001, uWhite - uBlack);
-      float level = clamp((gray - uBlack) / range, 0.0, 1.0);
-      level = pow(level, 1.0 / max(0.0001, uGamma));
-      color.rgb = vec3(level);
+      vec3 level = clamp((color.rgb - uBlack) / range, 0.0, 1.0);
+      level = pow(level, vec3(1.0 / max(0.0001, uGamma)));
+      color.rgb = level;
+    }
+    if (uCurves == 1) {
+      color.r = texture2D(uCurve, vec2(clamp(color.r, 0.0, 1.0), 0.5)).r;
+      color.g = texture2D(uCurve, vec2(clamp(color.g, 0.0, 1.0), 0.5)).r;
+      color.b = texture2D(uCurve, vec2(clamp(color.b, 0.0, 1.0), 0.5)).r;
     }
     gl_FragColor = color;
   }
@@ -78,7 +84,7 @@ export class TextureView {
   private panY = 0;
   private channel = 0;
   private background: 'black' | 'gray' | 'checker' = 'checker';
-  private mono = false;
+  private levelsEnabled = false;
   private levelBlack = 0;
   private levelWhite = 255;
   private levelGamma = 1;
@@ -118,6 +124,46 @@ export class TextureView {
   private packPreviewTimer = 0;
   private packBusy = false;
 
+  private composeOverlay: HTMLElement;
+  private composePreview: HTMLCanvasElement;
+  private composePreviewCtx: CanvasRenderingContext2D;
+  private composeSource: { name: string; bitmap: ImageBitmap | HTMLCanvasElement } | null = null;
+  private composeSourceName: HTMLElement;
+  private composeParentThumb: HTMLImageElement;
+  private composeChildThumb: HTMLImageElement;
+  private composeChildEmpty: HTMLElement;
+  private composeParentName: HTMLElement;
+  private composeParentBlend: HTMLSelectElement;
+  private composeParentOpacity: HTMLInputElement;
+  private composeParentOpacityValue: HTMLElement;
+  private composeChildBlend: HTMLSelectElement;
+  private composeChildOpacity: HTMLInputElement;
+  private composeChildOpacityValue: HTMLElement;
+  private composeTarget: HTMLSelectElement;
+  private composeAlphaMode: HTMLSelectElement;
+  private composeColorRow: HTMLElement;
+  private composeChannelRow: HTMLElement;
+  private composeKey: HTMLInputElement;
+  private composeTolerance: HTMLInputElement;
+  private composeToleranceValue: HTMLElement;
+  private composeChannel: HTMLSelectElement;
+  private composeInvert: HTMLInputElement;
+  private composePickButton: HTMLButtonElement;
+  private composePreviewTimer = 0;
+  private composeBusy = false;
+  private composePicking = false;
+  private textureMenu: HTMLElement;
+
+  private curvesEnabled = false;
+  private curvePanel: HTMLElement;
+  private curveCanvas: HTMLCanvasElement;
+  private curveCtx: CanvasRenderingContext2D;
+  private curveToggle: HTMLButtonElement;
+  private curvePoints: Array<{ x: number; y: number }> = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
+  private curveDragIndex = -1;
+  private curveData = new Uint8Array(256 * 4);
+  private curveTexture: THREE.DataTexture;
+
   private aiOverlay: HTMLElement;
   private aiPluginWarning: HTMLElement;
   private aiRuntime: HTMLElement;
@@ -156,39 +202,12 @@ export class TextureView {
     this.element = document.createElement('div');
     this.element.className = 'view texture-view';
     this.element.innerHTML = `
-      <div class="view-toolbar">
+      <div class="view-toolbar texture-actionbar">
         <button class="primary" data-action="open">打开贴图</button>
-        <button data-action="fit">适配窗口</button>
-        <button data-action="color">配色分析</button>
-        <button data-action="pack">通道打包</button>
+        <span class="spacer"></span>
         <button data-action="ai">AI 超分</button>
         <button data-action="export">导出 PNG</button>
         <span class="toolbar-sep"></span>
-        <button data-action="rot-l">旋转 -90°</button>
-        <button data-action="rot-r">旋转 +90°</button>
-        <button data-action="flip-h">水平翻转</button>
-        <button data-action="flip-v">垂直翻转</button>
-        <span class="toolbar-sep"></span>
-        <div class="segmented" data-group="channel">
-          <button data-channel="0" class="active">RGBA</button>
-          <button data-channel="1">R</button>
-          <button data-channel="2">G</button>
-          <button data-channel="3">B</button>
-          <button data-channel="4">A</button>
-        </div>
-        <div class="segmented" data-group="bg">
-          <button data-bg="black">黑</button>
-          <button data-bg="gray">灰</button>
-          <button data-bg="checker" class="active">棋盘</button>
-        </div>
-        <button data-action="mono" id="mono-toggle">黑白</button>
-        <div class="levels-inline hidden">
-          <label>黑场 <input id="level-black" type="range" min="0" max="254" step="1" value="0"><span id="level-black-value">0</span></label>
-          <label>白场 <input id="level-white" type="range" min="1" max="255" step="1" value="255"><span id="level-white-value">255</span></label>
-          <label>伽马 <input id="level-gamma" type="range" min="0.1" max="3" step="0.01" value="1"><span id="level-gamma-value">1.00</span></label>
-          <button data-action="levels-reset">重置</button>
-        </div>
-        <span class="spacer"></span>
         <button data-action="undo">撤销</button>
         <button data-action="redo">重做</button>
       </div>
@@ -240,6 +259,177 @@ export class TextureView {
               <button class="primary" data-pack-export>导出 PNG</button>
               <button data-pack-close>关闭</button>
             </div>
+          </div>
+        </div>
+        <div class="compose-panel hidden">
+          <div class="compose-panel-head">
+            <div class="compose-panel-title">
+              <strong>细节调节</strong>
+              <span>父级 / 子级 · 去底 / 叠加</span>
+            </div>
+          </div>
+          <div class="compose-panel-body">
+            <section class="compose-group">
+              <div class="compose-group-title">父级图片</div>
+              <div class="compose-layer parent">
+                <span class="compose-layer-badge">父</span>
+                <div class="compose-thumb"><img id="compose-parent-thumb" alt=""></div>
+                <div class="compose-layer-text">
+                  <strong>父级 · 当前贴图</strong>
+                  <span id="compose-parent-name">当前贴图</span>
+                </div>
+              </div>
+              <div class="compose-subgroup">
+                <div class="compose-row">
+                  <span class="compose-label">混合模式</span>
+                  <select id="compose-parent-blend">
+                    <option value="source-over" selected>正常</option>
+                    <option value="multiply">正片叠底</option>
+                    <option value="screen">滤色</option>
+                    <option value="overlay">叠加</option>
+                    <option value="darken">变暗</option>
+                    <option value="lighten">变亮</option>
+                  </select>
+                </div>
+                <div class="compose-row">
+                  <span class="compose-label">不透明度</span>
+                  <input id="compose-parent-opacity" type="range" min="0" max="100" step="1" value="100">
+                  <span id="compose-parent-opacity-value" class="compose-value">100%</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="compose-group">
+              <div class="compose-group-title">子级图片</div>
+              <div class="compose-layer child standalone">
+                <span class="compose-layer-badge child">子</span>
+                <div class="compose-thumb">
+                  <img id="compose-child-thumb" alt="">
+                  <span id="compose-child-empty">图片 2</span>
+                </div>
+                <div class="compose-layer-text">
+                  <strong>子级 · 附件图 2</strong>
+                  <span id="compose-source-name">未载入</span>
+                </div>
+                <div class="compose-layer-actions">
+                  <button data-compose-load>载入</button>
+                  <button data-compose-clear>清除</button>
+                </div>
+              </div>
+              <div class="compose-subgroup">
+                <div class="compose-row">
+                  <span class="compose-label">混合模式</span>
+                  <select id="compose-child-blend">
+                    <option value="source-over" selected>正常</option>
+                    <option value="multiply">正片叠底</option>
+                    <option value="screen">滤色</option>
+                    <option value="overlay">叠加</option>
+                    <option value="darken">变暗</option>
+                    <option value="lighten">变亮</option>
+                  </select>
+                </div>
+                <div class="compose-row">
+                  <span class="compose-label">不透明度</span>
+                  <input id="compose-child-opacity" type="range" min="0" max="100" step="1" value="100">
+                  <span id="compose-child-opacity-value" class="compose-value">100%</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="compose-group">
+              <div class="compose-group-title">视图</div>
+              <div class="compose-view-tools">
+                <div class="compose-view-row">
+                  <button data-action="pack" class="compose-tool-button">通道打包</button>
+                  <span class="compose-view-hint">右键画布：适配 / 旋转 / 翻转</span>
+                </div>
+                <div class="compose-view-row">
+                  <span class="compose-view-label">通道</span>
+                  <div class="segmented" data-group="channel">
+                    <button data-channel="0" class="active">RGBA</button>
+                    <button data-channel="1">R</button>
+                    <button data-channel="2">G</button>
+                    <button data-channel="3">B</button>
+                    <button data-channel="4">A</button>
+                  </div>
+                </div>
+                <div class="compose-view-row">
+                  <span class="compose-view-label">背景</span>
+                  <div class="segmented" data-group="bg">
+                    <button data-bg="black">黑</button>
+                    <button data-bg="gray">灰</button>
+                    <button data-bg="checker" class="active">棋盘</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="compose-group">
+              <div class="compose-group-title">调整</div>
+              <div class="compose-view-row">
+                <span class="compose-view-label">调整</span>
+                <button data-action="mono" id="mono-toggle">色阶</button>
+                <button type="button" id="curve-toggle">曲线</button>
+              </div>
+              <div class="levels-inline hidden">
+                <label>黑场 <input id="level-black" type="range" min="0" max="254" step="1" value="0"><span id="level-black-value">0</span></label>
+                <label>白场 <input id="level-white" type="range" min="1" max="255" step="1" value="255"><span id="level-white-value">255</span></label>
+                <label>伽马 <input id="level-gamma" type="range" min="0.1" max="3" step="0.01" value="1"><span id="level-gamma-value">1.00</span></label>
+                <button data-action="levels-reset">重置</button>
+              </div>
+              <div class="curve-editor hidden">
+                <canvas id="curve-canvas" width="260" height="130"></canvas>
+                <div class="curve-hint">拖动控制点调整曲线；双击空白添加，双击控制点删除</div>
+                <button type="button" data-curve-reset>重置曲线</button>
+              </div>
+            </section>
+
+            <section class="compose-group">
+              <div class="compose-group-title">透明处理</div>
+              <div class="compose-row">
+                <span class="compose-label">目标</span>
+                <select id="compose-target">
+                  <option value="source" selected>子级 · 附件图 2</option>
+                  <option value="base">父级 · 当前图</option>
+                </select>
+                <select id="compose-alpha-mode">
+                  <option value="none">不处理</option>
+                  <option value="color" selected>删除底色</option>
+                  <option value="channel">通道遮罩</option>
+                </select>
+              </div>
+              <div class="compose-row" id="compose-color-row">
+                <span class="compose-label">底色</span>
+                <input id="compose-key" type="color" value="#ffffff">
+                <button data-compose-pick>从预览拾取</button>
+                <label class="compose-inline">容差
+                  <input id="compose-tolerance" type="range" min="0" max="128" step="1" value="18">
+                  <span id="compose-tolerance-value">18</span>
+                </label>
+              </div>
+              <div class="compose-row hidden" id="compose-channel-row">
+                <span class="compose-label">遮罩通道</span>
+                <select id="compose-channel">
+                  <option value="l" selected>亮度</option>
+                  <option value="r">R</option>
+                  <option value="g">G</option>
+                  <option value="b">B</option>
+                  <option value="a">A</option>
+                </select>
+                <label class="compose-inline"><input id="compose-invert" type="checkbox"> 反向</label>
+              </div>
+            </section>
+
+            <section class="compose-group">
+              <div class="compose-group-title">预览</div>
+              <div class="pack-preview-wrap compose-preview-wrap"><canvas id="compose-preview"></canvas></div>
+              <div class="pack-actions">
+                <span class="pack-hint" id="compose-size"></span>
+                <span class="spacer"></span>
+                <button class="primary" data-compose-apply>应用到当前贴图</button>
+                <button data-compose-export>导出 PNG</button>
+              </div>
+            </section>
           </div>
         </div>
         <div class="pack-overlay ai-overlay hidden">
@@ -334,6 +524,34 @@ export class TextureView {
       b: this.element.querySelector('[data-pack-slot="b"]') as HTMLSelectElement,
       a: this.element.querySelector('[data-pack-slot="a"]') as HTMLSelectElement
     };
+    this.composeOverlay = this.element.querySelector('.compose-panel') as HTMLElement;
+    this.composePreview = this.element.querySelector('#compose-preview') as HTMLCanvasElement;
+    this.composePreviewCtx = this.composePreview.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
+    this.composeSourceName = this.element.querySelector('#compose-source-name') as HTMLElement;
+    this.composeParentThumb = this.element.querySelector('#compose-parent-thumb') as HTMLImageElement;
+    this.composeChildThumb = this.element.querySelector('#compose-child-thumb') as HTMLImageElement;
+    this.composeChildEmpty = this.element.querySelector('#compose-child-empty') as HTMLElement;
+    this.composeParentName = this.element.querySelector('#compose-parent-name') as HTMLElement;
+    this.composeParentBlend = this.element.querySelector('#compose-parent-blend') as HTMLSelectElement;
+    this.composeParentOpacity = this.element.querySelector('#compose-parent-opacity') as HTMLInputElement;
+    this.composeParentOpacityValue = this.element.querySelector('#compose-parent-opacity-value') as HTMLElement;
+    this.composeChildBlend = this.element.querySelector('#compose-child-blend') as HTMLSelectElement;
+    this.composeChildOpacity = this.element.querySelector('#compose-child-opacity') as HTMLInputElement;
+    this.composeChildOpacityValue = this.element.querySelector('#compose-child-opacity-value') as HTMLElement;
+    this.composeTarget = this.element.querySelector('#compose-target') as HTMLSelectElement;
+    this.composeAlphaMode = this.element.querySelector('#compose-alpha-mode') as HTMLSelectElement;
+    this.composeColorRow = this.element.querySelector('#compose-color-row') as HTMLElement;
+    this.composeChannelRow = this.element.querySelector('#compose-channel-row') as HTMLElement;
+    this.composeKey = this.element.querySelector('#compose-key') as HTMLInputElement;
+    this.composeTolerance = this.element.querySelector('#compose-tolerance') as HTMLInputElement;
+    this.composeToleranceValue = this.element.querySelector('#compose-tolerance-value') as HTMLElement;
+    this.composeChannel = this.element.querySelector('#compose-channel') as HTMLSelectElement;
+    this.composeInvert = this.element.querySelector('#compose-invert') as HTMLInputElement;
+    this.composePickButton = this.element.querySelector('[data-compose-pick]') as HTMLButtonElement;
+    this.curvePanel = this.element.querySelector('.curve-editor') as HTMLElement;
+    this.curveCanvas = this.element.querySelector('#curve-canvas') as HTMLCanvasElement;
+    this.curveCtx = this.curveCanvas.getContext('2d') as CanvasRenderingContext2D;
+    this.curveToggle = this.element.querySelector('#curve-toggle') as HTMLButtonElement;
     this.aiOverlay = this.element.querySelector('.ai-overlay') as HTMLElement;
     this.aiPluginWarning = this.element.querySelector('#ai-plugin-warning') as HTMLElement;
     this.aiRuntime = this.element.querySelector('#ai-runtime') as HTMLElement;
@@ -356,6 +574,20 @@ export class TextureView {
     this.levelWhiteValue = this.element.querySelector('#level-white-value') as HTMLElement;
     this.levelGammaValue = this.element.querySelector('#level-gamma-value') as HTMLElement;
     this.probeCtx = this.probeCanvas.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
+    for (let index = 0; index < 256; index += 1) {
+      const offset = index * 4;
+      this.curveData[offset] = index;
+      this.curveData[offset + 1] = index;
+      this.curveData[offset + 2] = index;
+      this.curveData[offset + 3] = 255;
+    }
+    this.curveTexture = new THREE.DataTexture(this.curveData, 256, 1, THREE.RGBAFormat);
+    this.curveTexture.minFilter = THREE.LinearFilter;
+    this.curveTexture.magFilter = THREE.LinearFilter;
+    this.curveTexture.needsUpdate = true;
+    this.textureMenu = document.createElement('div');
+    this.textureMenu.className = 'context-menu texture-context-menu hidden';
+    document.body.append(this.textureMenu);
 
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
@@ -377,7 +609,6 @@ export class TextureView {
   private bindEvents(): void {
     this.element.querySelector('[data-action="open"]')?.addEventListener('click', () => void this.pickOpen());
     this.element.querySelector('[data-action="fit"]')?.addEventListener('click', () => this.fit());
-    this.element.querySelector('[data-action="color"]')?.addEventListener('click', () => this.onAnalyze?.());
     this.element.querySelector('[data-action="pack"]')?.addEventListener('click', () => this.openPackPanel());
     this.element.querySelector('[data-action="ai"]')?.addEventListener('click', () => void this.openAiPanel());
     this.element.querySelector('[data-action="export"]')?.addEventListener('click', () => void this.exportCurrent());
@@ -450,18 +681,71 @@ export class TextureView {
     Object.values(this.packSelects).forEach((select) => {
       select.addEventListener('change', () => this.schedulePackPreview());
     });
+
+    this.element.querySelector('[data-compose-load]')?.addEventListener('click', () => void this.loadComposeSource());
+    this.element.querySelector('[data-compose-clear]')?.addEventListener('click', () => this.clearComposeSource());
+    this.element.querySelector('[data-compose-apply]')?.addEventListener('click', () => void this.applyCompose());
+    this.element.querySelector('[data-compose-export]')?.addEventListener('click', () => void this.exportCompose());
+    this.composeParentBlend.addEventListener('change', () => this.scheduleComposePreview());
+    this.composeParentOpacity.addEventListener('input', () => {
+      this.composeParentOpacityValue.textContent = `${this.composeParentOpacity.value}%`;
+      this.scheduleComposePreview();
+    });
+    this.composeChildBlend.addEventListener('change', () => this.scheduleComposePreview());
+    this.composeChildOpacity.addEventListener('input', () => {
+      this.composeChildOpacityValue.textContent = `${this.composeChildOpacity.value}%`;
+      this.scheduleComposePreview();
+    });
+    this.composeTarget.addEventListener('change', () => this.updateComposeRows());
+    this.composeAlphaMode.addEventListener('change', () => {
+      this.updateComposeRows();
+      this.scheduleComposePreview();
+    });
+    this.composeKey.addEventListener('input', () => this.scheduleComposePreview());
+    this.composeTolerance.addEventListener('input', () => {
+      this.composeToleranceValue.textContent = this.composeTolerance.value;
+      this.scheduleComposePreview();
+    });
+    this.composeChannel.addEventListener('change', () => this.scheduleComposePreview());
+    this.composeInvert.addEventListener('change', () => this.scheduleComposePreview());
+    this.composePickButton.addEventListener('click', () => {
+      this.composePicking = !this.composePicking;
+      this.composePickButton.textContent = this.composePicking ? '点击预览拾取…' : '从预览拾取';
+      this.composePreview.classList.toggle('picking', this.composePicking);
+    });
+    this.composePreview.addEventListener('click', (event) => this.pickComposeColor(event));
+    this.composeOverlay.addEventListener('dragover', (event) => {
+      if (!event.dataTransfer?.types || !Array.from(event.dataTransfer.types).includes('Files')) return;
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    this.composeOverlay.addEventListener('drop', (event) => {
+      const file = event.dataTransfer?.files?.[0];
+      if (!file || !file.type.startsWith('image/')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void this.loadComposeFile(file);
+    });
     this.element.querySelector('[data-action="normal-g"]')?.addEventListener('click', () => {
       this.toggleNormalG();
     });
     this.element.querySelector('[data-action="normal-dismiss"]')?.addEventListener('click', () => {
       this.normalBanner.classList.add('hidden');
     });
-    this.element.querySelector('[data-action="rot-l"]')?.addEventListener('click', () => this.rotate(-90));
-    this.element.querySelector('[data-action="rot-r"]')?.addEventListener('click', () => this.rotate(90));
-    this.element.querySelector('[data-action="flip-h"]')?.addEventListener('click', () => this.flip('h'));
-    this.element.querySelector('[data-action="flip-v"]')?.addEventListener('click', () => this.flip('v'));
     this.element.querySelector('[data-action="undo"]')?.addEventListener('click', () => this.undo());
     this.element.querySelector('[data-action="redo"]')?.addEventListener('click', () => this.redo());
+    this.canvas.addEventListener('contextmenu', (event) => {
+      if (!this.bitmap) return;
+      event.preventDefault();
+      this.showTextureMenu(event.clientX, event.clientY);
+    });
+    document.addEventListener('pointerdown', (event) => {
+      if (!this.textureMenu.contains(event.target as Node)) this.hideTextureMenu();
+    });
+    window.addEventListener('blur', () => this.hideTextureMenu());
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') this.hideTextureMenu();
+    });
 
     this.element.querySelectorAll('[data-channel]').forEach((button) => {
       button.addEventListener('click', () => {
@@ -477,8 +761,11 @@ export class TextureView {
       });
     });
 
-    this.element.querySelector('[data-action="mono"]')?.addEventListener('click', () => this.setMono(!this.mono));
+    this.element.querySelector('[data-action="mono"]')?.addEventListener('click', () => this.setLevelsEnabled(!this.levelsEnabled));
     this.element.querySelector('[data-action="levels-reset"]')?.addEventListener('click', () => this.resetLevels());
+    this.curveToggle.addEventListener('click', () => this.setCurvesEnabled(!this.curvesEnabled));
+    this.element.querySelector('[data-curve-reset]')?.addEventListener('click', () => this.resetCurve());
+    this.bindCurveEditor();
     this.levelBlackInput.addEventListener('input', () => {
       this.levelBlack = Math.min(Number(this.levelBlackInput.value), this.levelWhite - 1);
       this.syncLevelInputs();
@@ -705,8 +992,10 @@ export class TextureView {
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         uTexture: { value: this.texture },
+        uCurve: { value: this.curveTexture },
         uChannel: { value: this.channel },
-        uMono: { value: this.mono ? 1 : 0 },
+        uLevels: { value: this.levelsEnabled ? 1 : 0 },
+        uCurves: { value: this.curvesEnabled ? 1 : 0 },
         uBlack: { value: this.levelBlack / 255 },
         uWhite: { value: this.levelWhite / 255 },
         uGamma: { value: this.levelGamma }
@@ -727,6 +1016,7 @@ export class TextureView {
     this.emptyState.classList.add('hidden');
     this.metaBadge.classList.remove('hidden');
     this.metaBadge.textContent = `${width} × ${height} · ${name} · ${formatBytes(size)}`;
+    this.openComposePanel();
     this.applyTransform();
     this.fit();
     this.callbacks.status.set(name, `${width} × ${height} · ${formatBytes(size)}`);
@@ -1091,6 +1381,298 @@ export class TextureView {
     }
   }
 
+  private openComposePanel(): void {
+    if (!this.bitmap) return;
+    this.body.classList.add('compose-docked');
+    this.composeOverlay.classList.remove('hidden');
+    this.refreshComposeThumbs();
+    this.updateComposeRows();
+    this.scheduleComposePreview();
+  }
+
+  private updateComposeRows(): void {
+    const mode = this.composeAlphaMode.value;
+    this.composeColorRow.classList.toggle('hidden', mode !== 'color');
+    this.composeChannelRow.classList.toggle('hidden', mode !== 'channel');
+    this.scheduleComposePreview();
+  }
+
+  private scheduleComposePreview(): void {
+    window.clearTimeout(this.composePreviewTimer);
+    this.composePreviewTimer = window.setTimeout(() => this.updateComposePreview(), 60);
+  }
+
+  private updateComposePreview(): void {
+    if (this.composeOverlay.classList.contains('hidden')) return;
+    const canvas = this.composeImage(512);
+    if (!canvas) return;
+    this.composePreview.width = canvas.width;
+    this.composePreview.height = canvas.height;
+    this.composePreviewCtx.clearRect(0, 0, canvas.width, canvas.height);
+    this.composePreviewCtx.drawImage(canvas, 0, 0);
+    const size = this.element.querySelector('#compose-size') as HTMLElement | null;
+    if (size) {
+      size.textContent = `${this.imageWidth} × ${this.imageHeight} · 输出 PNG${canvas.width !== this.imageWidth ? '（预览已缩放）' : ''}`;
+    }
+  }
+
+  private composeImage(maxSize: number): HTMLCanvasElement | null {
+    if (!this.bitmap || !this.imageWidth || !this.imageHeight) return null;
+    let width = this.imageWidth;
+    let height = this.imageHeight;
+    if (maxSize > 0) {
+      const scale = Math.min(1, maxSize / Math.max(width, height));
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+    } else if (Math.max(width, height) > 4096) {
+      const scale = 4096 / Math.max(width, height);
+      width = Math.max(1, Math.round(width * scale));
+      height = Math.max(1, Math.round(height * scale));
+      this.callbacks.toast('输出超过 4096，已按比例缩小', 'info');
+    }
+
+    const parentCanvas = document.createElement('canvas');
+    parentCanvas.width = width;
+    parentCanvas.height = height;
+    const parentContext = parentCanvas.getContext('2d', { willReadFrequently: true });
+    if (!parentContext) return null;
+    parentContext.drawImage(this.bitmap as CanvasImageSource, 0, 0, width, height);
+    const target = this.composeTarget.value;
+    const alphaMode = this.composeAlphaMode.value;
+
+    if (target === 'base' && alphaMode !== 'none') {
+      this.applyComposeTransparency(parentContext, width, height);
+    }
+
+    const output = document.createElement('canvas');
+    output.width = width;
+    output.height = height;
+    const outputContext = output.getContext('2d');
+    if (!outputContext) return null;
+    outputContext.save();
+    outputContext.globalAlpha = Math.max(0, Math.min(1, Number(this.composeParentOpacity.value) / 100));
+    outputContext.globalCompositeOperation = this.composeParentBlend.value as GlobalCompositeOperation;
+    outputContext.drawImage(parentCanvas, 0, 0);
+    outputContext.restore();
+
+    if (this.composeSource) {
+      const sourceCanvas = document.createElement('canvas');
+      sourceCanvas.width = width;
+      sourceCanvas.height = height;
+      const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+      if (!sourceContext) return null;
+      sourceContext.drawImage(this.composeSource.bitmap as CanvasImageSource, 0, 0, width, height);
+      if (target === 'source' && alphaMode !== 'none') {
+        this.applyComposeTransparency(sourceContext, width, height);
+      }
+      outputContext.save();
+      outputContext.globalAlpha = Math.max(0, Math.min(1, Number(this.composeChildOpacity.value) / 100));
+      outputContext.globalCompositeOperation = this.composeChildBlend.value as GlobalCompositeOperation;
+      outputContext.drawImage(sourceCanvas, 0, 0);
+      outputContext.restore();
+    }
+
+    return output;
+  }
+
+  private applyComposeTransparency(context: CanvasRenderingContext2D, width: number, height: number): void {
+    const image = context.getImageData(0, 0, width, height);
+    const data = image.data;
+    if (this.composeAlphaMode.value === 'color') {
+      const color = this.composeKey.value.replace('#', '');
+      const keyR = Number.parseInt(color.slice(0, 2), 16) || 0;
+      const keyG = Number.parseInt(color.slice(2, 4), 16) || 0;
+      const keyB = Number.parseInt(color.slice(4, 6), 16) || 0;
+      const tolerance = Math.max(0, Math.min(255, Number(this.composeTolerance.value) || 0));
+      for (let index = 0; index < data.length; index += 4) {
+        if (
+          Math.abs(data[index] - keyR) <= tolerance &&
+          Math.abs(data[index + 1] - keyG) <= tolerance &&
+          Math.abs(data[index + 2] - keyB) <= tolerance
+        ) {
+          data[index + 3] = 0;
+        }
+      }
+    } else if (this.composeAlphaMode.value === 'channel') {
+      const channel = this.composeChannel.value;
+      const invert = this.composeInvert.checked;
+      for (let index = 0; index < data.length; index += 4) {
+        const r = data[index];
+        const g = data[index + 1];
+        const b = data[index + 2];
+        const a = data[index + 3];
+        let value = 0;
+        if (channel === 'r') value = r;
+        else if (channel === 'g') value = g;
+        else if (channel === 'b') value = b;
+        else if (channel === 'a') value = a;
+        else value = Math.round(r * 0.2126 + g * 0.7152 + b * 0.0722);
+        if (invert) value = 255 - value;
+        data[index + 3] = Math.round(a * (value / 255));
+      }
+    }
+    context.putImageData(image, 0, 0);
+  }
+
+  private async loadComposeSource(): Promise<void> {
+    const filePath = await window.nyxel.dialog.openImage();
+    if (!filePath) return;
+    try {
+      const buffer = await window.nyxel.file.read(filePath);
+      const ext = extname(filePath);
+      let source: ImageBitmap | HTMLCanvasElement;
+      if (ext === '.tga') {
+        source = this.decodeTga(buffer);
+      } else {
+        const blob = new Blob([new Uint8Array(buffer)], { type: mimeFromExt(basename(filePath)) });
+        source = await createImageBitmap(blob);
+      }
+      this.clearComposeSource();
+      this.composeSource = { name: basename(filePath), bitmap: source };
+      this.refreshComposeThumbs();
+      this.scheduleComposePreview();
+    } catch (error) {
+      this.callbacks.toast(
+        `载入附件图 2 失败：${error instanceof Error ? error.message : String(error)}`,
+        'error'
+      );
+    }
+  }
+
+  private async loadComposeFile(file: File): Promise<void> {
+    try {
+      const source = await createImageBitmap(file);
+      this.clearComposeSource();
+      this.composeSource = { name: file.name || '附件图 2', bitmap: source };
+      this.refreshComposeThumbs();
+      this.scheduleComposePreview();
+    } catch (error) {
+      this.callbacks.toast(
+        `载入附件图 2 失败：${error instanceof Error ? error.message : String(error)}`,
+        'error'
+      );
+    }
+  }
+
+  private clearComposeSource(): void {
+    if (this.composeSource?.bitmap instanceof ImageBitmap) this.composeSource.bitmap.close();
+    this.composeSource = null;
+    this.refreshComposeThumbs();
+  }
+
+  private composeThumbnail(source: ImageBitmap | HTMLCanvasElement): string {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext('2d');
+    if (!context) return '';
+    const sourceWidth = source.width;
+    const sourceHeight = source.height;
+    const scale = Math.min(64 / Math.max(1, sourceWidth), 64 / Math.max(1, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    context.drawImage(
+      source as CanvasImageSource,
+      Math.round((64 - width) / 2),
+      Math.round((64 - height) / 2),
+      width,
+      height
+    );
+    return canvas.toDataURL('image/png');
+  }
+
+  private refreshComposeThumbs(): void {
+    if (!this.composeParentThumb || !this.composeChildThumb) return;
+    this.composeParentName.textContent = this.fileName || '当前贴图';
+    if (this.bitmap) {
+      this.composeParentThumb.src = this.composeThumbnail(this.bitmap);
+      this.composeParentThumb.classList.remove('hidden');
+    } else {
+      this.composeParentThumb.removeAttribute('src');
+      this.composeParentThumb.classList.add('hidden');
+    }
+    if (this.composeSource) {
+      this.composeChildThumb.src = this.composeThumbnail(this.composeSource.bitmap);
+      this.composeChildThumb.classList.remove('hidden');
+      this.composeChildEmpty.classList.add('hidden');
+      this.composeSourceName.textContent = this.composeSource.name;
+    } else {
+      this.composeChildThumb.removeAttribute('src');
+      this.composeChildThumb.classList.add('hidden');
+      this.composeChildEmpty.classList.remove('hidden');
+      this.composeSourceName.textContent = '未载入';
+    }
+  }
+
+  private composeOutputName(): string {
+    return `${this.currentBaseName()}_compose.png`;
+  }
+
+  private async applyCompose(): Promise<void> {
+    if (this.composeBusy) return;
+    this.composeBusy = true;
+    try {
+      const canvas = this.composeImage(0);
+      if (!canvas) return;
+      const hadSource = Boolean(this.composeSource);
+      this.setImage(canvas, canvas.width, canvas.height, this.composeOutputName(), '', canvas.width * canvas.height * 4);
+      if (hadSource) this.clearComposeSource();
+      this.callbacks.toast('已应用合成结果', 'success');
+    } catch (error) {
+      this.callbacks.toast(`应用失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    } finally {
+      this.composeBusy = false;
+    }
+  }
+
+  private async exportCompose(): Promise<void> {
+    if (this.composeBusy) return;
+    this.composeBusy = true;
+    try {
+      const canvas = this.composeImage(0);
+      if (!canvas) return;
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('PNG 编码失败');
+      const data = new Uint8Array(await blob.arrayBuffer());
+      const saved = await window.nyxel.file.savePng(data, this.composeOutputName());
+      if (saved) this.callbacks.toast(`已导出：${saved}`, 'success');
+    } catch (error) {
+      this.callbacks.toast(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    } finally {
+      this.composeBusy = false;
+    }
+  }
+
+  private pickComposeColor(event: MouseEvent): void {
+    if (!this.composePicking) return;
+    const source = this.composeTarget.value === 'source' ? this.composeSource?.bitmap : this.bitmap;
+    if (!source) {
+      this.callbacks.toast('当前透明处理目标还没有图片', 'info');
+      return;
+    }
+    const rect = this.composePreview.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const sourceWidth = source.width;
+    const sourceHeight = source.height;
+    const x = Math.max(0, Math.min(sourceWidth - 1, Math.floor(((event.clientX - rect.left) / rect.width) * sourceWidth)));
+    const y = Math.max(0, Math.min(sourceHeight - 1, Math.floor(((event.clientY - rect.top) / rect.height) * sourceHeight)));
+    const sample = document.createElement('canvas');
+    sample.width = sourceWidth;
+    sample.height = sourceHeight;
+    const context = sample.getContext('2d', { willReadFrequently: true });
+    if (!context) return;
+    context.drawImage(source as CanvasImageSource, 0, 0);
+    const pixel = context.getImageData(x, y, 1, 1).data;
+    const hex = `#${[pixel[0], pixel[1], pixel[2]].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
+    this.composeKey.value = hex;
+    this.composeAlphaMode.value = 'color';
+    this.updateComposeRows();
+    this.composePicking = false;
+    this.composePickButton.textContent = '从预览拾取';
+    this.composePreview.classList.remove('picking');
+    this.scheduleComposePreview();
+  }
+
   private currentBaseName(): string {
     return this.fileName.replace(/\.[^.]+$/, '') || 'texture';
   }
@@ -1115,11 +1697,18 @@ export class TextureView {
       const context = canvas.getContext('2d', { willReadFrequently: true });
       if (!context) throw new Error('无法创建导出画布');
       context.drawImage(this.bitmap as CanvasImageSource, 0, 0);
-      if (this.mono) this.applyMonoToCanvas(canvas);
+      if (this.levelsEnabled) this.applyLevelsToCanvas(canvas);
+      if (this.curvesEnabled) this.applyCurvesToCanvas(canvas);
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('PNG 编码失败');
       const data = new Uint8Array(await blob.arrayBuffer());
-      const suffix = this.mono ? '_bw_export.png' : '_export.png';
+      const suffix = this.levelsEnabled && this.curvesEnabled
+        ? '_adjusted_export.png'
+        : this.levelsEnabled
+          ? '_levels_export.png'
+          : this.curvesEnabled
+            ? '_curves_export.png'
+            : '_export.png';
       const saved = await window.nyxel.file.savePng(data, `${this.currentBaseName()}${suffix}`);
       if (saved) this.callbacks.toast(`已导出：${saved}`, 'success');
     } catch (error) {
@@ -1511,6 +2100,37 @@ export class TextureView {
     this.fit();
   }
 
+  private showTextureMenu(x: number, y: number): void {
+    const items: Array<[string, () => void]> = [
+      ['适配窗口', () => this.fit()],
+      ['旋转 -90°', () => this.rotate(-90)],
+      ['旋转 +90°', () => this.rotate(90)],
+      ['水平翻转', () => this.flip('h')],
+      ['垂直翻转', () => this.flip('v')]
+    ];
+    this.textureMenu.innerHTML = '';
+    for (const [label, action] of items) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', () => {
+        this.hideTextureMenu();
+        action();
+      });
+      this.textureMenu.append(button);
+    }
+    this.textureMenu.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      const rect = this.textureMenu.getBoundingClientRect();
+      this.textureMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+      this.textureMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    });
+  }
+
+  private hideTextureMenu(): void {
+    this.textureMenu.classList.add('hidden');
+  }
+
   private undo(): void {
     if (!this.history.length) return;
     this.redoStack.push(this.snapshot());
@@ -1533,13 +2153,187 @@ export class TextureView {
     });
   }
 
-  private setMono(value: boolean): void {
-    this.mono = value;
+  private setLevelsEnabled(value: boolean): void {
+    this.levelsEnabled = value;
     const button = this.element.querySelector('#mono-toggle') as HTMLButtonElement | null;
     if (button) button.classList.toggle('active', value);
     this.levelsInline.classList.toggle('hidden', !value);
     this.updateLevelUniforms();
     this.callbacks.status.set(this.fileName, this.metaText());
+  }
+
+  private setCurvesEnabled(value: boolean): void {
+    this.curvesEnabled = value;
+    this.curveToggle.classList.toggle('active', value);
+    this.curvePanel.classList.toggle('hidden', !value);
+    if (value) this.buildCurveLut();
+    if (this.material) this.material.uniforms.uCurves.value = value ? 1 : 0;
+    this.callbacks.status.set(this.fileName, this.metaText());
+  }
+
+  private bindCurveEditor(): void {
+    const canvas = this.curveCanvas;
+    const pointFromEvent = (event: PointerEvent | MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
+      const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+      return {
+        px,
+        py,
+        x: Math.max(0, Math.min(1, px / canvas.width)),
+        y: Math.max(0, Math.min(1, 1 - py / canvas.height))
+      };
+    };
+    const hitPoint = (px: number, py: number) => this.curvePoints.findIndex((point) => (
+      Math.hypot(point.x * canvas.width - px, (1 - point.y) * canvas.height - py) <= 10
+    ));
+    canvas.addEventListener('pointerdown', (event) => {
+      const point = pointFromEvent(event);
+      const index = hitPoint(point.px, point.py);
+      if (index < 0) return;
+      event.preventDefault();
+      this.curveDragIndex = index;
+      canvas.setPointerCapture(event.pointerId);
+    });
+    canvas.addEventListener('pointermove', (event) => {
+      if (this.curveDragIndex < 0) return;
+      const point = pointFromEvent(event);
+      const index = this.curveDragIndex;
+      const current = this.curvePoints[index];
+      if (!current) return;
+      if (index === 0) current.x = 0;
+      else if (index === this.curvePoints.length - 1) current.x = 1;
+      else {
+        const min = this.curvePoints[index - 1].x + 0.008;
+        const max = this.curvePoints[index + 1].x - 0.008;
+        current.x = Math.max(min, Math.min(max, point.x));
+      }
+      current.y = point.y;
+      this.buildCurveLut();
+    });
+    const endDrag = () => { this.curveDragIndex = -1; };
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    canvas.addEventListener('dblclick', (event) => {
+      const point = pointFromEvent(event);
+      const index = hitPoint(point.px, point.py);
+      if (index >= 0) {
+        if (index === 0 || index === this.curvePoints.length - 1) return;
+        this.curvePoints.splice(index, 1);
+        this.buildCurveLut();
+        return;
+      }
+      if (point.x <= 0.01 || point.x >= 0.99) return;
+      this.curvePoints.push({ x: point.x, y: point.y });
+      this.curvePoints.sort((left, right) => left.x - right.x);
+      this.buildCurveLut();
+    });
+  }
+
+  private resetCurve(): void {
+    this.curvePoints = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
+    this.buildCurveLut();
+  }
+
+  private buildCurveLut(): void {
+    const points = this.curvePoints.slice().sort((left, right) => left.x - right.x);
+    if (points.length < 2) {
+      points.splice(0, points.length, { x: 0, y: 0 }, { x: 1, y: 1 });
+    }
+    const count = points.length;
+    const slopes: number[] = [];
+    for (let index = 0; index < count - 1; index += 1) {
+      slopes.push((points[index + 1].y - points[index].y) / Math.max(0.0001, points[index + 1].x - points[index].x));
+    }
+    const tangents: number[] = new Array(count).fill(0);
+    tangents[0] = slopes[0] ?? 0;
+    tangents[count - 1] = slopes[count - 2] ?? 0;
+    for (let index = 1; index < count - 1; index += 1) {
+      tangents[index] = ((slopes[index - 1] ?? 0) + (slopes[index] ?? 0)) / 2;
+    }
+    for (let index = 0; index < 256; index += 1) {
+      const x = index / 255;
+      let y: number;
+      if (x <= points[0].x) {
+        y = points[0].y;
+      } else if (x >= points[count - 1].x) {
+        y = points[count - 1].y;
+      } else {
+        let segment = 0;
+        while (segment < count - 2 && x > points[segment + 1].x) segment += 1;
+        const left = points[segment];
+        const right = points[segment + 1];
+        const span = Math.max(0.0001, right.x - left.x);
+        const t = (x - left.x) / span;
+        const t2 = t * t;
+        const t3 = t2 * t;
+        y = (2 * t3 - 3 * t2 + 1) * left.y
+          + (t3 - 2 * t2 + t) * span * tangents[segment]
+          + (-2 * t3 + 3 * t2) * right.y
+          + (t3 - t2) * span * tangents[segment + 1];
+      }
+      const value = Math.round(Math.max(0, Math.min(1, y)) * 255);
+      const offset = index * 4;
+      this.curveData[offset] = value;
+      this.curveData[offset + 1] = value;
+      this.curveData[offset + 2] = value;
+      this.curveData[offset + 3] = 255;
+    }
+    this.curveTexture.needsUpdate = true;
+    if (this.material) {
+      this.material.uniforms.uCurves.value = this.curvesEnabled ? 1 : 0;
+    }
+    this.drawCurveEditor();
+  }
+
+  private drawCurveEditor(): void {
+    const canvas = this.curveCanvas;
+    const context = this.curveCtx;
+    const width = canvas.width;
+    const height = canvas.height;
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = '#151515';
+    context.fillRect(0, 0, width, height);
+    context.strokeStyle = '#303030';
+    context.lineWidth = 1;
+    for (let index = 1; index < 4; index += 1) {
+      const x = (index / 4) * width;
+      const y = (index / 4) * height;
+      context.beginPath();
+      context.moveTo(x, 0);
+      context.lineTo(x, height);
+      context.moveTo(0, y);
+      context.lineTo(width, y);
+      context.stroke();
+    }
+    context.setLineDash([4, 4]);
+    context.strokeStyle = '#3c3c3c';
+    context.beginPath();
+    context.moveTo(0, height);
+    context.lineTo(width, 0);
+    context.stroke();
+    context.setLineDash([]);
+    context.strokeStyle = '#9fe0b8';
+    context.lineWidth = 1.6;
+    context.beginPath();
+    for (let index = 0; index < 256; index += 1) {
+      const x = (index / 255) * width;
+      const y = (1 - this.curveData[index * 4] / 255) * height;
+      if (index === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    }
+    context.stroke();
+    for (const point of this.curvePoints) {
+      const x = point.x * width;
+      const y = (1 - point.y) * height;
+      context.beginPath();
+      context.arc(x, y, 4, 0, Math.PI * 2);
+      context.fillStyle = '#0c3626';
+      context.fill();
+      context.strokeStyle = '#9fe0b8';
+      context.lineWidth = 1.5;
+      context.stroke();
+    }
   }
 
   private resetLevels(): void {
@@ -1563,29 +2357,38 @@ export class TextureView {
 
   private updateLevelUniforms(): void {
     if (!this.material) return;
-    this.material.uniforms.uMono.value = this.mono ? 1 : 0;
+    this.material.uniforms.uLevels.value = this.levelsEnabled ? 1 : 0;
     this.material.uniforms.uBlack.value = this.levelBlack / 255;
     this.material.uniforms.uWhite.value = Math.max(this.levelBlack + 1, this.levelWhite) / 255;
     this.material.uniforms.uGamma.value = Math.max(0.01, this.levelGamma);
   }
 
-  private applyMonoToCanvas(canvas: HTMLCanvasElement): void {
+  private applyLevelsToCanvas(canvas: HTMLCanvasElement): void {
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) return;
     const image = context.getImageData(0, 0, canvas.width, canvas.height);
     const black = this.levelBlack / 255;
     const range = Math.max(1 / 255, (this.levelWhite - this.levelBlack) / 255);
     const inverseGamma = 1 / Math.max(0.01, this.levelGamma);
+    const level = (value: number) => Math.round(
+      Math.pow(Math.min(1, Math.max(0, (value / 255 - black) / range)), inverseGamma) * 255
+    );
     for (let index = 0; index < image.data.length; index += 4) {
-      const r = image.data[index] / 255;
-      const g = image.data[index + 1] / 255;
-      const b = image.data[index + 2] / 255;
-      const gray = r * 0.2126 + g * 0.7152 + b * 0.0722;
-      const level = Math.pow(Math.min(1, Math.max(0, (gray - black) / range)), inverseGamma);
-      const value = Math.round(level * 255);
-      image.data[index] = value;
-      image.data[index + 1] = value;
-      image.data[index + 2] = value;
+      image.data[index] = level(image.data[index]);
+      image.data[index + 1] = level(image.data[index + 1]);
+      image.data[index + 2] = level(image.data[index + 2]);
+    }
+    context.putImageData(image, 0, 0);
+  }
+
+  private applyCurvesToCanvas(canvas: HTMLCanvasElement): void {
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return;
+    const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    for (let index = 0; index < image.data.length; index += 4) {
+      image.data[index] = this.curveData[image.data[index] * 4];
+      image.data[index + 1] = this.curveData[image.data[index + 1] * 4];
+      image.data[index + 2] = this.curveData[image.data[index + 2] * 4];
     }
     context.putImageData(image, 0, 0);
   }
