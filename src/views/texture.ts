@@ -190,6 +190,47 @@ export class TextureView {
   private aiAvailable = false;
   private aiBusy = false;
 
+  private composePanel: HTMLElement;
+  private composeBody: HTMLElement;
+  private aiPanelBody: HTMLElement;
+  private aiEntryButton: HTMLButtonElement;
+  private aiMode = false;
+  private aiPanelStatus: HTMLElement;
+  private aiCutTolerance: HTMLInputElement;
+  private aiCutToleranceValue: HTMLElement;
+  private aiCutFeather: HTMLInputElement;
+  private aiCutFeatherValue: HTMLElement;
+  private aiCutRestoreButton: HTMLButtonElement;
+  private aiCutoutBackup: {
+    canvas: HTMLCanvasElement;
+    width: number;
+    height: number;
+    name: string;
+    path: string;
+    size: number;
+  } | null = null;
+
+  private aiSeqSource: HTMLSelectElement;
+  private aiSeqCols: HTMLInputElement;
+  private aiSeqRows: HTMLInputElement;
+  private aiSeqGrid: HTMLCanvasElement;
+  private aiSeqGridCtx: CanvasRenderingContext2D;
+  private aiSeqPreview: HTMLCanvasElement;
+  private aiSeqPreviewCtx: CanvasRenderingContext2D;
+  private aiSeqCount: HTMLElement;
+  private aiSeqStatus: HTMLElement;
+  private aiSeqPlayButton: HTMLButtonElement;
+  private aiSeqFps: HTMLInputElement;
+  private aiSeqFpsValue: HTMLElement;
+  private aiSeqLoop: HTMLInputElement;
+  private aiSeqSelected = new Set<number>();
+  private aiSeqLastCell = -1;
+  private aiSeqPlaying = false;
+  private aiSeqRaf = 0;
+  private aiSeqFrameIndex = 0;
+  private aiSeqLastTime = 0;
+  private aiSeqLayout = { x: 0, y: 0, width: 1, height: 1, cellWidth: 1, cellHeight: 1 };
+
   private compareOverlay: HTMLElement;
   private compareImage: HTMLElement;
   private compareOriginal: HTMLCanvasElement;
@@ -276,10 +317,83 @@ export class TextureView {
         <div class="compose-panel hidden">
           <div class="compose-panel-head">
             <div class="compose-panel-title">
-              <strong>细节调节</strong>
-              <span>父级 / 子级 · 去底 / 叠加</span>
+              <strong id="compose-panel-title">细节调节</strong>
+              <span id="compose-panel-subtitle">父级 / 子级 · 去底 / 叠加</span>
             </div>
-            <button type="button" class="compose-add-child" data-compose-add-child title="载入附件图 2">＋ 附件图</button>
+            <div class="compose-head-actions">
+              <button type="button" class="compose-add-child" data-compose-add-child title="载入附件图 2">＋ 附件图</button>
+              <button type="button" class="ai-entry" data-ai-panel-toggle title="打开 AI 调节">AI 调节</button>
+            </div>
+          </div>
+          <div class="ai-panel-body hidden">
+            <section class="ai-section">
+              <div class="ai-section-head"><span>AI 超分 / 无损放大</span><span class="ai-pill">GPU</span></div>
+              <p class="ai-copy">使用本地 Upscayl / Real-ESRGAN 运行时，首次使用需下载模型；图片不会上传。</p>
+              <div class="ai-panel-status" id="ai-panel-status">检查 AI 运行时…</div>
+              <div class="ai-button-row">
+                <button type="button" data-ai-panel-scale="2">2× 超分</button>
+                <button type="button" class="primary" data-ai-panel-scale="4">4× 无损放大</button>
+                <button type="button" data-ai-panel-settings>详细设置</button>
+              </div>
+            </section>
+
+            <section class="ai-section">
+              <div class="ai-section-head"><span>AI 抠图</span><span class="ai-pill">本地</span></div>
+              <p class="ai-copy">自动从图像边缘识别背景，保留主体并平滑边缘，不上传图片。</p>
+              <div class="ai-row">
+                <span>容差</span>
+                <input id="ai-cut-tolerance" type="range" min="0" max="128" step="1" value="28">
+                <span id="ai-cut-tolerance-value">28</span>
+              </div>
+              <div class="ai-row">
+                <span>柔边</span>
+                <input id="ai-cut-feather" type="range" min="0" max="24" step="1" value="6">
+                <span id="ai-cut-feather-value">6</span>
+              </div>
+              <div class="ai-button-row">
+                <button type="button" class="primary" data-ai-cut>一键抠图</button>
+                <button type="button" data-ai-cut-restore disabled>还原抠图</button>
+              </div>
+            </section>
+
+            <section class="ai-section">
+              <div class="ai-section-head"><span>AI 序列贴图</span><span class="ai-pill">帧</span></div>
+              <p class="ai-copy">把序列帧拼图按网格拆分，点击格子选择帧，可逐帧播放和取用当前帧。</p>
+              <div class="ai-row">
+                <span>来源</span>
+                <select id="ai-seq-source">
+                  <option value="parent" selected>当前贴图</option>
+                  <option value="child">附件图 2</option>
+                </select>
+              </div>
+              <div class="ai-row">
+                <span>网格</span>
+                <div class="ai-grid-inputs">
+                  <label>列 <input id="ai-seq-cols" type="number" min="1" max="32" value="7"></label>
+                  <label>行 <input id="ai-seq-rows" type="number" min="1" max="32" value="7"></label>
+                </div>
+              </div>
+              <div class="ai-seq-grid-wrap"><canvas id="ai-seq-grid" width="360" height="260"></canvas></div>
+              <div class="ai-button-row ai-seq-select-row">
+                <button type="button" data-ai-seq-all>全选</button>
+                <button type="button" data-ai-seq-row>选中行</button>
+                <button type="button" data-ai-seq-clear>清空</button>
+                <span id="ai-seq-count">0 / 0</span>
+              </div>
+              <div class="ai-seq-player">
+                <canvas id="ai-seq-preview" width="160" height="120"></canvas>
+                <div class="ai-seq-controls">
+                  <button type="button" data-ai-seq-play>播放</button>
+                  <label>帧率 <input id="ai-seq-fps" type="range" min="1" max="30" step="1" value="12"><span id="ai-seq-fps-value">12</span></label>
+                  <label class="ai-loop"><input id="ai-seq-loop" type="checkbox" checked> 循环</label>
+                </div>
+                <div class="ai-seq-status" id="ai-seq-status">选择帧后开始播放</div>
+              </div>
+              <div class="ai-button-row">
+                <button type="button" class="primary" data-ai-seq-apply>应用当前帧</button>
+                <button type="button" data-ai-panel-back>返回贴图调节</button>
+              </div>
+            </section>
           </div>
           <div class="compose-panel-body">
             <section class="compose-group" data-compose-group="parent">
@@ -549,7 +663,30 @@ export class TextureView {
       b: this.element.querySelector('[data-pack-slot="b"]') as HTMLSelectElement,
       a: this.element.querySelector('[data-pack-slot="a"]') as HTMLSelectElement
     };
-    this.composeOverlay = this.element.querySelector('.compose-panel') as HTMLElement;
+    this.composePanel = this.element.querySelector('.compose-panel') as HTMLElement;
+    this.composeOverlay = this.composePanel;
+    this.composeBody = this.element.querySelector('.compose-panel-body') as HTMLElement;
+    this.aiPanelBody = this.element.querySelector('.ai-panel-body') as HTMLElement;
+    this.aiEntryButton = this.element.querySelector('[data-ai-panel-toggle]') as HTMLButtonElement;
+    this.aiPanelStatus = this.element.querySelector('#ai-panel-status') as HTMLElement;
+    this.aiCutTolerance = this.element.querySelector('#ai-cut-tolerance') as HTMLInputElement;
+    this.aiCutToleranceValue = this.element.querySelector('#ai-cut-tolerance-value') as HTMLElement;
+    this.aiCutFeather = this.element.querySelector('#ai-cut-feather') as HTMLInputElement;
+    this.aiCutFeatherValue = this.element.querySelector('#ai-cut-feather-value') as HTMLElement;
+    this.aiCutRestoreButton = this.element.querySelector('[data-ai-cut-restore]') as HTMLButtonElement;
+    this.aiSeqSource = this.element.querySelector('#ai-seq-source') as HTMLSelectElement;
+    this.aiSeqCols = this.element.querySelector('#ai-seq-cols') as HTMLInputElement;
+    this.aiSeqRows = this.element.querySelector('#ai-seq-rows') as HTMLInputElement;
+    this.aiSeqGrid = this.element.querySelector('#ai-seq-grid') as HTMLCanvasElement;
+    this.aiSeqGridCtx = this.aiSeqGrid.getContext('2d') as CanvasRenderingContext2D;
+    this.aiSeqPreview = this.element.querySelector('#ai-seq-preview') as HTMLCanvasElement;
+    this.aiSeqPreviewCtx = this.aiSeqPreview.getContext('2d') as CanvasRenderingContext2D;
+    this.aiSeqCount = this.element.querySelector('#ai-seq-count') as HTMLElement;
+    this.aiSeqStatus = this.element.querySelector('#ai-seq-status') as HTMLElement;
+    this.aiSeqPlayButton = this.element.querySelector('[data-ai-seq-play]') as HTMLButtonElement;
+    this.aiSeqFps = this.element.querySelector('#ai-seq-fps') as HTMLInputElement;
+    this.aiSeqFpsValue = this.element.querySelector('#ai-seq-fps-value') as HTMLElement;
+    this.aiSeqLoop = this.element.querySelector('#ai-seq-loop') as HTMLInputElement;
     this.composePreview = this.element.querySelector('#compose-preview') as HTMLCanvasElement;
     this.composePreviewCtx = this.composePreview.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
     this.composeSourceName = this.element.querySelector('#compose-source-name') as HTMLElement;
@@ -725,6 +862,53 @@ export class TextureView {
     this.element.querySelector('[data-compose-load]')?.addEventListener('click', () => void this.loadComposeSource());
     this.element.querySelector('[data-compose-clear]')?.addEventListener('click', () => this.clearComposeSource());
     this.composeAddChild.addEventListener('click', () => void this.loadComposeSource());
+
+    this.aiEntryButton.addEventListener('click', () => this.setAiMode(!this.aiMode));
+    this.element.querySelector('[data-ai-panel-back]')?.addEventListener('click', () => this.setAiMode(false));
+    this.element.querySelector('[data-ai-panel-settings]')?.addEventListener('click', () => void this.openAiPanel());
+    this.element.querySelectorAll<HTMLButtonElement>('[data-ai-panel-scale]').forEach((button) => {
+      button.addEventListener('click', () => void this.runAiPanelScale(Number(button.dataset.aiPanelScale)));
+    });
+    this.aiCutTolerance.addEventListener('input', () => {
+      this.aiCutToleranceValue.textContent = this.aiCutTolerance.value;
+    });
+    this.aiCutFeather.addEventListener('input', () => {
+      this.aiCutFeatherValue.textContent = this.aiCutFeather.value;
+    });
+    this.element.querySelector('[data-ai-cut]')?.addEventListener('click', () => this.runAiCutout());
+    this.aiCutRestoreButton.addEventListener('click', () => this.restoreAiCutout());
+    this.aiSeqSource.addEventListener('change', () => {
+      this.resetAiSequenceSelection();
+      this.renderAiSequenceGrid();
+    });
+    const resetSequenceGrid = (): void => {
+      this.aiSeqCols.value = String(this.clampSequenceGrid(this.aiSeqCols.value));
+      this.aiSeqRows.value = String(this.clampSequenceGrid(this.aiSeqRows.value));
+      this.resetAiSequenceSelection();
+      this.renderAiSequenceGrid();
+    };
+    this.aiSeqCols.addEventListener('change', resetSequenceGrid);
+    this.aiSeqRows.addEventListener('change', resetSequenceGrid);
+    this.aiSeqGrid.addEventListener('pointerdown', (event) => this.selectAiSequenceCell(event));
+    this.element.querySelector('[data-ai-seq-all]')?.addEventListener('click', () => {
+      this.selectAllAiSequenceFrames();
+      this.renderAiSequenceGrid();
+    });
+    this.element.querySelector('[data-ai-seq-row]')?.addEventListener('click', () => {
+      this.selectAiSequenceRow();
+      this.renderAiSequenceGrid();
+    });
+    this.element.querySelector('[data-ai-seq-clear]')?.addEventListener('click', () => {
+      this.stopAiSequence();
+      this.aiSeqSelected.clear();
+      this.aiSeqFrameIndex = 0;
+      this.renderAiSequenceGrid();
+    });
+    this.aiSeqPlayButton.addEventListener('click', () => this.toggleAiSequencePlay());
+    this.aiSeqFps.addEventListener('input', () => {
+      this.aiSeqFpsValue.textContent = this.aiSeqFps.value;
+    });
+    this.element.querySelector('[data-ai-seq-apply]')?.addEventListener('click', () => this.applyAiSequenceFrame());
     this.element.querySelector('[data-compose-apply]')?.addEventListener('click', () => void this.applyCompose());
     this.element.querySelector('[data-compose-export]')?.addEventListener('click', () => void this.exportCompose());
     this.composeParentBlend.addEventListener('change', () => this.scheduleComposePreview());
@@ -935,6 +1119,10 @@ export class TextureView {
 
   private async loadBuffer(buffer: Uint8Array, name: string, ext: string, filePath: string, size: number): Promise<void> {
     this.discardCompare();
+    this.stopAiSequence();
+    this.aiCutoutBackup = null;
+    this.updateAiCutButtons();
+    this.setAiMode(false);
     let source: ImageBitmap | HTMLCanvasElement;
     if (ext === '.tga') {
       source = this.decodeTga(buffer);
@@ -1928,6 +2116,455 @@ export class TextureView {
     }
   }
 
+  private setAiMode(active: boolean): void {
+    if (active && !this.bitmap) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    this.aiMode = active;
+    this.element.classList.toggle('ai-theme', active);
+    this.composePanel.classList.toggle('ai-mode', active);
+    this.composeBody.classList.toggle('hidden', active);
+    this.aiPanelBody.classList.toggle('hidden', !active);
+    this.aiEntryButton.textContent = active ? '返回贴图' : 'AI 调节';
+    this.aiEntryButton.classList.toggle('active', active);
+    const title = this.element.querySelector('#compose-panel-title') as HTMLElement | null;
+    const subtitle = this.element.querySelector('#compose-panel-subtitle') as HTMLElement | null;
+    if (title) title.textContent = active ? 'AI 调节' : '细节调节';
+    if (subtitle) subtitle.textContent = active ? '超分 / 抠图 / 序列贴图' : '父级 / 子级 · 去底 / 叠加';
+    if (active) {
+      if (!this.composeSource && this.aiSeqSource.value === 'child') this.aiSeqSource.value = 'parent';
+      this.updateAiCutButtons();
+      this.resetAiSequenceSelection();
+      this.renderAiSequenceGrid();
+      void this.refreshAiStatus();
+    } else {
+      this.stopAiSequence();
+    }
+  }
+
+  private async runAiPanelScale(scale: number): Promise<void> {
+    if (!this.bitmap) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    await this.refreshAiStatus();
+    if (!this.aiAvailable) {
+      this.callbacks.toast(`请先下载 ${this.aiEngineLabel()} 运行时`, 'info');
+      void this.openAiPanel();
+      return;
+    }
+    await this.aiScale(scale);
+  }
+
+  private updateAiCutButtons(): void {
+    this.aiCutRestoreButton.disabled = !this.aiCutoutBackup;
+  }
+
+  private runAiCutout(): void {
+    if (!this.bitmap) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    const tolerance = Math.max(0, Number(this.aiCutTolerance.value) || 0);
+    const feather = Math.max(0, Number(this.aiCutFeather.value) || 0);
+    const width = this.imageWidth;
+    const height = this.imageHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return;
+    context.drawImage(this.bitmap as CanvasImageSource, 0, 0);
+    const imageData = context.getImageData(0, 0, width, height);
+    const data = imageData.data;
+
+    const colorCounts = new Map<number, number>();
+    const sampleBorder = (x: number, y: number): void => {
+      const offset = (y * width + x) * 4;
+      if (data[offset + 3] < 16) return;
+      const key = ((data[offset] >> 4) << 8) | ((data[offset + 1] >> 4) << 4) | (data[offset + 2] >> 4);
+      colorCounts.set(key, (colorCounts.get(key) ?? 0) + 1);
+    };
+    for (let x = 0; x < width; x += Math.max(1, Math.floor(width / 64))) {
+      sampleBorder(x, 0);
+      sampleBorder(x, height - 1);
+    }
+    for (let y = 0; y < height; y += Math.max(1, Math.floor(height / 64))) {
+      sampleBorder(0, y);
+      sampleBorder(width - 1, y);
+    }
+    let backgroundKey = 0;
+    let backgroundCount = -1;
+    colorCounts.forEach((count, key) => {
+      if (count > backgroundCount) {
+        backgroundCount = count;
+        backgroundKey = key;
+      }
+    });
+    const backgroundR = ((backgroundKey >> 8) & 0xf) * 17 + 8;
+    const backgroundG = ((backgroundKey >> 4) & 0xf) * 17 + 8;
+    const backgroundB = (backgroundKey & 0xf) * 17 + 8;
+
+    const visited = new Uint8Array(width * height);
+    const queue = new Int32Array(width * height);
+    let queueStart = 0;
+    let queueEnd = 0;
+    const softRange = Math.max(1, feather * 6);
+    const distanceAt = (index: number): number => {
+      const offset = index * 4;
+      const dr = data[offset] - backgroundR;
+      const dg = data[offset + 1] - backgroundG;
+      const db = data[offset + 2] - backgroundB;
+      return Math.sqrt(dr * dr + dg * dg + db * db);
+    };
+    const seed = (x: number, y: number): void => {
+      const index = y * width + x;
+      if (visited[index]) return;
+      const distance = distanceAt(index);
+      if (distance > tolerance) return;
+      visited[index] = 1;
+      data[index * 4 + 3] = 0;
+      queue[queueEnd++] = index;
+    };
+    for (let x = 0; x < width; x += 1) {
+      seed(x, 0);
+      seed(x, height - 1);
+    }
+    for (let y = 1; y < height - 1; y += 1) {
+      seed(0, y);
+      seed(width - 1, y);
+    }
+    while (queueStart < queueEnd) {
+      const index = queue[queueStart++];
+      const x = index % width;
+      const y = (index / width) | 0;
+      const visit = (nx: number, ny: number): void => {
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) return;
+        const next = ny * width + nx;
+        if (visited[next]) return;
+        const distance = distanceAt(next);
+        if (distance <= tolerance) {
+          visited[next] = 1;
+          data[next * 4 + 3] = 0;
+          queue[queueEnd++] = next;
+        } else if (distance <= tolerance + softRange) {
+          visited[next] = 1;
+          data[next * 4 + 3] = Math.min(data[next * 4 + 3], Math.round(((distance - tolerance) / softRange) * 255));
+        }
+      };
+      visit(x - 1, y);
+      visit(x + 1, y);
+      visit(x, y - 1);
+      visit(x, y + 1);
+    }
+    context.putImageData(imageData, 0, 0);
+
+    const backup = document.createElement('canvas');
+    backup.width = width;
+    backup.height = height;
+    backup.getContext('2d')?.drawImage(this.bitmap as CanvasImageSource, 0, 0);
+    this.aiCutoutBackup = {
+      canvas: backup,
+      width,
+      height,
+      name: this.fileName,
+      path: this.filePath,
+      size: this.fileSize
+    };
+
+    this.setImage(
+      canvas,
+      width,
+      height,
+      `${this.currentBaseName()}_cutout.png`,
+      '',
+      width * height * 4,
+      { preserveTransform: true, preserveHistory: false }
+    );
+    this.setAiMode(true);
+    this.callbacks.toast('AI 抠图完成；可继续调节容差后再次抠图', 'success');
+  }
+
+  private restoreAiCutout(): void {
+    const backup = this.aiCutoutBackup;
+    if (!backup) return;
+    this.aiCutoutBackup = null;
+    this.setImage(
+      backup.canvas,
+      backup.width,
+      backup.height,
+      backup.name,
+      backup.path,
+      backup.size,
+      { preserveTransform: true, preserveHistory: false }
+    );
+    this.setAiMode(true);
+    this.callbacks.toast('已还原抠图前的图片', 'success');
+  }
+
+  private clampSequenceGrid(value: string): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 7;
+    return Math.max(1, Math.min(32, Math.round(parsed)));
+  }
+
+  private aiSequenceSource(): { bitmap: ImageBitmap | HTMLCanvasElement; width: number; height: number } | null {
+    if (this.aiSeqSource.value === 'child' && this.composeSource) {
+      return {
+        bitmap: this.composeSource.bitmap,
+        width: this.composeSource.bitmap.width,
+        height: this.composeSource.bitmap.height
+      };
+    }
+    if (!this.bitmap) return null;
+    return { bitmap: this.bitmap, width: this.imageWidth, height: this.imageHeight };
+  }
+
+  private aiSequenceFrameCount(): number {
+    return this.clampSequenceGrid(this.aiSeqCols.value) * this.clampSequenceGrid(this.aiSeqRows.value);
+  }
+
+  private aiSequenceFrames(): number[] {
+    return [...this.aiSeqSelected].sort((a, b) => a - b);
+  }
+
+  private resetAiSequenceSelection(): void {
+    this.stopAiSequence();
+    this.aiSeqFrameIndex = 0;
+    this.aiSeqSelected.clear();
+    for (let index = 0; index < this.aiSequenceFrameCount(); index += 1) this.aiSeqSelected.add(index);
+  }
+
+  private selectAllAiSequenceFrames(): void {
+    this.stopAiSequence();
+    this.aiSeqFrameIndex = 0;
+    this.aiSeqSelected.clear();
+    for (let index = 0; index < this.aiSequenceFrameCount(); index += 1) this.aiSeqSelected.add(index);
+  }
+
+  private selectAiSequenceRow(): void {
+    this.stopAiSequence();
+    const cols = this.clampSequenceGrid(this.aiSeqCols.value);
+    const rows = this.clampSequenceGrid(this.aiSeqRows.value);
+    const row = Math.min(rows - 1, this.aiSeqLastCell >= 0 ? Math.floor(this.aiSeqLastCell / cols) : 0);
+    this.aiSeqSelected.clear();
+    for (let col = 0; col < cols; col += 1) {
+      const index = row * cols + col;
+      if (index < cols * rows) this.aiSeqSelected.add(index);
+    }
+    this.aiSeqFrameIndex = 0;
+  }
+
+  private selectAiSequenceCell(event: PointerEvent): void {
+    const source = this.aiSequenceSource();
+    if (!source) return;
+    const rect = this.aiSeqGrid.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const x = ((event.clientX - rect.left) / rect.width) * this.aiSeqGrid.width;
+    const y = ((event.clientY - rect.top) / rect.height) * this.aiSeqGrid.height;
+    const layout = this.aiSeqLayout;
+    const col = Math.floor((x - layout.x) / Math.max(1, layout.cellWidth));
+    const row = Math.floor((y - layout.y) / Math.max(1, layout.cellHeight));
+    const cols = this.clampSequenceGrid(this.aiSeqCols.value);
+    const rows = this.clampSequenceGrid(this.aiSeqRows.value);
+    if (col < 0 || row < 0 || col >= cols || row >= rows) return;
+    const index = row * cols + col;
+    this.stopAiSequence();
+    if (this.aiSeqSelected.has(index)) this.aiSeqSelected.delete(index);
+    else this.aiSeqSelected.add(index);
+    this.aiSeqLastCell = index;
+    this.aiSeqFrameIndex = 0;
+    this.renderAiSequenceGrid();
+  }
+
+  private renderAiSequenceGrid(): void {
+    const context = this.aiSeqGridCtx;
+    const canvas = this.aiSeqGrid;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#0d1724';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const source = this.aiSequenceSource();
+    if (!source) {
+      context.fillStyle = '#7ba4cc';
+      context.font = '12px "Microsoft YaHei", sans-serif';
+      context.textAlign = 'center';
+      context.fillText('载入图片后可用', canvas.width / 2, canvas.height / 2);
+      this.aiSeqCount.textContent = '0 / 0';
+      this.aiSeqStatus.textContent = '载入图片后可用';
+      return;
+    }
+    const cols = this.clampSequenceGrid(this.aiSeqCols.value);
+    const rows = this.clampSequenceGrid(this.aiSeqRows.value);
+    const margin = 8;
+    const scale = Math.min((canvas.width - margin * 2) / source.width, (canvas.height - margin * 2) / source.height);
+    const width = Math.max(1, source.width * scale);
+    const height = Math.max(1, source.height * scale);
+    const x = (canvas.width - width) / 2;
+    const y = (canvas.height - height) / 2;
+    const cellWidth = width / cols;
+    const cellHeight = height / rows;
+    this.aiSeqLayout = { x, y, width, height, cellWidth, cellHeight };
+    context.imageSmoothingEnabled = true;
+    context.drawImage(source.bitmap as CanvasImageSource, x, y, width, height);
+
+    const frames = this.aiSequenceFrames();
+    const currentFrame = frames[Math.min(this.aiSeqFrameIndex, Math.max(0, frames.length - 1))];
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        const index = row * cols + col;
+        const cellX = x + col * cellWidth;
+        const cellY = y + row * cellHeight;
+        if (this.aiSeqSelected.has(index)) {
+          context.fillStyle = index === currentFrame ? 'rgba(90, 169, 255, 0.24)' : 'rgba(90, 169, 255, 0.1)';
+          context.fillRect(cellX, cellY, cellWidth, cellHeight);
+        }
+        context.strokeStyle = index === currentFrame ? '#8fc8ff' : 'rgba(90, 169, 255, 0.42)';
+        context.lineWidth = index === currentFrame ? 2 : 1;
+        context.strokeRect(cellX, cellY, cellWidth, cellHeight);
+        if (cols * rows <= 64) {
+          context.fillStyle = index === currentFrame ? '#e1f1ff' : 'rgba(180, 214, 245, 0.7)';
+          context.font = '8px sans-serif';
+          context.textAlign = 'left';
+          context.fillText(String(index + 1), cellX + 3, cellY + 10);
+        }
+      }
+    }
+    this.aiSeqCount.textContent = `${this.aiSeqSelected.size} / ${cols * rows}`;
+    this.renderAiSequencePreview();
+  }
+
+  private renderAiSequencePreview(): void {
+    const context = this.aiSeqPreviewCtx;
+    const canvas = this.aiSeqPreview;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#0d1724';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const source = this.aiSequenceSource();
+    const frames = this.aiSequenceFrames();
+    if (!source || !frames.length) {
+      this.aiSeqStatus.textContent = source ? '至少选择一帧' : '载入图片后可用';
+      return;
+    }
+    const displayIndex = Math.min(this.aiSeqFrameIndex, frames.length - 1);
+    const index = frames[displayIndex];
+    const cols = this.clampSequenceGrid(this.aiSeqCols.value);
+    const rows = this.clampSequenceGrid(this.aiSeqRows.value);
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const x0 = Math.round((col / cols) * source.width);
+    const x1 = Math.round(((col + 1) / cols) * source.width);
+    const y0 = Math.round((row / rows) * source.height);
+    const y1 = Math.round(((row + 1) / rows) * source.height);
+    const width = Math.max(1, x1 - x0);
+    const height = Math.max(1, y1 - y0);
+    const scale = Math.min(canvas.width / width, canvas.height / height);
+    const drawWidth = width * scale;
+    const drawHeight = height * scale;
+    context.imageSmoothingEnabled = true;
+    context.drawImage(
+      source.bitmap as CanvasImageSource,
+      x0,
+      y0,
+      width,
+      height,
+      (canvas.width - drawWidth) / 2,
+      (canvas.height - drawHeight) / 2,
+      drawWidth,
+      drawHeight
+    );
+    this.aiSeqStatus.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 单元格 ${index + 1}`;
+  }
+
+  private toggleAiSequencePlay(): void {
+    if (this.aiSeqPlaying) {
+      this.stopAiSequence();
+      return;
+    }
+    const frames = this.aiSequenceFrames();
+    if (!frames.length) {
+      this.callbacks.toast('请先在网格中选择至少一帧', 'info');
+      return;
+    }
+    this.aiSeqPlaying = true;
+    this.aiSeqPlayButton.textContent = '暂停';
+    this.aiSeqFrameIndex = Math.min(this.aiSeqFrameIndex, frames.length - 1);
+    this.aiSeqLastTime = performance.now();
+    const loop = (now: number): void => {
+      if (!this.aiSeqPlaying) return;
+      const currentFrames = this.aiSequenceFrames();
+      if (!currentFrames.length) {
+        this.stopAiSequence();
+        return;
+      }
+      const fps = Math.max(1, Math.min(60, Number(this.aiSeqFps.value) || 12));
+      if (now - this.aiSeqLastTime >= 1000 / fps) {
+        this.aiSeqLastTime = now;
+        this.aiSeqFrameIndex += 1;
+        if (this.aiSeqFrameIndex >= currentFrames.length) {
+          if (this.aiSeqLoop.checked) this.aiSeqFrameIndex = 0;
+          else {
+            this.aiSeqFrameIndex = currentFrames.length - 1;
+            this.renderAiSequencePreview();
+            this.renderAiSequenceGrid();
+            this.stopAiSequence();
+            return;
+          }
+        }
+        this.renderAiSequencePreview();
+        this.renderAiSequenceGrid();
+      }
+      this.aiSeqRaf = requestAnimationFrame(loop);
+    };
+    this.aiSeqRaf = requestAnimationFrame(loop);
+  }
+
+  private stopAiSequence(): void {
+    this.aiSeqPlaying = false;
+    cancelAnimationFrame(this.aiSeqRaf);
+    this.aiSeqRaf = 0;
+    this.aiSeqPlayButton.textContent = '播放';
+  }
+
+  private applyAiSequenceFrame(): void {
+    const source = this.aiSequenceSource();
+    const frames = this.aiSequenceFrames();
+    if (!source || !frames.length) {
+      this.callbacks.toast('请先在网格中选择至少一帧', 'info');
+      return;
+    }
+    const index = frames[Math.min(this.aiSeqFrameIndex, frames.length - 1)];
+    const cols = this.clampSequenceGrid(this.aiSeqCols.value);
+    const rows = this.clampSequenceGrid(this.aiSeqRows.value);
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const x0 = Math.round((col / cols) * source.width);
+    const x1 = Math.round(((col + 1) / cols) * source.width);
+    const y0 = Math.round((row / rows) * source.height);
+    const y1 = Math.round(((row + 1) / rows) * source.height);
+    const width = Math.max(1, x1 - x0);
+    const height = Math.max(1, y1 - y0);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.drawImage(source.bitmap as CanvasImageSource, x0, y0, width, height, 0, 0, width, height);
+    this.setImage(
+      canvas,
+      width,
+      height,
+      `${this.currentBaseName()}_${index + 1}.png`,
+      '',
+      width * height * 4,
+      { preserveTransform: true, preserveHistory: false }
+    );
+    this.aiSeqCols.value = '1';
+    this.aiSeqRows.value = '1';
+    this.setAiMode(true);
+    this.callbacks.toast(`已应用序列帧 ${index + 1}`, 'success');
+  }
+
   private async openAiPanel(): Promise<void> {
     if (!this.bitmap) {
       this.callbacks.toast('请先打开一张贴图', 'info');
@@ -1960,6 +2597,14 @@ export class TextureView {
       : status.downloading
         ? `正在下载 ${label} 运行时…`
         : `尚未下载 ${label} 运行时（${size}）`;
+    if (this.aiPanelStatus) {
+      this.aiPanelStatus.textContent = status.available
+        ? `${label} 运行时已就绪`
+        : status.downloading
+          ? `正在下载 ${label} 运行时…`
+          : `需要下载 ${label} 运行时（${size}）`;
+      this.aiPanelStatus.classList.toggle('ready', status.available);
+    }
     const labelElement = this.element.querySelector('#ai-engine-label') as HTMLElement | null;
     if (labelElement) labelElement.textContent = `AI 超分（${label}）`;
     this.aiEngineSelect.value = this.aiEngine;
@@ -1970,6 +2615,9 @@ export class TextureView {
   private updateAiButtons(): void {
     this.element.querySelectorAll<HTMLButtonElement>('[data-ai-scale]').forEach((button) => {
       button.disabled = !this.aiAvailable || this.aiBusy;
+    });
+    this.element.querySelectorAll<HTMLButtonElement>('[data-ai-panel-scale]').forEach((button) => {
+      button.disabled = this.aiBusy;
     });
     this.element.querySelectorAll<HTMLButtonElement>('[data-ai-preset]').forEach((button) => {
       button.disabled = this.aiBusy;
@@ -2214,6 +2862,7 @@ export class TextureView {
       pending.size,
       { preserveTransform: true, preserveHistory: false }
     );
+    if (this.aiMode) this.renderAiSequenceGrid();
     this.callbacks.toast('已应用超分结果', 'success');
   }
 
@@ -2691,5 +3340,6 @@ export class TextureView {
   deactivate(): void {
     this.active = false;
     cancelAnimationFrame(this.raf);
+    this.stopAiSequence();
   }
 }
