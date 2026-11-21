@@ -46,6 +46,7 @@ export interface Settings {
   cacheDir: string;
   ffmpegPath: string;
   screenshotHotkey: string;
+  undoHistoryLimit: number;
   updateChannel: UpdateChannel;
   colorCount: number;
   colorRatioMode: 'perceptual' | 'pixel';

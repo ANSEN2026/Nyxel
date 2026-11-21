@@ -15,6 +15,7 @@ import { ModelView } from './views/model';
 import { MotionCaptureView } from './motion_capture/view';
 import { NotesView } from './views/notes';
 import { SettingsView } from './views/settings';
+import { setUndoHistoryLimit } from './lib/undo-history';
 import { TextureView } from './views/texture';
 import { VideoView } from './views/video';
 import { basename, isImageFile, isModelFile } from './utils';
@@ -387,6 +388,7 @@ async function saveSettings(next: Settings): Promise<void> {
   const previousTheme = settings?.theme;
   const previousAudio = settings?.audioVisualizer;
   settings = await window.nyxel.settings.save(next);
+  setUndoHistoryLimit(settings.undoHistoryLimit);
   if (settings.theme !== previousTheme) applyTheme(settings.theme);
   if (settings.audioVisualizer !== previousAudio) {
     void applyAudioMonitor(settings.audioVisualizer, true);
@@ -671,6 +673,7 @@ function bindNav(): void {
 
 async function bootstrap(): Promise<void> {
   settings = await window.nyxel.settings.load();
+  setUndoHistoryLimit(settings.undoHistoryLimit);
   appInfo = await window.nyxel.app.info();
   if (sidebarFooter) sidebarFooter.textContent = `v${appInfo.version}`;
   applyTheme(settings.theme);

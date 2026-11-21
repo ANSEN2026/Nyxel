@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
 import { imageStore } from '../lib/image-store';
+import { getUndoHistoryLimit } from '../lib/undo-history';
 import type { AiEngine, AiProgress, ViewCallbacks } from '../types';
 import { basename, extname, formatBytes, mimeFromExt } from '../utils';
 
@@ -23,6 +24,32 @@ interface PenSample {
   x: number;
   y: number;
   t: number;
+}
+
+interface TextureUndoControl {
+  value: string;
+  checked?: boolean;
+}
+
+interface TextureUndoSnapshot {
+  controls: TextureUndoControl[];
+  channel: number;
+  background: 'black' | 'gray' | 'checker';
+  levelsEnabled: boolean;
+  curvesEnabled: boolean;
+  curvePoints: Array<{ x: number; y: number }>;
+  dispersionBlack: boolean;
+  gradientStops: Array<{ position: number; color: string }>;
+  gradientAlphaStops: Array<{ position: number; alpha: number }>;
+  gradientSelected: number;
+  gradientAlphaSelected: number;
+  penPoints: PenPoint[];
+  penSelected: number;
+  penVisible: boolean;
+  aiSeqSelected: number[];
+  rotation: number;
+  flipH: boolean;
+  flipV: boolean;
 }
 
 const UPSCAYL_MODEL_LABELS: Record<string, string> = {
@@ -118,6 +145,11 @@ export class TextureView {
 
   private history: TransformState[] = [];
   private redoStack: TransformState[] = [];
+  private textureUndoStack: TextureUndoSnapshot[] = [];
+  private textureRedoStack: TextureUndoSnapshot[] = [];
+  private undoGestureSnapshot: TextureUndoSnapshot | null = null;
+  private undoGesturePushed = false;
+  private restoringUndo = false;
   private dragging = false;
   private dragX = 0;
   private dragY = 0;
@@ -1186,9 +1218,10 @@ export class TextureView {
     }
 
     this.setupComposeGroups();
-    this.setupAiSections(this.aiPanelBody, 'upscale');
-    this.setupAiSections(this.toolsPanelBody, 'tile');
+    this.setupAiSections(this.aiPanelBody);
+    this.setupAiSections(this.toolsPanelBody);
     this.bindEvents();
+    this.bindUndoHistory();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.body);
     this.resizeObserver.observe(this.canvas);
@@ -2018,6 +2051,7 @@ export class TextureView {
     this.normalGInverted = false;
     this.normalBanner.classList.add('hidden');
     if (!options.skipNormalDetect) this.detectNormalMap();
+    this.resetUndoHistory();
   }
 
   private detectNormalMap(): void {
@@ -2425,21 +2459,9 @@ export class TextureView {
         group.classList.toggle('collapsed', collapsed);
         toggle.setAttribute('aria-expanded', String(!collapsed));
       };
-      const defaultCollapsed = key === 'view' || key === 'adjust' || key === 'transparency' || key === 'preview';
-      try {
-        const stored = localStorage.getItem(`texturemap.texture.compose.collapsed.${key}`);
-        apply(stored === null ? defaultCollapsed : stored === '1');
-      } catch {
-        apply(defaultCollapsed);
-      }
+      apply(true);
       toggle.addEventListener('click', () => {
-        const collapsed = !group.classList.contains('collapsed');
-        apply(collapsed);
-        try {
-          localStorage.setItem(`texturemap.texture.compose.collapsed.${key}`, collapsed ? '1' : '0');
-        } catch {
-          // storage unavailable
-        }
+        apply(!group.classList.contains('collapsed'));
       });
       const grip = toggle.querySelector<HTMLElement>('[data-compose-group-grip]');
       grip?.addEventListener('pointerdown', (event) => this.startComposeGroupDrag(event, grip));
@@ -2467,7 +2489,7 @@ export class TextureView {
     window.addEventListener('pointercancel', (event) => this.endComposeGroupDrag(event));
   }
 
-  private setupAiSections(container: HTMLElement, defaultExpanded: string): void {
+  private setupAiSections(container: HTMLElement): void {
     const sections = [...container.querySelectorAll<HTMLElement>(':scope > .ai-section[data-ai-section]')];
     const entries: Array<{
       key: string;
@@ -2500,11 +2522,12 @@ export class TextureView {
           this.renderPathGradient();
           this.syncPenOverlayVisibility();
         }
+        this.refreshUndoBaseline();
       };
       const toggle = (): void => {
         apply(!section.classList.contains('collapsed'));
       };
-      apply(key !== defaultExpanded);
+      apply(true);
       head.addEventListener('click', toggle);
       head.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -2986,6 +3009,7 @@ export class TextureView {
       this.stopAiSequence();
     }
     this.syncPenOverlayVisibility();
+    this.refreshUndoBaseline();
   }
 
   private async runAiPanelScale(scale: number): Promise<void> {
@@ -5276,7 +5300,6 @@ export class TextureView {
 
   private rotate(delta: number): void {
     if (!this.mesh) return;
-    this.pushHistory();
     this.rotation = (this.rotation + delta + 360) % 360;
     this.applyTransform();
     this.fit();
@@ -5287,7 +5310,6 @@ export class TextureView {
     if (axis === 'h' && this.isNormalMap) {
       this.callbacks.toast('检测到法线贴图：水平翻转会改变法线左右方向，请确认用途', 'info');
     }
-    this.pushHistory();
     if (axis === 'h') this.flipH = !this.flipH;
     else this.flipV = !this.flipV;
     this.applyTransform();
@@ -5325,18 +5347,206 @@ export class TextureView {
     this.textureMenu.classList.add('hidden');
   }
 
+  private bindUndoHistory(): void {
+    window.addEventListener('pointerdown', (event) => {
+      if (!this.active || this.restoringUndo) return;
+      if (!this.undoTargetInside(event.target)) return;
+      this.beginUndoGesture();
+    }, true);
+    window.addEventListener('keydown', (event) => {
+      if (!this.active || this.restoringUndo) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (!this.undoTargetInside(event.target)) return;
+      this.beginUndoGesture();
+    }, true);
+    const commit = (event?: Event): void => {
+      if (!this.active || this.restoringUndo) return;
+      if (event && !this.undoTargetInside(event.target)) return;
+      this.commitUndoGesture();
+    };
+    window.addEventListener('input', (event) => commit(event));
+    window.addEventListener('change', (event) => commit(event));
+    window.addEventListener('click', (event) => commit(event));
+    window.addEventListener('pointerup', () => window.setTimeout(() => commit(), 0));
+    window.addEventListener('keyup', (event) => {
+      if (event.key === 'Control' || event.key === 'Meta') return;
+      window.setTimeout(() => commit(), 0);
+    });
+    window.addEventListener('keydown', (event) => {
+      if (!this.active) return;
+      const settingsOverlay = document.querySelector('.settings-overlay');
+      if (settingsOverlay && !settingsOverlay.classList.contains('hidden')) return;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) this.redo();
+        else this.undo();
+      } else if (key === 'y') {
+        event.preventDefault();
+        this.redo();
+      }
+    });
+  }
+
+  private undoTargetInside(target: EventTarget | null): boolean {
+    if (!(target instanceof Node)) return false;
+    return this.element.contains(target) || this.textureMenu.contains(target);
+  }
+
+  private undoControls(): Array<HTMLInputElement | HTMLSelectElement> {
+    return Array.from(this.element.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select'))
+      .filter((control) => !control.closest('#gradient-popover') && control.id !== 'gradient-position');
+  }
+
+  private captureUndoSnapshot(): TextureUndoSnapshot {
+    return {
+      controls: this.undoControls().map((control) => ({
+        value: control.value,
+        checked: control instanceof HTMLInputElement &&
+          (control.type === 'checkbox' || control.type === 'radio')
+          ? control.checked
+          : undefined
+      })),
+      channel: this.channel,
+      background: this.background,
+      levelsEnabled: this.levelsEnabled,
+      curvesEnabled: this.curvesEnabled,
+      curvePoints: this.curvePoints.map((point) => ({ ...point })),
+      dispersionBlack: this.dispersionBlack,
+      gradientStops: this.gradientStops.map((stop) => ({ ...stop })),
+      gradientAlphaStops: this.gradientAlphaStops.map((stop) => ({ ...stop })),
+      gradientSelected: this.gradientSelected,
+      gradientAlphaSelected: this.gradientAlphaSelected,
+      penPoints: this.penPoints.map((point) => ({ ...point })),
+      penSelected: this.penSelected,
+      penVisible: this.penVisible,
+      aiSeqSelected: [...this.aiSeqSelected].sort((left, right) => left - right),
+      rotation: this.rotation,
+      flipH: this.flipH,
+      flipV: this.flipV
+    };
+  }
+
+  private undoSignature(snapshot: TextureUndoSnapshot): string {
+    return JSON.stringify(snapshot);
+  }
+
+  private beginUndoGesture(): void {
+    if (this.restoringUndo) return;
+    this.undoGestureSnapshot = this.captureUndoSnapshot();
+    this.undoGesturePushed = false;
+  }
+
+  private commitUndoGesture(): void {
+    if (this.restoringUndo || this.undoGesturePushed || !this.undoGestureSnapshot) return;
+    const current = this.captureUndoSnapshot();
+    if (this.undoSignature(current) === this.undoSignature(this.undoGestureSnapshot)) return;
+    this.textureUndoStack.push(this.undoGestureSnapshot);
+    const limit = Math.max(1, getUndoHistoryLimit());
+    while (this.textureUndoStack.length > limit) this.textureUndoStack.shift();
+    this.textureRedoStack = [];
+    this.undoGesturePushed = true;
+  }
+
+  private resetUndoHistory(): void {
+    this.textureUndoStack = [];
+    this.textureRedoStack = [];
+    this.undoGestureSnapshot = this.captureUndoSnapshot();
+    this.undoGesturePushed = true;
+  }
+
+  private refreshUndoBaseline(): void {
+    if (this.restoringUndo) return;
+    this.undoGestureSnapshot = this.captureUndoSnapshot();
+    this.undoGesturePushed = true;
+  }
+
+  private restoreUndoSnapshot(snapshot: TextureUndoSnapshot): void {
+    this.restoringUndo = true;
+    try {
+      this.closeGradientPopover();
+      const controls = this.undoControls();
+      snapshot.controls.forEach((state, index) => {
+        const control = controls[index];
+        if (!control) return;
+        if (state.checked !== undefined && control instanceof HTMLInputElement) {
+          control.checked = state.checked;
+        } else {
+          control.value = state.value;
+        }
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      this.setChannel(snapshot.channel);
+      this.setBackground(snapshot.background);
+      this.curvePoints = snapshot.curvePoints.map((point) => ({ ...point }));
+      this.buildCurveLut();
+      this.setLevelsEnabled(snapshot.levelsEnabled);
+      this.setCurvesEnabled(snapshot.curvesEnabled);
+      this.levelsEnabled = snapshot.levelsEnabled;
+      this.curvesEnabled = snapshot.curvesEnabled;
+
+      this.dispersionBlack = snapshot.dispersionBlack;
+      const dispersionWrap = this.element.querySelector('#dispersion-preview-wrap') as HTMLElement | null;
+      dispersionWrap?.classList.toggle('black', snapshot.dispersionBlack);
+      const blackButton = this.element.querySelector('[data-dispersion-black]') as HTMLButtonElement | null;
+      if (blackButton) blackButton.textContent = snapshot.dispersionBlack ? '棋盘' : '黑底';
+
+      this.gradientStops = snapshot.gradientStops.map((stop) => ({ ...stop }));
+      this.gradientAlphaStops = snapshot.gradientAlphaStops.map((stop) => ({ ...stop }));
+      this.gradientSelected = snapshot.gradientSelected;
+      this.gradientAlphaSelected = snapshot.gradientAlphaSelected;
+      this.renderGradientEditor();
+
+      this.penPoints = snapshot.penPoints.map((point) => ({ ...point }));
+      this.penSelected = snapshot.penSelected;
+      this.penVisible = snapshot.penVisible;
+      this.pathShow.checked = snapshot.penVisible;
+      this.syncPenOverlayVisibility();
+      this.renderPenOverlay();
+      this.renderPathGradient();
+
+      this.aiSeqSelected = new Set(snapshot.aiSeqSelected);
+      this.aiSeqFrameIndex = 0;
+      this.renderAiSequenceGrid();
+
+      this.rotation = snapshot.rotation;
+      this.flipH = snapshot.flipH;
+      this.flipV = snapshot.flipV;
+      this.applyTransform();
+      this.updateCamera();
+      this.renderer.render(this.scene, this.camera);
+    } finally {
+      this.restoringUndo = false;
+    }
+  }
+
   private undo(): void {
-    if (!this.history.length) return;
-    this.redoStack.push(this.snapshot());
-    const state = this.history.pop() as TransformState;
-    this.restore(state);
+    if (!this.textureUndoStack.length) return;
+    const current = this.captureUndoSnapshot();
+    const previous = this.textureUndoStack.pop();
+    if (!previous) return;
+    this.textureRedoStack.push(current);
+    const limit = Math.max(1, getUndoHistoryLimit());
+    while (this.textureRedoStack.length > limit) this.textureRedoStack.shift();
+    this.restoreUndoSnapshot(previous);
+    this.undoGestureSnapshot = this.captureUndoSnapshot();
+    this.undoGesturePushed = true;
   }
 
   private redo(): void {
-    if (!this.redoStack.length) return;
-    this.history.push(this.snapshot());
-    const state = this.redoStack.pop() as TransformState;
-    this.restore(state);
+    if (!this.textureRedoStack.length) return;
+    const current = this.captureUndoSnapshot();
+    const next = this.textureRedoStack.pop();
+    if (!next) return;
+    this.textureUndoStack.push(current);
+    const limit = Math.max(1, getUndoHistoryLimit());
+    while (this.textureUndoStack.length > limit) this.textureUndoStack.shift();
+    this.restoreUndoSnapshot(next);
+    this.undoGestureSnapshot = this.captureUndoSnapshot();
+    this.undoGesturePushed = true;
   }
 
   private setChannel(value: number): void {

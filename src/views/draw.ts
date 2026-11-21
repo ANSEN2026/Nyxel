@@ -1,9 +1,9 @@
 import type { ViewCallbacks } from '../types';
+import { getUndoHistoryLimit } from '../lib/undo-history';
 import { mimeFromExt } from '../utils';
 
 const CANVAS_WIDTH = 1600;
 const CANVAS_HEIGHT = 1000;
-const HISTORY_LIMIT = 30;
 const LAYOUT_KEY = 'texturemap.draw.layout.v2';
 
 type DrawTool =
@@ -972,7 +972,7 @@ export class DrawView {
     const snapshot = this.captureSnapshot();
     this.historySnapshots = this.historySnapshots.slice(0, this.historyIndex + 1);
     this.historySnapshots.push(snapshot);
-    if (this.historySnapshots.length > HISTORY_LIMIT) this.historySnapshots.shift();
+    if (this.historySnapshots.length > Math.max(1, getUndoHistoryLimit())) this.historySnapshots.shift();
     this.historyIndex = this.historySnapshots.length - 1;
   }
 
@@ -1803,17 +1803,9 @@ export class DrawView {
         panel.classList.toggle('collapsed', collapsed);
         button.setAttribute('aria-expanded', String(!collapsed));
       };
-      try {
-        apply(localStorage.getItem(`texturemap.draw.panel.${key}`) === '1');
-      } catch {
-        apply(false);
-      }
+      apply(true);
       button.addEventListener('click', () => {
-        const collapsed = !panel.classList.contains('collapsed');
-        apply(collapsed);
-        try {
-          localStorage.setItem(`texturemap.draw.panel.${key}`, collapsed ? '1' : '0');
-        } catch { /* storage unavailable */ }
+        apply(!panel.classList.contains('collapsed'));
       });
     });
 

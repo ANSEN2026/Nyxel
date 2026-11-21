@@ -1,5 +1,6 @@
 import { MOTION_CAPTURE_ENABLED } from '../feature-flags';
 import { audioMonitor } from '../lib/audio-monitor';
+import { normalizeUndoHistoryLimit } from '../lib/undo-history';
 import type { AppInfo, MotionCaptureConfig, MotionCaptureRuntime, Settings, Theme, ToastApi } from '../types';
 
 export class SettingsView {
@@ -89,6 +90,14 @@ export class SettingsView {
 
           <section class="settings-section">
             <h3>通用</h3>
+            <div class="settings-row">
+              <div class="settings-label">撤回记录次数</div>
+              <div class="settings-control">
+                <input id="set-undo-limit" type="number" min="1" max="100" step="1" value="10">
+                <span class="settings-hint">默认 10 步</span>
+              </div>
+            </div>
+            <div class="settings-hint">贴图调节、颜色、选择按钮和绘画操作支持 Ctrl+Z 撤回，Ctrl+Shift+Z / Ctrl+Y 重做；超出数量的旧记录会自动丢弃。</div>
             <div class="settings-row">
               <div class="settings-label">默认保存与导出目录</div>
               <div class="settings-control">
@@ -290,6 +299,7 @@ export class SettingsView {
 
     const theme = this.element.querySelector('#set-theme') as HTMLSelectElement;
     const language = this.element.querySelector('#set-language') as HTMLSelectElement;
+    const undoLimit = this.element.querySelector('#set-undo-limit') as HTMLInputElement;
     const exportDir = this.element.querySelector('#set-export-dir') as HTMLInputElement;
     const screenshotDir = this.element.querySelector('#set-screenshot-dir') as HTMLInputElement;
     const videoNoteDir = this.element.querySelector('#set-video-note-dir') as HTMLInputElement;
@@ -313,6 +323,11 @@ export class SettingsView {
     });
     language.addEventListener('change', () => {
       this.patch({ language: language.value as Settings['language'] });
+    });
+    undoLimit.addEventListener('change', () => {
+      const value = normalizeUndoHistoryLimit(undoLimit.value);
+      undoLimit.value = String(value);
+      this.patch({ undoHistoryLimit: value });
     });
     exportDir.addEventListener('change', () => {
       this.patch({ exportDir: exportDir.value.trim() });
@@ -513,6 +528,7 @@ export class SettingsView {
     }
     (this.element.querySelector('#set-theme') as HTMLSelectElement).value = settings.theme;
     (this.element.querySelector('#set-language') as HTMLSelectElement).value = settings.language;
+    (this.element.querySelector('#set-undo-limit') as HTMLInputElement).value = String(normalizeUndoHistoryLimit(settings.undoHistoryLimit));
     (this.element.querySelector('#set-export-dir') as HTMLInputElement).value = settings.exportDir;
     (this.element.querySelector('#set-screenshot-dir') as HTMLInputElement).value = settings.screenshotDir;
     (this.element.querySelector('#set-video-note-dir') as HTMLInputElement).value = settings.videoNoteDir;

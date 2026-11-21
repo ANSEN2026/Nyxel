@@ -60,6 +60,7 @@ interface Settings {
   cacheDir: string;
   ffmpegPath: string;
   screenshotHotkey: string;
+  undoHistoryLimit: number;
   updateChannel: UpdateChannel;
   colorCount: number;
   colorRatioMode: 'perceptual' | 'pixel';
@@ -172,6 +173,7 @@ function defaultSettings(): Settings {
     cacheDir: path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'Nyxel', 'cache'),
     ffmpegPath: '',
     screenshotHotkey: 'Ctrl+Alt+A',
+    undoHistoryLimit: 10,
     updateChannel: 'stable',
     colorCount: 6,
     colorRatioMode: 'perceptual',
@@ -208,6 +210,7 @@ function loadSettings(): Settings {
       ...defaults,
       ...parsed,
       schemaVersion: 2,
+      undoHistoryLimit: Math.max(1, Math.min(100, Math.round(Number(parsed.undoHistoryLimit) || defaults.undoHistoryLimit))),
       recentProjects: Array.isArray(parsed.recentProjects)
         ? parsed.recentProjects.filter((item): item is RecentProject => Boolean(item && item.type && item.path && item.name)).slice(0, 8)
         : []
