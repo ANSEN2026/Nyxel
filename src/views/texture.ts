@@ -350,7 +350,13 @@ export class TextureView {
             </div>
           </div>
           <div class="ai-panel-body hidden">
-            <section class="ai-section">
+            <div class="ai-panel-tools">
+              <span>AI 模块</span>
+              <span class="spacer"></span>
+              <button type="button" data-ai-expand-all>展开全部</button>
+              <button type="button" data-ai-collapse-all>收起全部</button>
+            </div>
+            <section class="ai-section" data-ai-section="upscale">
               <div class="ai-section-head"><span>AI 超分 / 无损放大</span><span class="ai-pill">GPU</span></div>
               <p class="ai-copy">使用本地 Upscayl / Real-ESRGAN 运行时，首次使用需下载模型；图片不会上传。</p>
               <div class="ai-panel-status" id="ai-panel-status">检查 AI 运行时…</div>
@@ -361,7 +367,7 @@ export class TextureView {
               </div>
             </section>
 
-            <section class="ai-section">
+            <section class="ai-section" data-ai-section="cutout">
               <div class="ai-section-head"><span>AI 抠图</span><span class="ai-pill">本地</span></div>
               <p class="ai-copy">自动从图像边缘识别背景，保留主体并平滑边缘，不上传图片。</p>
               <div class="ai-row">
@@ -380,7 +386,7 @@ export class TextureView {
               </div>
             </section>
 
-            <section class="ai-section tile-section">
+            <section class="ai-section tile-section" data-ai-section="tile">
               <div class="ai-section-head"><span>平铺合成</span><span class="ai-pill">无缝</span></div>
               <p class="ai-copy">把图片合成为无缝平铺贴图，可控制重复、位移、边缘融合和输出尺寸。</p>
               <div class="tile-preview-wrap">
@@ -435,7 +441,7 @@ export class TextureView {
               </div>
             </section>
 
-            <section class="ai-section">
+            <section class="ai-section" data-ai-section="sequence">
               <div class="ai-section-head"><span>AI 序列贴图</span><span class="ai-pill">帧</span></div>
               <p class="ai-copy">把序列帧拼图按网格拆分，点击格子选择帧，可逐帧播放和取用当前帧。</p>
               <div class="ai-row">
@@ -865,6 +871,7 @@ export class TextureView {
     this.camera.position.set(0, 0, 1);
 
     this.setupComposeGroups();
+    this.setupAiSections();
     this.bindEvents();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.body);
@@ -1851,6 +1858,50 @@ export class TextureView {
     window.addEventListener('pointercancel', (event) => this.endComposeGroupDrag(event));
   }
 
+  private setupAiSections(): void {
+    const sections = [...this.aiPanelBody.querySelectorAll<HTMLElement>(':scope > .ai-section[data-ai-section]')];
+    const entries: Array<{
+      key: string;
+      apply: (collapsed: boolean) => void;
+      toggle: () => void;
+    }> = [];
+    for (const section of sections) {
+      const key = section.dataset.aiSection;
+      const head = section.querySelector<HTMLElement>('.ai-section-head');
+      if (!key || !head) continue;
+      const body = document.createElement('div');
+      body.className = 'ai-section-body';
+      while (head.nextSibling) body.append(head.nextSibling);
+      section.append(body);
+      head.setAttribute('role', 'button');
+      head.setAttribute('tabindex', '0');
+      const apply = (collapsed: boolean): void => {
+        section.classList.toggle('collapsed', collapsed);
+        head.setAttribute('aria-expanded', String(!collapsed));
+        if (collapsed && key === 'sequence') this.stopAiSequence();
+        if (!collapsed && key === 'tile') this.renderTilePreview();
+      };
+      const toggle = (): void => {
+        apply(!section.classList.contains('collapsed'));
+      };
+      apply(key !== 'upscale');
+      head.addEventListener('click', toggle);
+      head.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          toggle();
+        }
+      });
+      entries.push({ key, apply, toggle });
+    }
+    this.aiPanelBody.querySelector('[data-ai-expand-all]')?.addEventListener('click', () => {
+      for (const entry of entries) entry.apply(false);
+    });
+    this.aiPanelBody.querySelector('[data-ai-collapse-all]')?.addEventListener('click', () => {
+      for (const entry of entries) entry.apply(true);
+    });
+  }
+
   private startComposeGroupDrag(event: PointerEvent, grip: HTMLElement): void {
     if (event.button !== 0) return;
     const group = grip.closest<HTMLElement>('.compose-group');
@@ -2277,7 +2328,8 @@ export class TextureView {
       if (!this.composeSource && this.aiSeqSource.value === 'child') this.aiSeqSource.value = 'parent';
       this.updateAiCutButtons();
       this.syncTileDefaults();
-      this.renderTilePreview();
+      const tileSection = this.aiPanelBody.querySelector('[data-ai-section="tile"]');
+      if (!tileSection?.classList.contains('collapsed')) this.renderTilePreview();
       this.resetAiSequenceSelection();
       this.renderAiSequenceGrid();
       void this.refreshAiStatus();
