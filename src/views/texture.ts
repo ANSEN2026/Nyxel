@@ -322,6 +322,7 @@ export class TextureView {
   private penEffectCanvas = document.createElement('canvas');
   private penEffectCtx: CanvasRenderingContext2D;
   private penPoints: PenPoint[] = [];
+  private penSelected = -1;
   private penEditing = false;
   private penVisible = true;
   private penDrag: { kind: 'anchor' | 'in' | 'out' | 'new'; index: number; moved: boolean } | null = null;
@@ -678,7 +679,7 @@ export class TextureView {
 
             <section class="ai-section path-gradient-section" data-ai-section="path">
               <div class="ai-section-head"><span>路径渐变</span><span class="ai-pill">钢笔</span></div>
-              <p class="ai-copy">用钢笔在左侧贴图上绘制路径，颜色读取「渐变图」，沿路径生成头→尾笔触。</p>
+              <p class="ai-copy">用钢笔在左侧贴图上绘制路径，颜色读取「渐变图」，沿路径生成头→尾笔触。<br>左键加点 / 拖动曲线；Alt+左键在线条上插入锚点；Ctrl+左键选择并编辑锚点；右键删除。</p>
               <div class="dispersion-preview-wrap path-preview-wrap">
                 <canvas id="path-preview" width="320" height="220"></canvas>
               </div>
@@ -4032,7 +4033,7 @@ export class TextureView {
     }
 
     const status = this.penEditing
-      ? `钢笔：左键加点 / 拖动曲线 / 右键删点 · ${this.penPoints.length} 锚点`
+      ? `钢笔：左键加点 · Alt 插点 · Ctrl 编辑 · ${this.penPoints.length} 锚点`
       : this.penPoints.length < 2
         ? '先用钢笔在左侧绘制路径'
         : `路径 ${this.penPoints.length} 个锚点 · 头 → 尾`;
@@ -4087,6 +4088,7 @@ export class TextureView {
 
   private clearPenPath(notify: boolean): void {
     this.penPoints = [];
+    this.penSelected = -1;
     this.penEditing = false;
     this.penDrag = null;
     this.penPanning = false;
@@ -4184,8 +4186,8 @@ export class TextureView {
     if (this.penOverlay.height !== pixelHeight) this.penOverlay.height = pixelHeight;
   }
 
-  private penPointToScreen(x: number, y: number): { x: number; y: number } {
-    const rect = this.penOverlay.getBoundingClientRect();
+  private penPointToScreen(x: number, y: number, rectOverride?: DOMRect): { x: number; y: number } {
+    const rect = rectOverride ?? this.penOverlay.getBoundingClientRect();
     if (!this.mesh || !this.imageWidth || !this.imageHeight) return { x: 0, y: 0 };
     const aspect = this.imageWidth / Math.max(1, this.imageHeight);
     let u = x;
@@ -4245,6 +4247,100 @@ export class TextureView {
     return null;
   }
 
+  private penNearestPathPoint(event: PointerEvent | MouseEvent): { segment: number; t: number; distance: number } | null {
+    const points = this.penPoints;
+    if (points.length < 2) return null;
+    const rect = this.penOverlay.getBoundingClientRect();
+    const mouseX = event.clientX - rect.left;
+    const mouseY = event.clientY - rect.top;
+    this.scene.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld();
+    let best: { segment: number; t: number; distance: number } | null = null;
+    const steps = 48;
+    for (let segment = 0; segment < points.length - 1; segment += 1) {
+      const start = points[segment];
+      const end = points[segment + 1];
+      const c1x = start.x + start.outX;
+      const c1y = start.y + start.outY;
+      const c2x = end.x + end.inX;
+      const c2y = end.y + end.inY;
+      for (let step = 0; step <= steps; step += 1) {
+        const t = step / steps;
+        const mt = 1 - t;
+        const x = mt * mt * mt * start.x + 3 * mt * mt * t * c1x + 3 * mt * t * t * c2x + t * t * t * end.x;
+        const y = mt * mt * mt * start.y + 3 * mt * mt * t * c1y + 3 * mt * t * t * c2y + t * t * t * end.y;
+        const screen = this.penPointToScreen(x, y, rect);
+        const distance = Math.hypot(screen.x - mouseX, screen.y - mouseY);
+        if (!best || distance < best.distance) best = { segment, t, distance };
+      }
+    }
+    return best;
+  }
+
+  private penAnchorIndexFromEvent(
+    event: PointerEvent | MouseEvent,
+    directHit?: { kind: 'anchor' | 'in' | 'out'; index: number } | null
+  ): number {
+    const hit = directHit === undefined ? this.penHitTest(event) : directHit;
+    if (hit?.kind === 'anchor') return hit.index;
+    const pathHit = this.penNearestPathPoint(event);
+    if (!pathHit || pathHit.distance > 18) return -1;
+    const index = pathHit.t < 0.5 ? pathHit.segment : pathHit.segment + 1;
+    return Math.min(index, this.penPoints.length - 1);
+  }
+
+  private insertPenAnchorOnPath(segment: number, t: number): void {
+    const points = this.penPoints;
+    const start = points[segment];
+    const end = points[segment + 1];
+    if (!start || !end) return;
+    const ratio = Math.max(0.01, Math.min(0.99, t));
+    const c1x = start.x + start.outX;
+    const c1y = start.y + start.outY;
+    const c2x = end.x + end.inX;
+    const c2y = end.y + end.inY;
+    const straight =
+      Math.abs(start.outX) + Math.abs(start.outY) + Math.abs(end.inX) + Math.abs(end.inY) < 1e-6;
+    let inserted: PenPoint;
+    if (straight) {
+      inserted = {
+        x: start.x + (end.x - start.x) * ratio,
+        y: start.y + (end.y - start.y) * ratio,
+        inX: 0,
+        inY: 0,
+        outX: 0,
+        outY: 0
+      };
+    } else {
+      const lerp = (ax: number, ay: number, bx: number, by: number, amount: number): { x: number; y: number } => ({
+        x: ax + (bx - ax) * amount,
+        y: ay + (by - ay) * amount
+      });
+      const p01 = lerp(start.x, start.y, c1x, c1y, ratio);
+      const p12 = lerp(c1x, c1y, c2x, c2y, ratio);
+      const p23 = lerp(c2x, c2y, end.x, end.y, ratio);
+      const p012 = lerp(p01.x, p01.y, p12.x, p12.y, ratio);
+      const p123 = lerp(p12.x, p12.y, p23.x, p23.y, ratio);
+      const point = lerp(p012.x, p012.y, p123.x, p123.y, ratio);
+      start.outX = p01.x - start.x;
+      start.outY = p01.y - start.y;
+      end.inX = p23.x - end.x;
+      end.inY = p23.y - end.y;
+      inserted = {
+        x: point.x,
+        y: point.y,
+        inX: p012.x - point.x,
+        inY: p012.y - point.y,
+        outX: p123.x - point.x,
+        outY: p123.y - point.y
+      };
+    }
+    points.splice(segment + 1, 0, inserted);
+    this.penSelected = segment + 1;
+    this.renderPenOverlay();
+    this.renderPathGradient();
+  }
+
   private penPointerDown(event: PointerEvent): void {
     if (!this.penEditing) return;
     if (event.button === 1) {
@@ -4256,16 +4352,32 @@ export class TextureView {
     }
     if (event.button !== 0) return;
     event.preventDefault();
-    const hit = this.penHitTest(event);
-    if (hit) {
-      this.penDrag = { kind: hit.kind, index: hit.index, moved: false };
+    const directHit = this.penHitTest(event);
+    if (event.ctrlKey || event.metaKey) {
+      const index = this.penAnchorIndexFromEvent(event, directHit);
+      if (index >= 0) {
+        this.penSelected = index;
+        this.penDrag = { kind: 'anchor', index, moved: false };
+        this.renderPenOverlay();
+      }
+      return;
+    }
+    if (event.altKey && !directHit) {
+      const pathHit = this.penNearestPathPoint(event);
+      if (pathHit && pathHit.distance <= 14) this.insertPenAnchorOnPath(pathHit.segment, pathHit.t);
+      return;
+    }
+    if (directHit) {
+      this.penSelected = directHit.index;
+      this.penDrag = { kind: directHit.kind, index: directHit.index, moved: false };
       this.renderPenOverlay();
       return;
     }
     const point = this.penEventToImage(event);
     if (!point) return;
     this.penPoints.push({ x: point.x, y: point.y, inX: 0, inY: 0, outX: 0, outY: 0 });
-    this.penDrag = { kind: 'new', index: this.penPoints.length - 1, moved: false };
+    this.penSelected = this.penPoints.length - 1;
+    this.penDrag = { kind: 'new', index: this.penSelected, moved: false };
     this.renderPenOverlay();
     this.schedulePathRender();
   }
@@ -4348,6 +4460,8 @@ export class TextureView {
     const hit = this.penHitTest(event);
     if (!hit || hit.kind !== 'anchor') return;
     this.penPoints.splice(hit.index, 1);
+    if (this.penSelected === hit.index) this.penSelected = -1;
+    else if (this.penSelected > hit.index) this.penSelected -= 1;
     this.penDrag = null;
     this.renderPenOverlay();
     this.renderPathGradient();
@@ -4472,6 +4586,13 @@ export class TextureView {
       this.penCtx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
       this.penCtx.lineWidth = 1;
       this.penCtx.stroke();
+      if (index === this.penSelected) {
+        this.penCtx.beginPath();
+        this.penCtx.arc(anchor.x, anchor.y, 7, 0, Math.PI * 2);
+        this.penCtx.strokeStyle = '#f5b13d';
+        this.penCtx.lineWidth = 2;
+        this.penCtx.stroke();
+      }
       if (isFirst || isLast) {
         this.penCtx.font = '600 10px "Segoe UI", sans-serif';
         this.penCtx.textAlign = 'center';
