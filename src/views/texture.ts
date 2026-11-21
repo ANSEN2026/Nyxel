@@ -2386,7 +2386,7 @@ export class TextureView {
     const context = this.aiSeqGridCtx;
     const canvas = this.aiSeqGrid;
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#0d1724';
+    context.fillStyle = '#0b0d10';
     context.fillRect(0, 0, canvas.width, canvas.height);
     const source = this.aiSequenceSource();
     if (!source) {
@@ -2420,10 +2420,10 @@ export class TextureView {
         const cellX = x + col * cellWidth;
         const cellY = y + row * cellHeight;
         if (this.aiSeqSelected.has(index)) {
-          context.fillStyle = index === currentFrame ? 'rgba(90, 169, 255, 0.24)' : 'rgba(90, 169, 255, 0.1)';
+          context.fillStyle = index === currentFrame ? 'rgba(90, 169, 255, 0.1)' : 'rgba(90, 169, 255, 0.035)';
           context.fillRect(cellX, cellY, cellWidth, cellHeight);
         }
-        context.strokeStyle = index === currentFrame ? '#8fc8ff' : 'rgba(90, 169, 255, 0.42)';
+        context.strokeStyle = index === currentFrame ? '#8fc8ff' : 'rgba(90, 169, 255, 0.3)';
         context.lineWidth = index === currentFrame ? 2 : 1;
         context.strokeRect(cellX, cellY, cellWidth, cellHeight);
         if (cols * rows <= 64) {
@@ -2442,7 +2442,7 @@ export class TextureView {
     const context = this.aiSeqPreviewCtx;
     const canvas = this.aiSeqPreview;
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#0d1724';
+    context.fillStyle = '#0b0d10';
     context.fillRect(0, 0, canvas.width, canvas.height);
     const source = this.aiSequenceSource();
     const frames = this.aiSequenceFrames();
