@@ -231,6 +231,18 @@ export class TextureView {
   private tileOutput: HTMLCanvasElement | null = null;
   private tilePreviewTimer = 0;
 
+  private dispersionPreview: HTMLCanvasElement;
+  private dispersionCtx: CanvasRenderingContext2D;
+  private dispersionMode: HTMLSelectElement;
+  private dispersionTransparent: HTMLInputElement;
+  private dispersionOffsetX: HTMLInputElement;
+  private dispersionOffsetXValue: HTMLInputElement;
+  private dispersionOffsetY: HTMLInputElement;
+  private dispersionOffsetYValue: HTMLInputElement;
+  private dispersionBlack = false;
+  private dispersionOutput: HTMLCanvasElement | null = null;
+  private dispersionTimer = 0;
+
   private aiSeqSource: HTMLSelectElement;
   private aiSeqCols: HTMLInputElement;
   private aiSeqRows: HTMLInputElement;
@@ -438,6 +450,53 @@ export class TextureView {
                   <input id="tile-width" type="number" min="1" max="4096" value="512" disabled>
                   <input id="tile-height" type="number" min="1" max="4096" value="512" disabled>
                 </div>
+              </div>
+            </section>
+
+            <section class="ai-section dispersion-section" data-ai-section="dispersion">
+              <div class="ai-section-head"><span>色散分离</span><span class="ai-pill">RGB</span></div>
+              <p class="ai-copy">RGB 通道水平 / 垂直色散，用于故障风、镜头色差和边缘分离。</p>
+              <div class="dispersion-preview-wrap" id="dispersion-preview-wrap">
+                <canvas id="dispersion-preview" width="320" height="320"></canvas>
+              </div>
+              <div class="ai-button-row">
+                <button type="button" class="primary" data-dispersion-apply>应用</button>
+                <button type="button" data-dispersion-export>导出 PNG</button>
+                <button type="button" data-dispersion-reset>重置</button>
+                <button type="button" data-dispersion-black>黑底</button>
+              </div>
+              <div class="tile-mode-row">
+                <span>模式</span>
+                <select id="dispersion-mode">
+                  <option value="b" selected>B / 蓝通道</option>
+                  <option value="r">R / 红通道</option>
+                  <option value="g">G / 绿通道</option>
+                </select>
+              </div>
+              <div class="tile-checks">
+                <label><input id="dispersion-transparent" type="checkbox" checked> PNG 位移样式（保留透明边缘）</label>
+              </div>
+              <div class="tile-slider-row">
+                <span>水平位移</span>
+                <input id="dispersion-offset-x" type="range" min="-20" max="20" step="1" value="2">
+                <input id="dispersion-offset-x-value" class="tile-number" type="number" min="-20" max="20" step="1" value="2">
+              </div>
+              <div class="dispersion-quick-row">
+                <button type="button" data-dispersion-x="-3">-3</button>
+                <button type="button" data-dispersion-x="-2">-2</button>
+                <button type="button" data-dispersion-x="2">+2</button>
+                <button type="button" data-dispersion-x="3">+3</button>
+              </div>
+              <div class="tile-slider-row">
+                <span>垂直位移</span>
+                <input id="dispersion-offset-y" type="range" min="-20" max="20" step="1" value="-2">
+                <input id="dispersion-offset-y-value" class="tile-number" type="number" min="-20" max="20" step="1" value="-2">
+              </div>
+              <div class="dispersion-quick-row">
+                <button type="button" data-dispersion-y="-3">-3</button>
+                <button type="button" data-dispersion-y="-2">-2</button>
+                <button type="button" data-dispersion-y="2">+2</button>
+                <button type="button" data-dispersion-y="3">+3</button>
               </div>
             </section>
 
@@ -777,6 +836,14 @@ export class TextureView {
     this.tileCustomSize = this.element.querySelector('#tile-custom-size') as HTMLInputElement;
     this.tileWidth = this.element.querySelector('#tile-width') as HTMLInputElement;
     this.tileHeight = this.element.querySelector('#tile-height') as HTMLInputElement;
+    this.dispersionPreview = this.element.querySelector('#dispersion-preview') as HTMLCanvasElement;
+    this.dispersionCtx = this.dispersionPreview.getContext('2d') as CanvasRenderingContext2D;
+    this.dispersionMode = this.element.querySelector('#dispersion-mode') as HTMLSelectElement;
+    this.dispersionTransparent = this.element.querySelector('#dispersion-transparent') as HTMLInputElement;
+    this.dispersionOffsetX = this.element.querySelector('#dispersion-offset-x') as HTMLInputElement;
+    this.dispersionOffsetXValue = this.element.querySelector('#dispersion-offset-x-value') as HTMLInputElement;
+    this.dispersionOffsetY = this.element.querySelector('#dispersion-offset-y') as HTMLInputElement;
+    this.dispersionOffsetYValue = this.element.querySelector('#dispersion-offset-y-value') as HTMLInputElement;
     this.aiSeqSource = this.element.querySelector('#ai-seq-source') as HTMLSelectElement;
     this.aiSeqCols = this.element.querySelector('#ai-seq-cols') as HTMLInputElement;
     this.aiSeqRows = this.element.querySelector('#ai-seq-rows') as HTMLInputElement;
@@ -1027,6 +1094,60 @@ export class TextureView {
     this.element.querySelector('[data-tile-apply]')?.addEventListener('click', () => this.applyTileOutput());
     this.element.querySelector('[data-tile-export]')?.addEventListener('click', () => void this.exportTileOutput());
     this.element.querySelector('[data-tile-reset]')?.addEventListener('click', () => this.resetTileControls());
+
+    const scheduleDispersionPreview = (): void => {
+      window.clearTimeout(this.dispersionTimer);
+      this.dispersionTimer = window.setTimeout(() => this.renderDispersionPreview(), 60);
+    };
+    this.dispersionMode.addEventListener('change', scheduleDispersionPreview);
+    this.dispersionTransparent.addEventListener('change', scheduleDispersionPreview);
+    this.dispersionOffsetX.addEventListener('input', () => {
+      this.dispersionOffsetXValue.value = this.dispersionOffsetX.value;
+      scheduleDispersionPreview();
+    });
+    this.dispersionOffsetY.addEventListener('input', () => {
+      this.dispersionOffsetYValue.value = this.dispersionOffsetY.value;
+      scheduleDispersionPreview();
+    });
+    this.dispersionOffsetXValue.addEventListener('change', () => {
+      const value = Math.max(-20, Math.min(20, Math.round(Number(this.dispersionOffsetXValue.value) || 0)));
+      this.dispersionOffsetX.value = String(value);
+      this.dispersionOffsetXValue.value = String(value);
+      scheduleDispersionPreview();
+    });
+    this.dispersionOffsetYValue.addEventListener('change', () => {
+      const value = Math.max(-20, Math.min(20, Math.round(Number(this.dispersionOffsetYValue.value) || 0)));
+      this.dispersionOffsetY.value = String(value);
+      this.dispersionOffsetYValue.value = String(value);
+      scheduleDispersionPreview();
+    });
+    this.element.querySelectorAll<HTMLElement>('[data-dispersion-x]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const value = Number(button.dataset.dispersionX) || 0;
+        this.dispersionOffsetX.value = String(value);
+        this.dispersionOffsetXValue.value = String(value);
+        scheduleDispersionPreview();
+      });
+    });
+    this.element.querySelectorAll<HTMLElement>('[data-dispersion-y]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const value = Number(button.dataset.dispersionY) || 0;
+        this.dispersionOffsetY.value = String(value);
+        this.dispersionOffsetYValue.value = String(value);
+        scheduleDispersionPreview();
+      });
+    });
+    this.element.querySelector('[data-dispersion-black]')?.addEventListener('click', () => {
+      this.dispersionBlack = !this.dispersionBlack;
+      const wrap = this.element.querySelector('#dispersion-preview-wrap') as HTMLElement | null;
+      wrap?.classList.toggle('black', this.dispersionBlack);
+      const button = this.element.querySelector('[data-dispersion-black]') as HTMLButtonElement | null;
+      if (button) button.textContent = this.dispersionBlack ? '棋盘' : '黑底';
+      this.renderDispersionPreview();
+    });
+    this.element.querySelector('[data-dispersion-apply]')?.addEventListener('click', () => this.applyDispersionOutput());
+    this.element.querySelector('[data-dispersion-export]')?.addEventListener('click', () => void this.exportDispersionOutput());
+    this.element.querySelector('[data-dispersion-reset]')?.addEventListener('click', () => this.resetDispersionControls());
     this.aiSeqSource.addEventListener('change', () => {
       this.resetAiSequenceSelection();
       this.renderAiSequenceGrid();
@@ -1880,6 +2001,7 @@ export class TextureView {
         head.setAttribute('aria-expanded', String(!collapsed));
         if (collapsed && key === 'sequence') this.stopAiSequence();
         if (!collapsed && key === 'tile') this.renderTilePreview();
+        if (!collapsed && key === 'dispersion') this.renderDispersionPreview();
       };
       const toggle = (): void => {
         apply(!section.classList.contains('collapsed'));
@@ -2330,6 +2452,8 @@ export class TextureView {
       this.syncTileDefaults();
       const tileSection = this.aiPanelBody.querySelector('[data-ai-section="tile"]');
       if (!tileSection?.classList.contains('collapsed')) this.renderTilePreview();
+      const dispersionSection = this.aiPanelBody.querySelector('[data-ai-section="dispersion"]');
+      if (!dispersionSection?.classList.contains('collapsed')) this.renderDispersionPreview();
       this.resetAiSequenceSelection();
       this.renderAiSequenceGrid();
       void this.refreshAiStatus();
@@ -2730,6 +2854,125 @@ export class TextureView {
     this.tileHeight.value = String(this.imageHeight || 512);
     this.syncTileDefaults();
     this.renderTilePreview();
+  }
+
+  private buildDispersionOutput(): HTMLCanvasElement | null {
+    if (!this.bitmap || !this.imageWidth || !this.imageHeight) return null;
+    const width = this.imageWidth;
+    const height = this.imageHeight;
+    const source = document.createElement('canvas');
+    source.width = width;
+    source.height = height;
+    const sourceContext = source.getContext('2d', { willReadFrequently: true });
+    if (!sourceContext) return null;
+    sourceContext.drawImage(this.bitmap as CanvasImageSource, 0, 0);
+    const sourceData = sourceContext.getImageData(0, 0, width, height).data;
+    const outputData = new Uint8ClampedArray(sourceData);
+    const mode = this.dispersionMode.value;
+    const channelOffset = mode === 'r' ? 0 : mode === 'g' ? 1 : 2;
+    const offsetX = Math.max(-20, Math.min(20, Math.round(Number(this.dispersionOffsetXValue.value) || 0)));
+    const offsetY = Math.max(-20, Math.min(20, Math.round(Number(this.dispersionOffsetYValue.value) || 0)));
+    const transparentEdge = this.dispersionTransparent.checked;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const sampleX = x - offsetX;
+        const sampleY = y - offsetY;
+        const inside = sampleX >= 0 && sampleX < width && sampleY >= 0 && sampleY < height;
+        if (!inside && transparentEdge) {
+          const outputIndex = (y * width + x) * 4;
+          outputData[outputIndex] = 0;
+          outputData[outputIndex + 1] = 0;
+          outputData[outputIndex + 2] = 0;
+          outputData[outputIndex + 3] = 0;
+          continue;
+        }
+        const clampedX = Math.max(0, Math.min(width - 1, sampleX));
+        const clampedY = Math.max(0, Math.min(height - 1, sampleY));
+        const sourceIndex = (clampedY * width + clampedX) * 4;
+        const outputIndex = (y * width + x) * 4;
+        outputData[outputIndex + channelOffset] = sourceData[sourceIndex + channelOffset];
+      }
+    }
+    const output = document.createElement('canvas');
+    output.width = width;
+    output.height = height;
+    const context = output.getContext('2d');
+    if (!context) return null;
+    context.putImageData(new ImageData(outputData, width, height), 0, 0);
+    return output;
+  }
+
+  private renderDispersionPreview(): void {
+    const output = this.buildDispersionOutput();
+    this.dispersionOutput = output;
+    const context = this.dispersionCtx;
+    const canvas = this.dispersionPreview;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (this.dispersionBlack) {
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    if (!output) {
+      context.fillStyle = this.dispersionBlack ? '#aaa' : '#7f8b96';
+      context.font = '12px "Microsoft YaHei", sans-serif';
+      context.textAlign = 'center';
+      context.fillText('载入图片后可用', canvas.width / 2, canvas.height / 2);
+      return;
+    }
+    const scale = Math.min(canvas.width / output.width, canvas.height / output.height);
+    const drawWidth = output.width * scale;
+    const drawHeight = output.height * scale;
+    context.imageSmoothingEnabled = true;
+    context.drawImage(output, (canvas.width - drawWidth) / 2, (canvas.height - drawHeight) / 2, drawWidth, drawHeight);
+  }
+
+  private applyDispersionOutput(): void {
+    if (!this.bitmap) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    const output = this.buildDispersionOutput();
+    if (!output) return;
+    this.dispersionOutput = output;
+    this.setImage(
+      output,
+      output.width,
+      output.height,
+      `${this.currentBaseName()}_dispersion.png`,
+      '',
+      output.width * output.height * 4,
+      { preserveTransform: true, preserveHistory: false }
+    );
+    this.setAiMode(true);
+    this.callbacks.toast('已应用色散分离', 'success');
+  }
+
+  private async exportDispersionOutput(): Promise<void> {
+    const output = this.dispersionOutput ?? this.buildDispersionOutput();
+    if (!output) return;
+    try {
+      const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('PNG 编码失败');
+      const data = new Uint8Array(await blob.arrayBuffer());
+      const saved = await window.nyxel.file.savePng(data, `${this.currentBaseName()}_dispersion.png`);
+      if (saved) this.callbacks.toast(`已导出：${saved}`, 'success');
+    } catch (error) {
+      this.callbacks.toast(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private resetDispersionControls(): void {
+    this.dispersionMode.value = 'b';
+    this.dispersionTransparent.checked = true;
+    this.dispersionOffsetX.value = '2';
+    this.dispersionOffsetXValue.value = '2';
+    this.dispersionOffsetY.value = '-2';
+    this.dispersionOffsetYValue.value = '-2';
+    this.dispersionBlack = false;
+    this.element.querySelector('#dispersion-preview-wrap')?.classList.remove('black');
+    const button = this.element.querySelector('[data-dispersion-black]') as HTMLButtonElement | null;
+    if (button) button.textContent = '黑底';
+    this.renderDispersionPreview();
   }
 
   private clampSequenceGrid(value: string): number {

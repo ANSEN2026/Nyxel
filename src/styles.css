@@ -1937,6 +1937,47 @@ label {
   opacity: 0.45;
 }
 
+.dispersion-preview-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 220px;
+  margin: 8px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background-color: #1a1a1a;
+  background-image:
+    linear-gradient(45deg, #282828 25%, transparent 25%),
+    linear-gradient(-45deg, #282828 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #282828 75%),
+    linear-gradient(-45deg, transparent 75%, #282828 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.dispersion-preview-wrap.black {
+  background: #000;
+}
+
+#dispersion-preview {
+  display: block;
+  width: 220px;
+  height: 220px;
+}
+
+.dispersion-quick-row {
+  display: flex;
+  gap: 6px;
+  margin: -2px 0 8px 64px;
+}
+
+.dispersion-quick-row button {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px;
+  font-size: 9px;
+}
+
 .compose-panel .compose-thumb,
 .compose-panel .compose-layer-tree,
 .compose-panel .pack-preview-wrap {
