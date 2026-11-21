@@ -267,11 +267,22 @@ export class TextureView {
   private gradientBarMarkers: HTMLElement;
   private gradientAlphaBarFill: HTMLElement;
   private gradientAlphaMarkers: HTMLElement;
-  private gradientColor: HTMLInputElement;
   private gradientPosition: HTMLInputElement;
-  private gradientAlpha: HTMLInputElement;
-  private gradientAlphaValue: HTMLElement;
   private gradientStatus: HTMLElement;
+  private gradientPopover: HTMLElement;
+  private gradientPopoverColor: HTMLElement;
+  private gradientPopoverAlpha: HTMLElement;
+  private gradientSv: HTMLElement;
+  private gradientSvHandle: HTMLElement;
+  private gradientHue: HTMLInputElement;
+  private gradientHex: HTMLInputElement;
+  private gradientSwatch: HTMLElement;
+  private gradientPopoverAlphaRange: HTMLInputElement;
+  private gradientPopoverAlphaValue: HTMLElement;
+  private gradientAlphaPreview: HTMLElement;
+  private gradientPopupMode: 'color' | 'alpha' = 'color';
+  private gradientPopupStop = -1;
+  private gradientHsv = { h: 0, s: 1, v: 1 };
   private gradientStops: Array<{ position: number; color: string }> = [
     { position: 0, color: '#ff7878' },
     { position: 100, color: '#ff3b3b' }
@@ -628,27 +639,41 @@ export class TextureView {
               <div class="ai-section-head"><span>渐变图</span><span class="ai-pill">渐变编辑</span></div>
               <p class="ai-copy">点击色条添加色标；左键色标调色，右键删除，拖动调整位置。</p>
               <div class="gradient-preview-wrap"><canvas id="gradient-preview" width="320" height="220"></canvas></div>
-              <div class="gradient-alpha-bar" id="gradient-alpha-bar" title="透明度标：左键添加，右键删除，拖动调整位置">
+              <div class="gradient-alpha-bar" id="gradient-alpha-bar" title="透明度标：点击调透明度，右键删除，拖动调整位置">
                 <div class="gradient-alpha-fill" id="gradient-alpha-fill"></div>
                 <div class="gradient-alpha-markers" id="gradient-alpha-markers"></div>
               </div>
-              <div class="gradient-bar" id="gradient-bar" title="颜色标：左键添加，右键删除，拖动调整位置">
+              <div class="gradient-bar" id="gradient-bar" title="颜色标：点击调色，右键删除，拖动调整位置">
                 <div class="gradient-bar-fill" id="gradient-bar-fill"></div>
                 <div class="gradient-bar-markers" id="gradient-bar-markers"></div>
               </div>
               <div class="gradient-edit-row">
                 <label>位置 <input id="gradient-position" type="number" min="0" max="100" step="1" value="100"><span>%</span></label>
-                <input id="gradient-color" class="gradient-color-input" type="color" value="#ff7878" tabindex="-1" aria-hidden="true">
-              </div>
-              <div class="gradient-edit-row">
-                <label>透明度 <input id="gradient-alpha" type="range" min="0" max="1" step="0.01" value="1"><span id="gradient-alpha-value">1.00</span></label>
               </div>
               <div class="ai-button-row">
                 <button type="button" class="primary" data-gradient-apply>创建贴图</button>
                 <button type="button" data-gradient-export>导出</button>
                 <button type="button" data-gradient-reset>恢复默认</button>
               </div>
-              <div class="gradient-status" id="gradient-status">左键色标调色 · 右键删除 · 拖动调整</div>
+              <div class="gradient-status" id="gradient-status">点击颜色标调色 · 点击透明度标调透明度</div>
+              <div class="gradient-popover hidden" id="gradient-popover">
+                <div class="gradient-popover-color" id="gradient-popover-color">
+                  <div class="gradient-sv" id="gradient-sv">
+                    <span class="gradient-sv-handle" id="gradient-sv-handle"></span>
+                  </div>
+                  <input class="gradient-hue" id="gradient-hue" type="range" min="0" max="360" step="1" value="0">
+                  <div class="gradient-popover-values">
+                    <span class="gradient-swatch" id="gradient-swatch"></span>
+                    <input class="gradient-hex" id="gradient-hex" type="text" maxlength="7" value="#ff7878">
+                  </div>
+                </div>
+                <div class="gradient-popover-alpha hidden" id="gradient-popover-alpha">
+                  <span class="gradient-alpha-preview" id="gradient-alpha-preview"></span>
+                  <span>透明度</span>
+                  <input id="gradient-popover-alpha-range" type="range" min="0" max="1" step="0.01" value="1">
+                  <span id="gradient-popover-alpha-value">1.00</span>
+                </div>
+              </div>
             </section>
 
             <section class="ai-section path-gradient-section" data-ai-section="path">
@@ -1024,11 +1049,19 @@ export class TextureView {
     this.gradientBarMarkers = this.element.querySelector('#gradient-bar-markers') as HTMLElement;
     this.gradientAlphaBarFill = this.element.querySelector('#gradient-alpha-fill') as HTMLElement;
     this.gradientAlphaMarkers = this.element.querySelector('#gradient-alpha-markers') as HTMLElement;
-    this.gradientColor = this.element.querySelector('#gradient-color') as HTMLInputElement;
     this.gradientPosition = this.element.querySelector('#gradient-position') as HTMLInputElement;
-    this.gradientAlpha = this.element.querySelector('#gradient-alpha') as HTMLInputElement;
-    this.gradientAlphaValue = this.element.querySelector('#gradient-alpha-value') as HTMLElement;
     this.gradientStatus = this.element.querySelector('#gradient-status') as HTMLElement;
+    this.gradientPopover = this.element.querySelector('#gradient-popover') as HTMLElement;
+    this.gradientPopoverColor = this.element.querySelector('#gradient-popover-color') as HTMLElement;
+    this.gradientPopoverAlpha = this.element.querySelector('#gradient-popover-alpha') as HTMLElement;
+    this.gradientSv = this.element.querySelector('#gradient-sv') as HTMLElement;
+    this.gradientSvHandle = this.element.querySelector('#gradient-sv-handle') as HTMLElement;
+    this.gradientHue = this.element.querySelector('#gradient-hue') as HTMLInputElement;
+    this.gradientHex = this.element.querySelector('#gradient-hex') as HTMLInputElement;
+    this.gradientSwatch = this.element.querySelector('#gradient-swatch') as HTMLElement;
+    this.gradientPopoverAlphaRange = this.element.querySelector('#gradient-popover-alpha-range') as HTMLInputElement;
+    this.gradientPopoverAlphaValue = this.element.querySelector('#gradient-popover-alpha-value') as HTMLElement;
+    this.gradientAlphaPreview = this.element.querySelector('#gradient-alpha-preview') as HTMLElement;
     this.pathPreview = this.element.querySelector('#path-preview') as HTMLCanvasElement;
     this.pathCtx = this.pathPreview.getContext('2d') as CanvasRenderingContext2D;
     this.pathWidth = this.element.querySelector('#path-width') as HTMLInputElement;
@@ -1369,40 +1402,23 @@ export class TextureView {
       window.clearTimeout(this.gradientTimer);
       this.gradientTimer = window.setTimeout(() => this.renderGradientEditor(), 40);
     };
-    this.gradientColor.addEventListener('input', () => {
-      const stop = this.gradientStops[this.gradientSelected];
-      if (!stop) return;
-      stop.color = this.gradientColor.value;
-      scheduleGradient();
-    });
     this.gradientPosition.addEventListener('change', () => {
       const stop = this.gradientStops[this.gradientSelected];
       if (!stop) return;
       stop.position = Math.max(0, Math.min(100, Number(this.gradientPosition.value) || 0));
       scheduleGradient();
     });
-    this.gradientAlpha.addEventListener('input', () => {
-      const stop = this.gradientAlphaStops[this.gradientAlphaSelected];
-      if (!stop) return;
-      stop.alpha = Math.max(0, Math.min(1, Number(this.gradientAlpha.value) || 0));
-      this.gradientAlphaValue.textContent = stop.alpha.toFixed(2);
-      scheduleGradient();
-    });
     this.gradientBarMarkers.addEventListener('click', (event) => {
       if (event.detail !== 0) return;
       const target = (event.target as HTMLElement).closest<HTMLElement>('[data-gradient-stop]');
       if (!target) return;
-      this.gradientSelected = Number(target.dataset.gradientStop) || 0;
-      this.syncGradientInputs();
-      this.renderGradientEditor();
+      this.openGradientPopover('color', Number(target.dataset.gradientStop) || 0);
     });
     this.gradientAlphaMarkers.addEventListener('click', (event) => {
       if (event.detail !== 0) return;
       const target = (event.target as HTMLElement).closest<HTMLElement>('[data-gradient-alpha-stop]');
       if (!target) return;
-      this.gradientAlphaSelected = Number(target.dataset.gradientAlphaStop) || 0;
-      this.syncGradientInputs();
-      this.renderGradientEditor();
+      this.openGradientPopover('alpha', Number(target.dataset.gradientAlphaStop) || 0);
     });
     const bindGradientDrag = (markers: HTMLElement, kind: 'color' | 'alpha'): void => {
       markers.addEventListener('pointerdown', (event) => {
@@ -1415,6 +1431,7 @@ export class TextureView {
         const bar = markers.getBoundingClientRect();
         if (bar.width <= 0) return;
         event.preventDefault();
+        this.closeGradientPopover();
         if (kind === 'color') this.gradientSelected = index;
         else this.gradientAlphaSelected = index;
         target.classList.add('dragging');
@@ -1444,8 +1461,8 @@ export class TextureView {
           window.removeEventListener('pointerup', finish);
           window.removeEventListener('pointercancel', finish);
           this.renderGradientEditor();
-          if (finishEvent.type === 'pointerup' && kind === 'color' && !moved) {
-            this.openGradientColorPicker(index);
+          if (finishEvent.type === 'pointerup' && !moved) {
+            this.openGradientPopover(kind, index);
           }
         };
         window.addEventListener('pointermove', move);
@@ -1456,6 +1473,7 @@ export class TextureView {
         const target = (event.target as HTMLElement).closest<HTMLElement>('[data-gradient-stop], [data-gradient-alpha-stop]');
         if (!target) return;
         event.preventDefault();
+        this.closeGradientPopover();
         const index = kind === 'color'
           ? Number(target.dataset.gradientStop) || 0
           : Number(target.dataset.gradientAlphaStop) || 0;
@@ -1482,6 +1500,66 @@ export class TextureView {
     this.element.querySelector('[data-gradient-reset]')?.addEventListener('click', () => this.resetGradient());
     this.element.querySelector('[data-gradient-apply]')?.addEventListener('click', () => this.applyGradientOutput());
     this.element.querySelector('[data-gradient-export]')?.addEventListener('click', () => void this.exportGradientOutput());
+
+    let gradientSvDragging = false;
+    const applySv = (event: PointerEvent): void => {
+      if (this.gradientPopupMode !== 'color') return;
+      const rect = this.gradientSv.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      this.gradientHsv.s = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+      this.gradientHsv.v = 1 - Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+      this.applyGradientHsv();
+    };
+    this.gradientSv.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || this.gradientPopupMode !== 'color') return;
+      event.preventDefault();
+      gradientSvDragging = true;
+      applySv(event);
+    });
+    window.addEventListener('pointermove', (event) => {
+      if (gradientSvDragging) applySv(event);
+    });
+    window.addEventListener('pointerup', () => {
+      gradientSvDragging = false;
+    });
+    this.gradientHue.addEventListener('input', () => {
+      this.gradientHsv.h = Math.max(0, Math.min(360, Number(this.gradientHue.value) || 0));
+      this.applyGradientHsv();
+    });
+    const applyGradientHex = (): void => {
+      const hsv = this.hexToHsv(this.gradientHex.value);
+      if (!hsv) {
+        this.gradientHex.value = this.hsvToHex(this.gradientHsv.h, this.gradientHsv.s, this.gradientHsv.v);
+        return;
+      }
+      this.gradientHsv = hsv;
+      this.applyGradientHsv();
+    };
+    this.gradientHex.addEventListener('change', applyGradientHex);
+    this.gradientHex.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      applyGradientHex();
+    });
+    this.gradientPopoverAlphaRange.addEventListener('input', () => {
+      if (this.gradientPopupMode !== 'alpha') return;
+      const stop = this.gradientAlphaStops[this.gradientPopupStop];
+      if (!stop) return;
+      stop.alpha = Math.max(0, Math.min(1, Number(this.gradientPopoverAlphaRange.value) || 0));
+      this.gradientPopoverAlphaValue.textContent = stop.alpha.toFixed(2);
+      this.updateGradientAlphaPreview(stop.alpha);
+      this.renderGradientEditor();
+    });
+    document.addEventListener('pointerdown', (event) => {
+      if (this.gradientPopover.classList.contains('hidden')) return;
+      const target = event.target as HTMLElement;
+      if (this.gradientPopover.contains(target)) return;
+      if (target.closest('[data-gradient-stop], [data-gradient-alpha-stop]')) return;
+      this.closeGradientPopover();
+    });
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') this.closeGradientPopover();
+    });
 
     const schedulePath = (): void => {
       window.clearTimeout(this.pathTimer);
@@ -2412,6 +2490,7 @@ export class TextureView {
         if (!collapsed && key === 'tile') this.renderTilePreview();
         if (!collapsed && key === 'dispersion') this.renderDispersionPreview();
         if (!collapsed && key === 'gradient') this.renderGradientEditor();
+        if (collapsed && key === 'gradient') this.closeGradientPopover();
         if (collapsed && key === 'path') this.setPenEditing(false);
         if (!collapsed && key === 'path') {
           this.pathSizeW.disabled = !this.pathCustomSize.checked;
@@ -2859,7 +2938,10 @@ export class TextureView {
       this.callbacks.toast('请先打开一张贴图', 'info');
       return;
     }
-    if (mode !== 'tools') this.setPenEditing(false);
+    if (mode !== 'tools') {
+      this.setPenEditing(false);
+      this.closeGradientPopover();
+    }
     this.panelMode = mode;
     this.aiMode = mode === 'ai';
     this.element.classList.toggle('ai-theme', mode === 'ai');
@@ -3440,14 +3522,17 @@ export class TextureView {
     this.gradientSelected = Math.max(0, Math.min(this.gradientStops.length - 1, this.gradientSelected));
     this.gradientAlphaSelected = Math.max(0, Math.min(this.gradientAlphaStops.length - 1, this.gradientAlphaSelected));
     const stop = this.gradientStops[this.gradientSelected];
-    if (stop) {
-      this.gradientColor.value = stop.color;
-      this.gradientPosition.value = String(Math.round(stop.position));
-    }
-    const alphaStop = this.gradientAlphaStops[this.gradientAlphaSelected];
-    if (alphaStop) {
-      this.gradientAlpha.value = alphaStop.alpha.toFixed(2);
-      this.gradientAlphaValue.textContent = alphaStop.alpha.toFixed(2);
+    if (stop) this.gradientPosition.value = String(Math.round(stop.position));
+    if (
+      !this.gradientPopover.classList.contains('hidden') &&
+      this.gradientPopupMode === 'alpha'
+    ) {
+      const alphaStop = this.gradientAlphaStops[this.gradientPopupStop];
+      if (alphaStop) {
+        this.gradientPopoverAlphaRange.value = alphaStop.alpha.toFixed(2);
+        this.gradientPopoverAlphaValue.textContent = alphaStop.alpha.toFixed(2);
+        this.updateGradientAlphaPreview(alphaStop.alpha);
+      }
     }
   }
 
@@ -3529,30 +3614,155 @@ export class TextureView {
     context.imageSmoothingEnabled = true;
     context.drawImage(output, 0, 0, width, height);
     this.syncGradientInputs();
-    this.gradientStatus.textContent = `${this.gradientStops.length} 色标 · ${this.gradientAlphaStops.length} 透明度标 · 左键调色 / 右键删除`;
+    this.gradientStatus.textContent = `${this.gradientStops.length} 色标 · ${this.gradientAlphaStops.length} 透明度标 · 点击色标调色 / 点击透明度标调透明度`;
     if (this.penPoints.length > 0) this.renderPenOverlay();
   }
 
-  private openGradientColorPicker(index: number): void {
-    const stop = this.gradientStops[index];
+  private rgbToHsv(red: number, green: number, blue: number): { h: number; s: number; v: number } {
+    const r = red / 255;
+    const g = green / 255;
+    const b = blue / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+    let hue = 0;
+    if (delta > 0) {
+      if (max === r) hue = ((g - b) / delta) % 6;
+      else if (max === g) hue = (b - r) / delta + 2;
+      else hue = (r - g) / delta + 4;
+      hue *= 60;
+      if (hue < 0) hue += 360;
+    }
+    return { h: hue, s: max === 0 ? 0 : delta / max, v: max };
+  }
+
+  private hsvToRgb(hue: number, saturation: number, value: number): { r: number; g: number; b: number } {
+    const h = ((hue % 360) + 360) % 360;
+    const s = Math.max(0, Math.min(1, saturation));
+    const v = Math.max(0, Math.min(1, value));
+    const c = v * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = v - c;
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+    if (h < 60) {
+      red = c;
+      green = x;
+    } else if (h < 120) {
+      red = x;
+      green = c;
+    } else if (h < 180) {
+      green = c;
+      blue = x;
+    } else if (h < 240) {
+      green = x;
+      blue = c;
+    } else if (h < 300) {
+      red = x;
+      blue = c;
+    } else {
+      red = c;
+      blue = x;
+    }
+    return {
+      r: Math.round((red + m) * 255),
+      g: Math.round((green + m) * 255),
+      b: Math.round((blue + m) * 255)
+    };
+  }
+
+  private hsvToHex(hue: number, saturation: number, value: number): string {
+    const rgb = this.hsvToRgb(hue, saturation, value);
+    return `#${[rgb.r, rgb.g, rgb.b].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+  }
+
+  private hexToHsv(input: string): { h: number; s: number; v: number } | null {
+    let value = input.trim().replace(/^#/, '');
+    if (/^[0-9a-f]{3}$/i.test(value)) value = value.split('').map((channel) => channel + channel).join('');
+    if (!/^[0-9a-f]{6}$/i.test(value)) return null;
+    return this.rgbToHsv(
+      parseInt(value.slice(0, 2), 16),
+      parseInt(value.slice(2, 4), 16),
+      parseInt(value.slice(4, 6), 16)
+    );
+  }
+
+  private applyGradientHsv(): void {
+    if (this.gradientPopupMode !== 'color') return;
+    const stop = this.gradientStops[this.gradientPopupStop];
     if (!stop) return;
-    this.gradientSelected = index;
-    this.syncGradientInputs();
+    const hex = this.hsvToHex(this.gradientHsv.h, this.gradientHsv.s, this.gradientHsv.v);
+    stop.color = hex;
+    this.gradientSwatch.style.background = hex;
+    this.gradientHex.value = hex;
+    this.gradientHue.value = String(Math.round(this.gradientHsv.h));
+    this.gradientSv.style.setProperty('--hue', String(this.gradientHsv.h));
+    this.gradientSvHandle.style.left = `${this.gradientHsv.s * 100}%`;
+    this.gradientSvHandle.style.top = `${(1 - this.gradientHsv.v) * 100}%`;
     this.renderGradientEditor();
-    this.gradientColor.value = stop.color;
-    const marker = this.gradientBarMarkers.querySelector<HTMLElement>(`[data-gradient-stop="${index}"]`);
-    if (marker) {
-      const rect = marker.getBoundingClientRect();
-      this.gradientColor.style.left = `${Math.round(rect.left)}px`;
-      this.gradientColor.style.top = `${Math.round(rect.bottom)}px`;
+  }
+
+  private updateGradientAlphaPreview(alpha: number): void {
+    this.gradientAlphaPreview.style.backgroundImage = `linear-gradient(rgba(255, 255, 255, ${alpha}), rgba(255, 255, 255, ${alpha})), repeating-conic-gradient(#262626 0% 25%, #1b1b1b 0% 50%)`;
+    this.gradientAlphaPreview.style.backgroundSize = 'auto, 8px 8px';
+  }
+
+  private positionGradientPopover(marker: HTMLElement): void {
+    const section = this.gradientPopover.closest('[data-ai-section="gradient"]') as HTMLElement | null;
+    if (!section) return;
+    this.gradientPopover.classList.remove('hidden');
+    const sectionRect = section.getBoundingClientRect();
+    const markerRect = marker.getBoundingClientRect();
+    const width = this.gradientPopover.offsetWidth || 210;
+    const height = this.gradientPopover.offsetHeight || 150;
+    let left = markerRect.left - sectionRect.left + markerRect.width / 2 - width / 2;
+    let top = markerRect.bottom - sectionRect.top + 8;
+    left = Math.max(6, Math.min(left, sectionRect.width - width - 6));
+    if (top + height > sectionRect.height - 6) {
+      top = markerRect.top - sectionRect.top - height - 8;
     }
-    const picker = this.gradientColor as HTMLInputElement & { showPicker?: () => void };
-    try {
-      if (typeof picker.showPicker === 'function') picker.showPicker();
-      else this.gradientColor.click();
-    } catch {
-      this.gradientColor.click();
+    this.gradientPopover.style.left = `${Math.round(left)}px`;
+    this.gradientPopover.style.top = `${Math.round(Math.max(6, top))}px`;
+  }
+
+  private openGradientPopover(kind: 'color' | 'alpha', index: number): void {
+    this.gradientPopupMode = kind;
+    this.gradientPopupStop = index;
+    if (kind === 'color') {
+      const stop = this.gradientStops[index];
+      if (!stop) return;
+      this.gradientSelected = index;
+      this.gradientHsv = this.hexToHsv(stop.color) ?? { h: 0, s: 1, v: 1 };
+      this.gradientSwatch.style.background = stop.color;
+      this.gradientHex.value = stop.color;
+      this.gradientHue.value = String(Math.round(this.gradientHsv.h));
+      this.gradientSv.style.setProperty('--hue', String(this.gradientHsv.h));
+      this.gradientSvHandle.style.left = `${this.gradientHsv.s * 100}%`;
+      this.gradientSvHandle.style.top = `${(1 - this.gradientHsv.v) * 100}%`;
+    } else {
+      const stop = this.gradientAlphaStops[index];
+      if (!stop) return;
+      this.gradientAlphaSelected = index;
+      this.gradientPopoverAlphaRange.value = stop.alpha.toFixed(2);
+      this.gradientPopoverAlphaValue.textContent = stop.alpha.toFixed(2);
+      this.updateGradientAlphaPreview(stop.alpha);
     }
+    this.gradientPopoverColor.classList.toggle('hidden', kind !== 'color');
+    this.gradientPopoverAlpha.classList.toggle('hidden', kind !== 'alpha');
+    this.renderGradientEditor();
+    const selector = kind === 'color'
+      ? `[data-gradient-stop="${index}"]`
+      : `[data-gradient-alpha-stop="${index}"]`;
+    const markers = kind === 'color' ? this.gradientBarMarkers : this.gradientAlphaMarkers;
+    const marker = markers.querySelector<HTMLElement>(selector);
+    if (marker) this.positionGradientPopover(marker);
+    this.gradientPopover.classList.remove('hidden');
+  }
+
+  private closeGradientPopover(): void {
+    this.gradientPopover.classList.add('hidden');
+    this.gradientPopupStop = -1;
   }
 
   private addGradientStopAt(position: number): void {
@@ -3606,6 +3816,7 @@ export class TextureView {
   }
 
   private resetGradient(): void {
+    this.closeGradientPopover();
     this.gradientStops = [
       { position: 0, color: '#ff7878' },
       { position: 100, color: '#ff3b3b' }
