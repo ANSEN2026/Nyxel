@@ -10,6 +10,21 @@ interface TransformState {
   flipV: boolean;
 }
 
+interface PenPoint {
+  x: number;
+  y: number;
+  inX: number;
+  inY: number;
+  outX: number;
+  outY: number;
+}
+
+interface PenSample {
+  x: number;
+  y: number;
+  t: number;
+}
+
 const UPSCAYL_MODEL_LABELS: Record<string, string> = {
   'ultrasharp-4x': 'Ultrasharp 4x · 锐利（线条推荐）',
   'upscayl-standard-4x': 'Standard 4x · 通用',
@@ -250,26 +265,39 @@ export class TextureView {
   private gradientCtx: CanvasRenderingContext2D;
   private gradientBarFill: HTMLElement;
   private gradientBarMarkers: HTMLElement;
+  private gradientAlphaBarFill: HTMLElement;
+  private gradientAlphaMarkers: HTMLElement;
   private gradientColor: HTMLInputElement;
   private gradientPosition: HTMLInputElement;
   private gradientAlpha: HTMLInputElement;
   private gradientAlphaValue: HTMLElement;
   private gradientStatus: HTMLElement;
-  private gradientStops: Array<{ position: number; color: string; alpha: number }> = [
-    { position: 0, color: '#ff7878', alpha: 100 },
-    { position: 100, color: '#ff3b3b', alpha: 100 }
+  private gradientStops: Array<{ position: number; color: string }> = [
+    { position: 0, color: '#ff7878' },
+    { position: 100, color: '#ff3b3b' }
+  ];
+  private gradientAlphaStops: Array<{ position: number; alpha: number }> = [
+    { position: 0, alpha: 1 },
+    { position: 100, alpha: 1 }
   ];
   private gradientSelected = 1;
-  private gradientUndo: Array<Array<{ position: number; color: string; alpha: number }>> = [];
+  private gradientAlphaSelected = 1;
   private gradientTimer = 0;
 
   private pathPreview: HTMLCanvasElement;
   private pathCtx: CanvasRenderingContext2D;
   private pathColor: HTMLInputElement;
+  private pathTailColor: HTMLInputElement;
   private pathWidth: HTMLInputElement;
   private pathWidthValue: HTMLInputElement;
-  private pathThickness: HTMLInputElement;
-  private pathThicknessValue: HTMLInputElement;
+  private pathHardness: HTMLInputElement;
+  private pathHardnessValue: HTMLInputElement;
+  private pathHeadWidth: HTMLInputElement;
+  private pathHeadWidthValue: HTMLInputElement;
+  private pathMiddleWidth: HTMLInputElement;
+  private pathMiddleWidthValue: HTMLInputElement;
+  private pathTailWidth: HTMLInputElement;
+  private pathTailWidthValue: HTMLInputElement;
   private pathOpacity: HTMLInputElement;
   private pathOpacityValue: HTMLInputElement;
   private pathCustomSize: HTMLInputElement;
@@ -277,11 +305,16 @@ export class TextureView {
   private pathSizeW: HTMLInputElement;
   private pathSizeH: HTMLInputElement;
   private pathStatus: HTMLElement;
-  private pathCenterX = 0.5;
-  private pathCenterY = 0.5;
-  private pathPicking = false;
   private pathOutput: HTMLCanvasElement | null = null;
   private pathTimer = 0;
+  private penOverlay: HTMLCanvasElement;
+  private penCtx: CanvasRenderingContext2D;
+  private penPoints: PenPoint[] = [];
+  private penEditing = false;
+  private penDrag: { kind: 'anchor' | 'in' | 'out' | 'new'; index: number; moved: boolean } | null = null;
+  private penPanning = false;
+  private penPanX = 0;
+  private penPanY = 0;
 
   private aiSeqSource: HTMLSelectElement;
   private aiSeqCols: HTMLInputElement;
@@ -339,6 +372,7 @@ export class TextureView {
       </div>
       <div class="view-body texture-body bg-checker">
         <canvas class="view-canvas"></canvas>
+        <canvas class="pen-overlay hidden"></canvas>
         <div class="view-empty"><strong>打开或拖入一张贴图</strong><span>支持 PNG / JPG / WebP / BMP / GIF / TGA</span></div>
         <div class="texture-meta hidden"></div>
         <div class="normal-banner hidden">
@@ -592,48 +626,68 @@ export class TextureView {
               <div class="ai-section-head"><span>渐变图</span><span class="ai-pill">渐变编辑</span></div>
               <p class="ai-copy">添加色标、调整位置与透明度，生成线性渐变贴图。</p>
               <div class="gradient-preview-wrap"><canvas id="gradient-preview" width="320" height="220"></canvas></div>
-              <div class="gradient-bar" id="gradient-bar">
+              <div class="gradient-alpha-bar" id="gradient-alpha-bar" title="透明度标：左键添加，右键删除，拖动调整位置">
+                <div class="gradient-alpha-fill" id="gradient-alpha-fill"></div>
+                <div class="gradient-alpha-markers" id="gradient-alpha-markers"></div>
+              </div>
+              <div class="gradient-bar" id="gradient-bar" title="颜色标：左键添加，右键删除，拖动调整位置">
                 <div class="gradient-bar-fill" id="gradient-bar-fill"></div>
                 <div class="gradient-bar-markers" id="gradient-bar-markers"></div>
               </div>
               <div class="gradient-edit-row">
                 <label>颜色 <input id="gradient-color" type="color" value="#ff7878"></label>
                 <label>位置 <input id="gradient-position" type="number" min="0" max="100" step="1" value="100"><span>%</span></label>
-                <label>Alpha <input id="gradient-alpha" type="range" min="0" max="100" step="1" value="100"><span id="gradient-alpha-value">100%</span></label>
+              </div>
+              <div class="gradient-edit-row">
+                <label>透明度 <input id="gradient-alpha" type="range" min="0" max="1" step="0.01" value="1"><span id="gradient-alpha-value">1.00</span></label>
               </div>
               <div class="ai-button-row">
-                <button type="button" data-gradient-add>添加中色标</button>
-                <button type="button" data-gradient-remove>删除色标</button>
-                <button type="button" data-gradient-undo>撤销</button>
+                <button type="button" class="primary" data-gradient-apply>创建贴图</button>
+                <button type="button" data-gradient-export>导出</button>
                 <button type="button" data-gradient-reset>恢复默认</button>
               </div>
-              <div class="ai-button-row">
-                <button type="button" class="primary" data-gradient-apply>创建文档</button>
-                <button type="button" data-gradient-export>导出</button>
-              </div>
-              <div class="gradient-status" id="gradient-status">拖动色标或输入位置进行编辑</div>
+              <div class="gradient-status" id="gradient-status">左键添加 · 右键删除 · 拖动调整</div>
             </section>
 
             <section class="ai-section path-gradient-section" data-ai-section="path">
-              <div class="ai-section-head"><span>路径渐变</span><span class="ai-pill">环形</span></div>
-              <p class="ai-copy">环形路径渐变，调节路径宽度、粗细和透明度。</p>
+              <div class="ai-section-head"><span>路径渐变</span><span class="ai-pill">钢笔</span></div>
+              <p class="ai-copy">用钢笔在左侧贴图上绘制路径，沿路径生成头→尾渐变笔触。</p>
               <div class="dispersion-preview-wrap path-preview-wrap">
                 <canvas id="path-preview" width="320" height="220"></canvas>
               </div>
               <div class="ai-button-row">
+                <button type="button" data-path-pen>钢笔工具</button>
                 <button type="button" data-path-pick>拾取路径</button>
-                <label class="path-color-label">颜色 <input id="path-color" type="color" value="#ff7878"></label>
                 <button type="button" data-path-reset>恢复默认</button>
               </div>
+              <div class="gradient-edit-row">
+                <label>头部 <input id="path-color" type="color" value="#ff7878"></label>
+                <label>尾部 <input id="path-tail-color" type="color" value="#3b82f6"></label>
+              </div>
               <div class="tile-slider-row">
-                <span>路径宽度</span>
+                <span>笔触宽度</span>
                 <input id="path-width" type="range" min="1" max="100" step="1" value="59">
                 <input id="path-width-value" class="tile-number" type="number" min="1" max="100" value="59">
               </div>
               <div class="tile-slider-row">
-                <span>粗细</span>
-                <input id="path-thickness" type="range" min="0" max="100" step="1" value="100">
-                <input id="path-thickness-value" class="tile-number" type="number" min="0" max="100" value="100">
+                <span>硬度</span>
+                <input id="path-hardness" type="range" min="0" max="100" step="1" value="70">
+                <input id="path-hardness-value" class="tile-number" type="number" min="0" max="100" value="70">
+              </div>
+              <div class="tile-slider-row">
+                <span>头部粗细</span>
+                <input id="path-head-width" type="range" min="0" max="200" step="1" value="100">
+                <input id="path-head-width-value" class="tile-number" type="number" min="0" max="200" value="100">
+              </div>
+              <div class="tile-slider-row">
+                <span>中部粗细</span>
+                <input id="path-middle-width" type="range" min="0" max="200" step="1" value="100">
+                <input id="path-middle-width-value" class="tile-number" type="number" min="0" max="200" value="100">
+              </div>
+              <div class="tile-slider-row">
+                <span>尾部粗细</span>
+                <input id="path-tail-width" type="range" min="0" max="200" step="1" value="100">
+                <input id="path-tail-width-value" class="tile-number" type="number" min="0" max="200" value="100">
               </div>
               <div class="tile-slider-row">
                 <span>透明度</span>
@@ -653,9 +707,9 @@ export class TextureView {
               <div class="ai-button-row">
                 <button type="button" class="primary" data-path-apply>应用</button>
                 <button type="button" data-path-export>导出</button>
-                <button type="button" data-path-clear>清除</button>
+                <button type="button" data-path-clear>清除路径</button>
               </div>
-              <div class="gradient-status" id="path-status">点击预览可设置路径中心</div>
+              <div class="gradient-status" id="path-status">先用钢笔在左侧绘制路径</div>
             </section>
           </div>
           <div class="compose-panel-body">
@@ -969,6 +1023,8 @@ export class TextureView {
     this.gradientCtx = this.gradientPreview.getContext('2d') as CanvasRenderingContext2D;
     this.gradientBarFill = this.element.querySelector('#gradient-bar-fill') as HTMLElement;
     this.gradientBarMarkers = this.element.querySelector('#gradient-bar-markers') as HTMLElement;
+    this.gradientAlphaBarFill = this.element.querySelector('#gradient-alpha-fill') as HTMLElement;
+    this.gradientAlphaMarkers = this.element.querySelector('#gradient-alpha-markers') as HTMLElement;
     this.gradientColor = this.element.querySelector('#gradient-color') as HTMLInputElement;
     this.gradientPosition = this.element.querySelector('#gradient-position') as HTMLInputElement;
     this.gradientAlpha = this.element.querySelector('#gradient-alpha') as HTMLInputElement;
@@ -977,10 +1033,17 @@ export class TextureView {
     this.pathPreview = this.element.querySelector('#path-preview') as HTMLCanvasElement;
     this.pathCtx = this.pathPreview.getContext('2d') as CanvasRenderingContext2D;
     this.pathColor = this.element.querySelector('#path-color') as HTMLInputElement;
+    this.pathTailColor = this.element.querySelector('#path-tail-color') as HTMLInputElement;
     this.pathWidth = this.element.querySelector('#path-width') as HTMLInputElement;
     this.pathWidthValue = this.element.querySelector('#path-width-value') as HTMLInputElement;
-    this.pathThickness = this.element.querySelector('#path-thickness') as HTMLInputElement;
-    this.pathThicknessValue = this.element.querySelector('#path-thickness-value') as HTMLInputElement;
+    this.pathHardness = this.element.querySelector('#path-hardness') as HTMLInputElement;
+    this.pathHardnessValue = this.element.querySelector('#path-hardness-value') as HTMLInputElement;
+    this.pathHeadWidth = this.element.querySelector('#path-head-width') as HTMLInputElement;
+    this.pathHeadWidthValue = this.element.querySelector('#path-head-width-value') as HTMLInputElement;
+    this.pathMiddleWidth = this.element.querySelector('#path-middle-width') as HTMLInputElement;
+    this.pathMiddleWidthValue = this.element.querySelector('#path-middle-width-value') as HTMLInputElement;
+    this.pathTailWidth = this.element.querySelector('#path-tail-width') as HTMLInputElement;
+    this.pathTailWidthValue = this.element.querySelector('#path-tail-width-value') as HTMLInputElement;
     this.pathOpacity = this.element.querySelector('#path-opacity') as HTMLInputElement;
     this.pathOpacityValue = this.element.querySelector('#path-opacity-value') as HTMLInputElement;
     this.pathCustomSize = this.element.querySelector('#path-custom-size') as HTMLInputElement;
@@ -988,6 +1051,8 @@ export class TextureView {
     this.pathSizeW = this.element.querySelector('#path-size-w') as HTMLInputElement;
     this.pathSizeH = this.element.querySelector('#path-size-h') as HTMLInputElement;
     this.pathStatus = this.element.querySelector('#path-status') as HTMLElement;
+    this.penOverlay = this.element.querySelector('.pen-overlay') as HTMLCanvasElement;
+    this.penCtx = this.penOverlay.getContext('2d') as CanvasRenderingContext2D;
     this.aiSeqSource = this.element.querySelector('#ai-seq-source') as HTMLSelectElement;
     this.aiSeqCols = this.element.querySelector('#ai-seq-cols') as HTMLInputElement;
     this.aiSeqRows = this.element.querySelector('#ai-seq-rows') as HTMLInputElement;
@@ -1318,10 +1383,10 @@ export class TextureView {
       scheduleGradient();
     });
     this.gradientAlpha.addEventListener('input', () => {
-      const stop = this.gradientStops[this.gradientSelected];
+      const stop = this.gradientAlphaStops[this.gradientAlphaSelected];
       if (!stop) return;
-      stop.alpha = Math.max(0, Math.min(100, Number(this.gradientAlpha.value) || 0));
-      this.gradientAlphaValue.textContent = `${Math.round(stop.alpha)}%`;
+      stop.alpha = Math.max(0, Math.min(1, Number(this.gradientAlpha.value) || 0));
+      this.gradientAlphaValue.textContent = stop.alpha.toFixed(2);
       scheduleGradient();
     });
     this.gradientBarMarkers.addEventListener('click', (event) => {
@@ -1331,38 +1396,81 @@ export class TextureView {
       this.syncGradientInputs();
       this.renderGradientEditor();
     });
-    this.gradientBarMarkers.addEventListener('pointerdown', (event) => {
-      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-gradient-stop]');
+    this.gradientAlphaMarkers.addEventListener('click', (event) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-gradient-alpha-stop]');
       if (!target) return;
-      const index = Number(target.dataset.gradientStop) || 0;
-      const stop = this.gradientStops[index];
-      const bar = this.gradientBarMarkers.getBoundingClientRect();
-      if (!stop || bar.width <= 0) return;
-      event.preventDefault();
-      this.gradientSelected = index;
-      this.pushGradientHistory();
-      target.classList.add('dragging');
-      const move = (moveEvent: PointerEvent): void => {
-        const current = this.gradientStops[index];
-        if (!current) return;
-        current.position = Math.max(0, Math.min(100, ((moveEvent.clientX - bar.left) / bar.width) * 100));
-        this.gradientPosition.value = String(Math.round(current.position));
-        this.renderGradientEditor();
-        this.gradientBarMarkers.querySelector<HTMLElement>(`[data-gradient-stop="${index}"]`)?.classList.add('dragging');
-      };
-      const finish = (): void => {
-        window.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', finish);
-        window.removeEventListener('pointercancel', finish);
-        this.renderGradientEditor();
-      };
-      window.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', finish);
-      window.addEventListener('pointercancel', finish);
+      this.gradientAlphaSelected = Number(target.dataset.gradientAlphaStop) || 0;
+      this.syncGradientInputs();
+      this.renderGradientEditor();
     });
-    this.element.querySelector('[data-gradient-add]')?.addEventListener('click', () => this.addGradientStop());
-    this.element.querySelector('[data-gradient-remove]')?.addEventListener('click', () => this.removeGradientStop());
-    this.element.querySelector('[data-gradient-undo]')?.addEventListener('click', () => this.undoGradientChange());
+    const bindGradientDrag = (markers: HTMLElement, kind: 'color' | 'alpha'): void => {
+      markers.addEventListener('pointerdown', (event) => {
+        const target = (event.target as HTMLElement).closest<HTMLElement>('[data-gradient-stop], [data-gradient-alpha-stop]');
+        if (!target) return;
+        const index = kind === 'color'
+          ? Number(target.dataset.gradientStop) || 0
+          : Number(target.dataset.gradientAlphaStop) || 0;
+        const bar = markers.getBoundingClientRect();
+        if (bar.width <= 0) return;
+        event.preventDefault();
+        if (kind === 'color') this.gradientSelected = index;
+        else this.gradientAlphaSelected = index;
+        target.classList.add('dragging');
+        const move = (moveEvent: PointerEvent): void => {
+          const position = Math.max(0, Math.min(100, ((moveEvent.clientX - bar.left) / bar.width) * 100));
+          if (kind === 'color') {
+            const stop = this.gradientStops[index];
+            if (!stop) return;
+            stop.position = position;
+            this.gradientPosition.value = String(Math.round(position));
+          } else {
+            const stop = this.gradientAlphaStops[index];
+            if (!stop) return;
+            stop.position = position;
+          }
+          this.renderGradientEditor();
+          const selector = kind === 'color'
+            ? `[data-gradient-stop="${index}"]`
+            : `[data-gradient-alpha-stop="${index}"]`;
+          markers.querySelector<HTMLElement>(selector)?.classList.add('dragging');
+        };
+        const finish = (): void => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', finish);
+          window.removeEventListener('pointercancel', finish);
+          this.renderGradientEditor();
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', finish);
+        window.addEventListener('pointercancel', finish);
+      });
+      markers.addEventListener('contextmenu', (event) => {
+        const target = (event.target as HTMLElement).closest<HTMLElement>('[data-gradient-stop], [data-gradient-alpha-stop]');
+        if (!target) return;
+        event.preventDefault();
+        const index = kind === 'color'
+          ? Number(target.dataset.gradientStop) || 0
+          : Number(target.dataset.gradientAlphaStop) || 0;
+        if (kind === 'color') this.removeGradientStopAt(index);
+        else this.removeAlphaStopAt(index);
+      });
+    };
+    bindGradientDrag(this.gradientBarMarkers, 'color');
+    bindGradientDrag(this.gradientAlphaMarkers, 'alpha');
+    this.element.querySelector('#gradient-bar')?.addEventListener('click', (event) => {
+      if ((event.target as HTMLElement).closest('[data-gradient-stop]')) return;
+      const bar = event.currentTarget as HTMLElement;
+      const rect = bar.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      this.addGradientStopAt(((event as MouseEvent).clientX - rect.left) / rect.width * 100);
+    });
+    this.element.querySelector('#gradient-alpha-bar')?.addEventListener('click', (event) => {
+      if ((event.target as HTMLElement).closest('[data-gradient-alpha-stop]')) return;
+      const bar = event.currentTarget as HTMLElement;
+      const rect = bar.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      this.addAlphaStopAt(((event as MouseEvent).clientX - rect.left) / rect.width * 100);
+    });
     this.element.querySelector('[data-gradient-reset]')?.addEventListener('click', () => this.resetGradient());
     this.element.querySelector('[data-gradient-apply]')?.addEventListener('click', () => this.applyGradientOutput());
     this.element.querySelector('[data-gradient-export]')?.addEventListener('click', () => void this.exportGradientOutput());
@@ -1384,9 +1492,13 @@ export class TextureView {
       });
     };
     syncPathNumber(this.pathWidth, this.pathWidthValue);
-    syncPathNumber(this.pathThickness, this.pathThicknessValue);
+    syncPathNumber(this.pathHardness, this.pathHardnessValue);
+    syncPathNumber(this.pathHeadWidth, this.pathHeadWidthValue);
+    syncPathNumber(this.pathMiddleWidth, this.pathMiddleWidthValue);
+    syncPathNumber(this.pathTailWidth, this.pathTailWidthValue);
     syncPathNumber(this.pathOpacity, this.pathOpacityValue);
     this.pathColor.addEventListener('input', schedulePath);
+    this.pathTailColor.addEventListener('input', schedulePath);
     this.pathCustomSize.addEventListener('change', () => {
       this.pathSizeW.disabled = !this.pathCustomSize.checked;
       this.pathSizeH.disabled = !this.pathCustomSize.checked;
@@ -1401,26 +1513,34 @@ export class TextureView {
       if (this.pathEqual.checked) this.pathSizeW.value = this.pathSizeH.value;
       schedulePath();
     });
-    this.element.querySelector('[data-path-pick]')?.addEventListener('click', () => {
-      this.pathPicking = !this.pathPicking;
-      this.pathStatus.textContent = this.pathPicking ? '点击预览设置路径中心' : '路径中心已固定';
-      this.element.querySelector('[data-path-pick]')?.classList.toggle('active', this.pathPicking);
-    });
-    this.pathPreview.addEventListener('pointerdown', (event) => {
-      if (!this.pathPicking) return;
-      const rect = this.pathPreview.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      this.pathCenterX = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-      this.pathCenterY = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-      this.pathPicking = false;
-      this.element.querySelector('[data-path-pick]')?.classList.remove('active');
-      this.pathStatus.textContent = `路径中心 ${Math.round(this.pathCenterX * 100)}% / ${Math.round(this.pathCenterY * 100)}%`;
-      this.renderPathGradient();
-    });
+    this.element.querySelector('[data-path-pen]')?.addEventListener('click', () => this.setPenEditing(!this.penEditing));
+    this.element.querySelector('[data-path-pick]')?.addEventListener('click', () => this.pickPenPath());
     this.element.querySelector('[data-path-apply]')?.addEventListener('click', () => this.applyPathGradient());
     this.element.querySelector('[data-path-export]')?.addEventListener('click', () => void this.exportPathGradient());
-    this.element.querySelector('[data-path-clear]')?.addEventListener('click', () => this.clearPathGradient());
+    this.element.querySelector('[data-path-clear]')?.addEventListener('click', () => this.clearPenPath(true));
     this.element.querySelector('[data-path-reset]')?.addEventListener('click', () => this.resetPathGradient());
+
+    this.penOverlay.addEventListener('wheel', (event) => {
+      if (!this.penEditing) return;
+      event.preventDefault();
+      const factor = Math.exp(-event.deltaY * 0.0015);
+      this.zoom = THREE.MathUtils.clamp(this.zoom * factor, 0.02, 40);
+      this.updateCamera();
+    }, { passive: false });
+    this.penOverlay.addEventListener('pointerdown', (event) => this.penPointerDown(event));
+    window.addEventListener('pointermove', (event) => this.penPointerMove(event));
+    window.addEventListener('pointerup', () => this.penPointerUp());
+    window.addEventListener('pointercancel', () => this.penPointerUp());
+    this.penOverlay.addEventListener('contextmenu', (event) => this.penContextMenu(event));
+    window.addEventListener('keydown', (event) => {
+      if (!this.active || !this.penEditing) return;
+      const tag = (document.activeElement?.tagName ?? '').toLowerCase();
+      if (['input', 'select', 'textarea', 'button'].includes(tag)) return;
+      if (event.key === 'Escape' || event.key === 'Enter') {
+        event.preventDefault();
+        this.setPenEditing(false);
+      }
+    });
     this.aiSeqSource.addEventListener('change', () => {
       this.resetAiSequenceSelection();
       this.renderAiSequenceGrid();
@@ -1713,7 +1833,7 @@ export class TextureView {
     name: string,
     filePath: string,
     size: number,
-    options: { preserveTransform?: boolean; preserveHistory?: boolean; skipNormalDetect?: boolean } = {}
+    options: { preserveTransform?: boolean; preserveHistory?: boolean; skipNormalDetect?: boolean; preservePath?: boolean } = {}
   ): void {
     const previous = {
       rotation: this.rotation,
@@ -1796,6 +1916,12 @@ export class TextureView {
     this.openComposePanel();
     this.applyTransform();
     this.fit();
+    if (options.preservePath) {
+      this.syncPenOverlayVisibility();
+      this.renderPenOverlay();
+    } else {
+      this.clearPenPath(false);
+    }
     this.callbacks.status.set(name, `${width} × ${height} · ${formatBytes(size)}`);
     if (filePath) this.callbacks.pushRecent('texture', filePath, name);
 
@@ -2276,11 +2402,13 @@ export class TextureView {
         if (!collapsed && key === 'tile') this.renderTilePreview();
         if (!collapsed && key === 'dispersion') this.renderDispersionPreview();
         if (!collapsed && key === 'gradient') this.renderGradientEditor();
+        if (collapsed && key === 'path') this.setPenEditing(false);
         if (!collapsed && key === 'path') {
           this.pathSizeW.disabled = !this.pathCustomSize.checked;
           this.pathSizeH.disabled = !this.pathCustomSize.checked;
           this.syncPathDefaults();
           this.renderPathGradient();
+          this.syncPenOverlayVisibility();
         }
       };
       const toggle = (): void => {
@@ -2721,6 +2849,7 @@ export class TextureView {
       this.callbacks.toast('请先打开一张贴图', 'info');
       return;
     }
+    if (mode !== 'tools') this.setPenEditing(false);
     this.panelMode = mode;
     this.aiMode = mode === 'ai';
     this.element.classList.toggle('ai-theme', mode === 'ai');
@@ -2763,6 +2892,7 @@ export class TextureView {
     } else {
       this.stopAiSequence();
     }
+    this.syncPenOverlayVisibility();
   }
 
   private async runAiPanelScale(scale: number): Promise<void> {
@@ -3278,28 +3408,77 @@ export class TextureView {
     this.renderDispersionPreview();
   }
 
-  private gradientRgba(color: string, alpha: number): string {
+  private hexToRgb(color: string): { red: number; green: number; blue: number } {
     const value = color.replace('#', '');
-    const red = parseInt(value.slice(0, 2), 16) || 0;
-    const green = parseInt(value.slice(2, 4), 16) || 0;
-    const blue = parseInt(value.slice(4, 6), 16) || 0;
-    return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha / 100))})`;
+    return {
+      red: parseInt(value.slice(0, 2), 16) || 0,
+      green: parseInt(value.slice(2, 4), 16) || 0,
+      blue: parseInt(value.slice(4, 6), 16) || 0
+    };
+  }
+
+  private mixHexColor(from: string, to: string, t: number): string {
+    const a = this.hexToRgb(from);
+    const b = this.hexToRgb(to);
+    const mix = Math.max(0, Math.min(1, t));
+    const channel = (start: number, end: number): string =>
+      Math.round(start + (end - start) * mix).toString(16).padStart(2, '0');
+    return `#${channel(a.red, b.red)}${channel(a.green, b.green)}${channel(a.blue, b.blue)}`;
   }
 
   private syncGradientInputs(): void {
     this.gradientSelected = Math.max(0, Math.min(this.gradientStops.length - 1, this.gradientSelected));
+    this.gradientAlphaSelected = Math.max(0, Math.min(this.gradientAlphaStops.length - 1, this.gradientAlphaSelected));
     const stop = this.gradientStops[this.gradientSelected];
-    if (!stop) return;
-    this.gradientColor.value = stop.color;
-    this.gradientPosition.value = String(Math.round(stop.position));
-    this.gradientAlpha.value = String(Math.round(stop.alpha));
-    this.gradientAlphaValue.textContent = `${Math.round(stop.alpha)}%`;
+    if (stop) {
+      this.gradientColor.value = stop.color;
+      this.gradientPosition.value = String(Math.round(stop.position));
+    }
+    const alphaStop = this.gradientAlphaStops[this.gradientAlphaSelected];
+    if (alphaStop) {
+      this.gradientAlpha.value = alphaStop.alpha.toFixed(2);
+      this.gradientAlphaValue.textContent = alphaStop.alpha.toFixed(2);
+    }
+  }
+
+  private sampleGradientColor(position: number): string {
+    const sorted = this.gradientStops.slice().sort((a, b) => a.position - b.position);
+    if (sorted.length === 0) return '#ff7878';
+    if (position <= sorted[0].position) return sorted[0].color;
+    for (let index = 1; index < sorted.length; index += 1) {
+      const next = sorted[index];
+      if (position <= next.position) {
+        const previous = sorted[index - 1];
+        const span = Math.max(0.001, next.position - previous.position);
+        return this.mixHexColor(previous.color, next.color, (position - previous.position) / span);
+      }
+    }
+    return sorted[sorted.length - 1].color;
+  }
+
+  private sampleGradientAlpha(position: number): number {
+    const sorted = this.gradientAlphaStops.slice().sort((a, b) => a.position - b.position);
+    if (sorted.length === 0) return 1;
+    if (position <= sorted[0].position) return sorted[0].alpha;
+    for (let index = 1; index < sorted.length; index += 1) {
+      const next = sorted[index];
+      if (position <= next.position) {
+        const previous = sorted[index - 1];
+        const span = Math.max(0.001, next.position - previous.position);
+        return previous.alpha + (next.alpha - previous.alpha) * ((position - previous.position) / span);
+      }
+    }
+    return sorted[sorted.length - 1].alpha;
   }
 
   private renderGradientEditor(): void {
     const sorted = this.gradientStops.slice().sort((a, b) => a.position - b.position);
+    const alphaSorted = this.gradientAlphaStops.slice().sort((a, b) => a.position - b.position);
     this.gradientBarFill.style.background = `linear-gradient(90deg, ${sorted
-      .map((stop) => `${this.gradientRgba(stop.color, stop.alpha)} ${stop.position}%`)
+      .map((stop) => `${stop.color} ${stop.position}%`)
+      .join(', ')})`;
+    this.gradientAlphaBarFill.style.background = `linear-gradient(90deg, ${alphaSorted
+      .map((stop) => `rgba(255, 255, 255, ${stop.alpha}) ${stop.position}%`)
       .join(', ')})`;
     this.gradientBarMarkers.innerHTML = '';
     this.gradientStops.forEach((stop, index) => {
@@ -3312,6 +3491,18 @@ export class TextureView {
       marker.title = `色标 ${index + 1} · ${Math.round(stop.position)}%`;
       this.gradientBarMarkers.append(marker);
     });
+    this.gradientAlphaMarkers.innerHTML = '';
+    this.gradientAlphaStops.forEach((stop, index) => {
+      const marker = document.createElement('button');
+      marker.type = 'button';
+      marker.className = `gradient-alpha-marker${index === this.gradientAlphaSelected ? ' active' : ''}`;
+      marker.dataset.gradientAlphaStop = String(index);
+      marker.style.left = `${stop.position}%`;
+      marker.style.background = `rgba(255, 255, 255, ${Math.max(0.12, stop.alpha)})`;
+      marker.title = `透明度 ${stop.alpha.toFixed(2)} · ${Math.round(stop.position)}%`;
+      this.gradientAlphaMarkers.append(marker);
+    });
+
     const canvas = this.gradientPreview;
     const context = this.gradientCtx;
     const width = canvas.width;
@@ -3324,66 +3515,74 @@ export class TextureView {
         context.fillRect(x, y, checker, checker);
       }
     }
-    const gradient = context.createLinearGradient(0, 0, width, 0);
-    for (const stop of sorted) {
-      gradient.addColorStop(Math.max(0, Math.min(1, stop.position / 100)), this.gradientRgba(stop.color, stop.alpha));
-    }
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, width, height);
+    const output = this.buildGradientOutput();
+    context.imageSmoothingEnabled = true;
+    context.drawImage(output, 0, 0, width, height);
     this.syncGradientInputs();
-    this.gradientStatus.textContent = `${this.gradientStops.length} 个色标 · 当前色标 ${this.gradientSelected + 1}`;
+    this.gradientStatus.textContent = `${this.gradientStops.length} 色标 · ${this.gradientAlphaStops.length} 透明度标 · 左键添加 / 右键删除`;
   }
 
-  private pushGradientHistory(): void {
-    this.gradientUndo.push(this.gradientStops.map((stop) => ({ ...stop })));
-    if (this.gradientUndo.length > 20) this.gradientUndo.shift();
-  }
-
-  private addGradientStop(): void {
-    this.pushGradientHistory();
-    const current = this.gradientStops[this.gradientSelected];
-    const next = this.gradientStops[this.gradientSelected + 1];
-    const position = next
-      ? (current.position + next.position) / 2
-      : current.position < 100 ? (current.position + 100) / 2 : 50;
-    this.gradientStops.push({
-      position: Math.round(position),
-      color: current.color,
-      alpha: current.alpha
-    });
+  private addGradientStopAt(position: number): void {
+    const clamped = Math.max(0, Math.min(100, position));
+    const existing = this.gradientStops.findIndex((stop) => Math.abs(stop.position - clamped) < 1.2);
+    if (existing >= 0) {
+      this.gradientSelected = existing;
+      this.syncGradientInputs();
+      this.renderGradientEditor();
+      return;
+    }
+    this.gradientStops.push({ position: clamped, color: this.sampleGradientColor(clamped) });
     this.gradientSelected = this.gradientStops.length - 1;
     this.renderGradientEditor();
   }
 
-  private removeGradientStop(): void {
-    if (this.gradientStops.length <= 2) {
-      this.callbacks.toast('至少需要保留两个色标', 'info');
+  private addAlphaStopAt(position: number): void {
+    const clamped = Math.max(0, Math.min(100, position));
+    const existing = this.gradientAlphaStops.findIndex((stop) => Math.abs(stop.position - clamped) < 1.2);
+    if (existing >= 0) {
+      this.gradientAlphaSelected = existing;
+      this.syncGradientInputs();
+      this.renderGradientEditor();
       return;
     }
-    this.pushGradientHistory();
-    this.gradientStops.splice(this.gradientSelected, 1);
-    this.gradientSelected = Math.min(this.gradientSelected, this.gradientStops.length - 1);
+    this.gradientAlphaStops.push({ position: clamped, alpha: this.sampleGradientAlpha(clamped) });
+    this.gradientAlphaSelected = this.gradientAlphaStops.length - 1;
     this.renderGradientEditor();
   }
 
-  private undoGradientChange(): void {
-    const previous = this.gradientUndo.pop();
-    if (!previous) {
-      this.callbacks.toast('没有可撤销的渐变操作', 'info');
+  private removeGradientStopAt(index: number): void {
+    if (index < 0 || index >= this.gradientStops.length) return;
+    if (this.gradientStops.length <= 1) {
+      this.callbacks.toast('至少保留一个颜色色标', 'info');
       return;
     }
-    this.gradientStops = previous;
-    this.gradientSelected = Math.min(this.gradientSelected, this.gradientStops.length - 1);
+    this.gradientStops.splice(index, 1);
+    this.gradientSelected = Math.min(index, this.gradientStops.length - 1);
+    this.renderGradientEditor();
+  }
+
+  private removeAlphaStopAt(index: number): void {
+    if (index < 0 || index >= this.gradientAlphaStops.length) return;
+    if (this.gradientAlphaStops.length <= 1) {
+      this.callbacks.toast('至少需要保留一个透明度标', 'info');
+      return;
+    }
+    this.gradientAlphaStops.splice(index, 1);
+    this.gradientAlphaSelected = Math.min(index, this.gradientAlphaStops.length - 1);
     this.renderGradientEditor();
   }
 
   private resetGradient(): void {
-    this.pushGradientHistory();
     this.gradientStops = [
-      { position: 0, color: '#ff7878', alpha: 100 },
-      { position: 100, color: '#ff3b3b', alpha: 100 }
+      { position: 0, color: '#ff7878' },
+      { position: 100, color: '#ff3b3b' }
+    ];
+    this.gradientAlphaStops = [
+      { position: 0, alpha: 1 },
+      { position: 100, alpha: 1 }
     ];
     this.gradientSelected = 1;
+    this.gradientAlphaSelected = 1;
     this.renderGradientEditor();
   }
 
@@ -3396,10 +3595,25 @@ export class TextureView {
     const sorted = this.gradientStops.slice().sort((a, b) => a.position - b.position);
     const gradient = context.createLinearGradient(0, 0, canvas.width, 0);
     for (const stop of sorted) {
-      gradient.addColorStop(Math.max(0, Math.min(1, stop.position / 100)), this.gradientRgba(stop.color, stop.alpha));
+      gradient.addColorStop(Math.max(0, Math.min(1, stop.position / 100)), stop.color);
     }
     context.fillStyle = gradient;
     context.fillRect(0, 0, canvas.width, canvas.height);
+
+    const alphaSorted = this.gradientAlphaStops.slice().sort((a, b) => a.position - b.position);
+    if (alphaSorted.length > 0) {
+      const alphaGradient = context.createLinearGradient(0, 0, canvas.width, 0);
+      for (const stop of alphaSorted) {
+        alphaGradient.addColorStop(
+          Math.max(0, Math.min(1, stop.position / 100)),
+          `rgba(255, 255, 255, ${Math.max(0, Math.min(1, stop.alpha))})`
+        );
+      }
+      context.globalCompositeOperation = 'destination-in';
+      context.fillStyle = alphaGradient;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.globalCompositeOperation = 'source-over';
+    }
     return canvas;
   }
 
@@ -3412,10 +3626,10 @@ export class TextureView {
       `${this.currentBaseName()}_gradient.png`,
       '',
       output.width * output.height * 4,
-      { preserveTransform: true, preserveHistory: false }
+      { preserveTransform: true, preserveHistory: false, skipNormalDetect: true }
     );
     this.setPanelMode('tools');
-    this.callbacks.toast('已创建渐变文档', 'success');
+    this.callbacks.toast('已创建渐变贴图', 'success');
   }
 
   private async exportGradientOutput(): Promise<void> {
@@ -3441,64 +3655,162 @@ export class TextureView {
     }
   }
 
+  private pathTargetSize(): { width: number; height: number } {
+    const custom = this.pathCustomSize.checked;
+    return {
+      width: Math.max(1, Math.min(4096, custom ? Number(this.pathSizeW.value) || 512 : this.imageWidth || 512)),
+      height: Math.max(1, Math.min(4096, custom ? Number(this.pathSizeH.value) || 512 : this.imageHeight || 512))
+    };
+  }
+
+  private samplePenPath(): PenSample[] {
+    const points = this.penPoints;
+    if (points.length < 2) return [];
+    const segments = points.length - 1;
+    const steps = Math.max(24, Math.min(96, Math.round(480 / segments)));
+    const samples: PenSample[] = [];
+    for (let index = 0; index < segments; index += 1) {
+      const start = points[index];
+      const end = points[index + 1];
+      const c1x = start.x + start.outX;
+      const c1y = start.y + start.outY;
+      const c2x = end.x + end.inX;
+      const c2y = end.y + end.inY;
+      for (let step = 0; step < steps; step += 1) {
+        const t = step / steps;
+        const mt = 1 - t;
+        samples.push({
+          x: mt * mt * mt * start.x + 3 * mt * mt * t * c1x + 3 * mt * t * t * c2x + t * t * t * end.x,
+          y: mt * mt * mt * start.y + 3 * mt * mt * t * c1y + 3 * mt * t * t * c2y + t * t * t * end.y,
+          t: (index + t) / segments
+        });
+      }
+    }
+    const last = points[points.length - 1];
+    samples.push({ x: last.x, y: last.y, t: 1 });
+    return samples;
+  }
+
+  private pathWidthFactor(t: number): number {
+    const head = Math.max(0, Math.min(200, Number(this.pathHeadWidth.value) || 0)) / 100;
+    const middle = Math.max(0, Math.min(200, Number(this.pathMiddleWidth.value) || 0)) / 100;
+    const tail = Math.max(0, Math.min(200, Number(this.pathTailWidth.value) || 0)) / 100;
+    if (t < 0.5) return head + (middle - head) * (t / 0.5);
+    return middle + (tail - middle) * ((t - 0.5) / 0.5);
+  }
+
+  private buildPathOutput(width: number, height: number): HTMLCanvasElement | null {
+    const samples = this.samplePenPath();
+    if (samples.length < 2) return null;
+    const stroke = document.createElement('canvas');
+    stroke.width = width;
+    stroke.height = height;
+    const strokeCtx = stroke.getContext('2d');
+    if (!strokeCtx) return null;
+    const baseWidth = Math.max(0.5, (Math.max(1, Math.min(100, Number(this.pathWidth.value) || 59)) / 100) * Math.min(width, height) * 0.12);
+    const headColor = this.pathColor.value;
+    const tailColor = this.pathTailColor.value;
+    for (const sample of samples) {
+      const radius = Math.max(0.35, baseWidth * this.pathWidthFactor(sample.t) / 2);
+      strokeCtx.fillStyle = this.mixHexColor(headColor, tailColor, sample.t);
+      strokeCtx.beginPath();
+      strokeCtx.arc(sample.x * width, sample.y * height, radius, 0, Math.PI * 2);
+      strokeCtx.fill();
+    }
+
+    const output = document.createElement('canvas');
+    output.width = width;
+    output.height = height;
+    const context = output.getContext('2d');
+    if (!context) return null;
+    const hardness = Math.max(0, Math.min(100, Number(this.pathHardness.value) || 0)) / 100;
+    const opacity = Math.max(0, Math.min(100, Number(this.pathOpacity.value) || 0)) / 100;
+    const blur = Math.min(90, (1 - hardness) * baseWidth * 0.8);
+    context.globalAlpha = opacity;
+    if (blur > 0.4) context.filter = `blur(${blur}px)`;
+    context.drawImage(stroke, 0, 0);
+    context.filter = 'none';
+    context.globalAlpha = 1;
+    return output;
+  }
+
+  private schedulePathRender(): void {
+    window.clearTimeout(this.pathTimer);
+    this.pathTimer = window.setTimeout(() => this.renderPathGradient(), 50);
+  }
+
   private renderPathGradient(): void {
     const canvas = this.pathPreview;
     const context = this.pathCtx;
     const previewWidth = canvas.width;
     const previewHeight = canvas.height;
     context.clearRect(0, 0, previewWidth, previewHeight);
-    const custom = this.pathCustomSize.checked;
-    const width = Math.max(1, Math.min(4096, custom ? Number(this.pathSizeW.value) || 512 : this.imageWidth || 512));
-    const height = Math.max(1, Math.min(4096, custom ? Number(this.pathSizeH.value) || 512 : this.imageHeight || 512));
-    const output = document.createElement('canvas');
-    output.width = width;
-    output.height = height;
-    const ctx = output.getContext('2d');
-    if (!ctx) return;
-    const centerX = this.pathCenterX * width;
-    const centerY = this.pathCenterY * height;
-    const maxRadius = Math.min(width, height) / 2;
-    const radius = Math.max(1, (Math.max(1, Number(this.pathWidth.value) || 59) / 100) * maxRadius);
-    const band = Math.max(1, (Math.max(0, Number(this.pathThickness.value) || 0) / 100) * maxRadius * 0.32 + 1);
-    const opacity = Math.max(0, Math.min(100, Number(this.pathOpacity.value) || 0)) / 100;
-    const inner = Math.max(0, radius - band / 2);
-    const outer = radius + band / 2;
-    const gradient = ctx.createRadialGradient(centerX, centerY, inner, centerX, centerY, outer);
-    gradient.addColorStop(0, this.gradientRgba(this.pathColor.value, 0));
-    gradient.addColorStop(0.3, this.gradientRgba(this.pathColor.value, opacity * 55));
-    gradient.addColorStop(0.5, this.gradientRgba(this.pathColor.value, opacity * 100));
-    gradient.addColorStop(0.7, this.gradientRgba(this.pathColor.value, opacity * 55));
-    gradient.addColorStop(1, this.gradientRgba(this.pathColor.value, 0));
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-    this.pathOutput = output;
+    const checker = 10;
+    for (let y = 0; y < previewHeight; y += checker) {
+      for (let x = 0; x < previewWidth; x += checker) {
+        context.fillStyle = (x / checker + y / checker) % 2 === 0 ? '#242424' : '#191919';
+        context.fillRect(x, y, checker, checker);
+      }
+    }
 
-    const scale = Math.min(previewWidth / width, previewHeight / height);
-    const drawWidth = width * scale;
-    const drawHeight = height * scale;
-    const offsetX = (previewWidth - drawWidth) / 2;
-    const offsetY = (previewHeight - drawHeight) / 2;
-    context.imageSmoothingEnabled = true;
-    context.drawImage(output, offsetX, offsetY, drawWidth, drawHeight);
-    context.strokeStyle = 'rgba(245, 177, 61, 0.9)';
-    context.lineWidth = 1;
-    const markerX = offsetX + this.pathCenterX * drawWidth;
-    const markerY = offsetY + this.pathCenterY * drawHeight;
-    context.beginPath();
-    context.moveTo(markerX - 6, markerY);
-    context.lineTo(markerX + 6, markerY);
-    context.moveTo(markerX, markerY - 6);
-    context.lineTo(markerX, markerY + 6);
-    context.stroke();
-    this.pathStatus.textContent = this.pathPicking
-      ? '点击预览设置路径中心'
-      : `路径 ${Math.round(radius)}px · 中心 ${Math.round(this.pathCenterX * 100)}% / ${Math.round(this.pathCenterY * 100)}%`;
+    const target = this.pathTargetSize();
+    const previewScale = Math.min(1, 640 / Math.max(target.width, target.height));
+    const outputWidth = Math.max(1, Math.round(target.width * previewScale));
+    const outputHeight = Math.max(1, Math.round(target.height * previewScale));
+    const output = this.buildPathOutput(outputWidth, outputHeight);
+    this.pathOutput = output;
+    if (output) {
+      const scale = Math.min(previewWidth / output.width, previewHeight / output.height);
+      const drawWidth = output.width * scale;
+      const drawHeight = output.height * scale;
+      const offsetX = (previewWidth - drawWidth) / 2;
+      const offsetY = (previewHeight - drawHeight) / 2;
+      context.imageSmoothingEnabled = true;
+      context.drawImage(output, offsetX, offsetY, drawWidth, drawHeight);
+      const samples = this.samplePenPath();
+      if (samples.length >= 2) {
+        const head = samples[0];
+        const tail = samples[samples.length - 1];
+        const headX = offsetX + head.x * drawWidth;
+        const headY = offsetY + head.y * drawHeight;
+        const tailX = offsetX + tail.x * drawWidth;
+        const tailY = offsetY + tail.y * drawHeight;
+        context.font = '600 10px "Segoe UI", sans-serif';
+        context.textAlign = 'center';
+        context.fillStyle = '#7ee2a8';
+        context.fillText('头', headX, headY - 10);
+        context.fillStyle = '#7db7ff';
+        context.fillText('尾', tailX, tailY - 10);
+      }
+    } else {
+      context.fillStyle = 'rgba(255, 255, 255, 0.45)';
+      context.font = '11px "Segoe UI", sans-serif';
+      context.textAlign = 'center';
+      context.fillText('用钢笔在左侧绘制路径后在此预览', previewWidth / 2, previewHeight / 2);
+    }
+
+    const status = this.penEditing
+      ? `钢笔：左键加点 / 拖动曲线 / 右键删点 · ${this.penPoints.length} 锚点`
+      : this.penPoints.length < 2
+        ? '先用钢笔在左侧绘制路径'
+        : `路径 ${this.penPoints.length} 个锚点 · 头 → 尾`;
+    this.pathStatus.textContent = status;
+    this.syncPenOverlayVisibility();
   }
 
   private applyPathGradient(): void {
-    this.renderPathGradient();
-    const output = this.pathOutput;
-    if (!output) return;
+    if (this.penPoints.length < 2) {
+      this.callbacks.toast('请先用钢笔在左侧绘制路径', 'info');
+      return;
+    }
+    const target = this.pathTargetSize();
+    const output = this.buildPathOutput(target.width, target.height);
+    if (!output) {
+      this.callbacks.toast('路径生成失败，请重新绘制', 'error');
+      return;
+    }
+    this.pathOutput = output;
+    if (this.penEditing) this.setPenEditing(false);
     this.setImage(
       output,
       output.width,
@@ -3506,15 +3818,19 @@ export class TextureView {
       `${this.currentBaseName()}_path_gradient.png`,
       '',
       output.width * output.height * 4,
-      { preserveTransform: true, preserveHistory: false }
+      { preserveTransform: true, preserveHistory: false, preservePath: true, skipNormalDetect: true }
     );
     this.setPanelMode('tools');
     this.callbacks.toast('已应用路径渐变', 'success');
   }
 
   private async exportPathGradient(): Promise<void> {
-    this.renderPathGradient();
-    const output = this.pathOutput;
+    if (this.penPoints.length < 2) {
+      this.callbacks.toast('请先用钢笔在左侧绘制路径', 'info');
+      return;
+    }
+    const target = this.pathTargetSize();
+    const output = this.buildPathOutput(target.width, target.height);
     if (!output) return;
     try {
       const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, 'image/png'));
@@ -3527,31 +3843,346 @@ export class TextureView {
     }
   }
 
-  private clearPathGradient(): void {
-    this.pathOpacity.value = '0';
-    this.pathOpacityValue.value = '0';
+  private clearPenPath(notify: boolean): void {
+    this.penPoints = [];
+    this.penEditing = false;
+    this.penDrag = null;
+    this.penPanning = false;
+    this.pathOutput = null;
+    this.element.querySelector('[data-path-pen]')?.classList.remove('active');
+    this.syncPenOverlayVisibility();
+    this.renderPenOverlay();
     this.renderPathGradient();
-    this.callbacks.toast('已清除路径渐变内容', 'info');
+    if (notify) this.callbacks.toast('已清除路径', 'info');
   }
 
   private resetPathGradient(): void {
     this.pathWidth.value = '59';
     this.pathWidthValue.value = '59';
-    this.pathThickness.value = '100';
-    this.pathThicknessValue.value = '100';
+    this.pathHardness.value = '70';
+    this.pathHardnessValue.value = '70';
+    this.pathHeadWidth.value = '100';
+    this.pathHeadWidthValue.value = '100';
+    this.pathMiddleWidth.value = '100';
+    this.pathMiddleWidthValue.value = '100';
+    this.pathTailWidth.value = '100';
+    this.pathTailWidthValue.value = '100';
     this.pathOpacity.value = '100';
     this.pathOpacityValue.value = '100';
     this.pathColor.value = '#ff7878';
-    this.pathCenterX = 0.5;
-    this.pathCenterY = 0.5;
-    this.pathPicking = false;
+    this.pathTailColor.value = '#3b82f6';
     this.pathCustomSize.checked = false;
     this.pathEqual.checked = true;
     this.pathSizeW.disabled = true;
     this.pathSizeH.disabled = true;
-    this.element.querySelector('[data-path-pick]')?.classList.remove('active');
     this.syncPathDefaults();
     this.renderPathGradient();
+  }
+
+  private setPenEditing(active: boolean): void {
+    if (active && !this.bitmap) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    this.penEditing = active;
+    this.penDrag = null;
+    this.penPanning = false;
+    this.element.querySelector('[data-path-pen]')?.classList.toggle('active', active);
+    this.body.classList.toggle('pen-editing', active && this.panelMode === 'tools');
+    this.syncPenOverlayVisibility();
+    this.renderPathGradient();
+    this.renderPenOverlay();
+  }
+
+  private pickPenPath(): void {
+    if (this.penPoints.length < 2) {
+      this.callbacks.toast('请先用钢笔在左侧绘制路径', 'info');
+      return;
+    }
+    this.setPenEditing(false);
+    this.renderPathGradient();
+    this.callbacks.toast(`已拾取路径 · ${this.penPoints.length} 个锚点`, 'success');
+  }
+
+  private syncPenOverlayVisibility(): void {
+    const pathSection = this.toolsPanelBody.querySelector('[data-ai-section="path"]');
+    const pathOpen = pathSection !== null && !pathSection.classList.contains('collapsed');
+    const visible = Boolean(
+      this.bitmap &&
+      this.mesh &&
+      this.panelMode === 'tools' &&
+      pathOpen &&
+      this.penEditing
+    );
+    this.penOverlay.classList.toggle('hidden', !visible);
+    this.penOverlay.classList.toggle('active', visible);
+    this.body.classList.toggle('pen-editing', visible);
+    if (visible) {
+      this.syncPenOverlayRect();
+      this.renderPenOverlay();
+    }
+  }
+
+  private syncPenOverlayRect(): void {
+    if (!this.mesh || !this.canvas) return;
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const bodyRect = this.body.getBoundingClientRect();
+    const width = Math.max(1, Math.round(canvasRect.width));
+    const height = Math.max(1, Math.round(canvasRect.height));
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.penOverlay.style.left = `${canvasRect.left - bodyRect.left}px`;
+    this.penOverlay.style.top = `${canvasRect.top - bodyRect.top}px`;
+    this.penOverlay.style.width = `${width}px`;
+    this.penOverlay.style.height = `${height}px`;
+    const pixelWidth = Math.max(1, Math.round(width * dpr));
+    const pixelHeight = Math.max(1, Math.round(height * dpr));
+    if (this.penOverlay.width !== pixelWidth) this.penOverlay.width = pixelWidth;
+    if (this.penOverlay.height !== pixelHeight) this.penOverlay.height = pixelHeight;
+  }
+
+  private penPointToScreen(x: number, y: number): { x: number; y: number } {
+    const rect = this.penOverlay.getBoundingClientRect();
+    if (!this.mesh || !this.imageWidth || !this.imageHeight) return { x: 0, y: 0 };
+    const aspect = this.imageWidth / Math.max(1, this.imageHeight);
+    let u = x;
+    let v = 1 - y;
+    if (this.flipH) u = 1 - u;
+    if (this.flipV) v = 1 - v;
+    const local = new THREE.Vector3((u - 0.5) * aspect, v - 0.5, 0);
+    const world = local.applyMatrix4(this.mesh.matrixWorld);
+    const projected = world.project(this.camera);
+    return {
+      x: ((projected.x + 1) / 2) * rect.width,
+      y: ((1 - projected.y) / 2) * rect.height
+    };
+  }
+
+  private penEventToImage(event: PointerEvent): { x: number; y: number } | null {
+    if (!this.mesh) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
+      return null;
+    }
+    const ndc = new THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = this.raycaster.intersectObject(this.mesh, false)[0];
+    if (!hit?.uv) return null;
+    let u = hit.uv.x;
+    let v = hit.uv.y;
+    if (this.flipH) u = 1 - u;
+    if (this.flipV) v = 1 - v;
+    return {
+      x: Math.max(0, Math.min(1, u)),
+      y: Math.max(0, Math.min(1, 1 - v))
+    };
+  }
+
+  private penHitTest(event: PointerEvent | MouseEvent): { kind: 'anchor' | 'in' | 'out'; index: number } | null {
+    const rect = this.penOverlay.getBoundingClientRect();
+    const mouseX = event.clientX - rect.left;
+    const mouseY = event.clientY - rect.top;
+    const close = (x: number, y: number, radius: number): boolean => Math.hypot(x - mouseX, y - mouseY) <= radius;
+    for (let index = this.penPoints.length - 1; index >= 0; index -= 1) {
+      const point = this.penPoints[index];
+      if (point.inX || point.inY) {
+        const handle = this.penPointToScreen(point.x + point.inX, point.y + point.inY);
+        if (close(handle.x, handle.y, 7)) return { kind: 'in', index };
+      }
+      if (point.outX || point.outY) {
+        const handle = this.penPointToScreen(point.x + point.outX, point.y + point.outY);
+        if (close(handle.x, handle.y, 7)) return { kind: 'out', index };
+      }
+      const anchor = this.penPointToScreen(point.x, point.y);
+      if (close(anchor.x, anchor.y, 8)) return { kind: 'anchor', index };
+    }
+    return null;
+  }
+
+  private penPointerDown(event: PointerEvent): void {
+    if (!this.penEditing) return;
+    if (event.button === 1) {
+      event.preventDefault();
+      this.penPanning = true;
+      this.penPanX = event.clientX;
+      this.penPanY = event.clientY;
+      return;
+    }
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const hit = this.penHitTest(event);
+    if (hit) {
+      this.penDrag = { kind: hit.kind, index: hit.index, moved: false };
+      this.renderPenOverlay();
+      return;
+    }
+    const point = this.penEventToImage(event);
+    if (!point) return;
+    this.penPoints.push({ x: point.x, y: point.y, inX: 0, inY: 0, outX: 0, outY: 0 });
+    this.penDrag = { kind: 'new', index: this.penPoints.length - 1, moved: false };
+    this.renderPenOverlay();
+    this.schedulePathRender();
+  }
+
+  private penPointerMove(event: PointerEvent): void {
+    if (this.penPanning) {
+      const dx = event.clientX - this.penPanX;
+      const dy = event.clientY - this.penPanY;
+      this.penPanX = event.clientX;
+      this.penPanY = event.clientY;
+      const worldWidth = (this.camera.right - this.camera.left) / this.camera.zoom;
+      const worldHeight = (this.camera.top - this.camera.bottom) / this.camera.zoom;
+      this.panX -= (dx / Math.max(1, this.canvas.clientWidth)) * worldWidth;
+      this.panY += (dy / Math.max(1, this.canvas.clientHeight)) * worldHeight;
+      this.updateCamera();
+      return;
+    }
+    if (!this.penEditing || !this.penDrag) return;
+    const point = this.penEventToImage(event);
+    if (!point) return;
+    const drag = this.penDrag;
+    const target = this.penPoints[drag.index];
+    if (!target) return;
+    if (drag.kind === 'new') {
+      const dx = point.x - target.x;
+      const dy = point.y - target.y;
+      if (Math.abs(dx) + Math.abs(dy) < 0.003) return;
+      target.outX = dx;
+      target.outY = dy;
+      target.inX = -dx;
+      target.inY = -dy;
+    } else if (drag.kind === 'anchor') {
+      target.x = point.x;
+      target.y = point.y;
+    } else {
+      const dx = point.x - target.x;
+      const dy = point.y - target.y;
+      if (drag.kind === 'out') {
+        target.outX = dx;
+        target.outY = dy;
+        if (!event.altKey) {
+          target.inX = -dx;
+          target.inY = -dy;
+        }
+      } else {
+        target.inX = dx;
+        target.inY = dy;
+        if (!event.altKey) {
+          target.outX = -dx;
+          target.outY = -dy;
+        }
+      }
+    }
+    drag.moved = true;
+    this.renderPenOverlay();
+    this.schedulePathRender();
+  }
+
+  private penPointerUp(): void {
+    if (this.penPanning) this.penPanning = false;
+    if (!this.penEditing || !this.penDrag) return;
+    const drag = this.penDrag;
+    this.penDrag = null;
+    if (drag.kind === 'new' && !drag.moved) {
+      const point = this.penPoints[drag.index];
+      if (point) {
+        point.inX = 0;
+        point.inY = 0;
+        point.outX = 0;
+        point.outY = 0;
+      }
+    }
+    this.renderPenOverlay();
+    this.renderPathGradient();
+  }
+
+  private penContextMenu(event: MouseEvent): void {
+    if (!this.penEditing) return;
+    event.preventDefault();
+    const hit = this.penHitTest(event);
+    if (!hit || hit.kind !== 'anchor') return;
+    this.penPoints.splice(hit.index, 1);
+    this.penDrag = null;
+    this.renderPenOverlay();
+    this.renderPathGradient();
+  }
+
+  private renderPenOverlay(): void {
+    if (!this.penOverlay || !this.mesh || !this.bitmap) return;
+    if (this.penOverlay.classList.contains('hidden')) return;
+    this.syncPenOverlayRect();
+    const rect = this.penOverlay.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const dpr = this.penOverlay.width / Math.max(1, rect.width);
+    this.penCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.penCtx.clearRect(0, 0, rect.width, rect.height);
+    this.scene.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld();
+
+    const samples = this.samplePenPath();
+    if (samples.length >= 2) {
+      this.penCtx.beginPath();
+      samples.forEach((sample, index) => {
+        const screen = this.penPointToScreen(sample.x, sample.y);
+        if (index === 0) this.penCtx.moveTo(screen.x, screen.y);
+        else this.penCtx.lineTo(screen.x, screen.y);
+      });
+      this.penCtx.lineJoin = 'round';
+      this.penCtx.lineCap = 'round';
+      this.penCtx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+      this.penCtx.lineWidth = 4;
+      this.penCtx.stroke();
+      this.penCtx.strokeStyle = '#f5b13d';
+      this.penCtx.lineWidth = 1.6;
+      this.penCtx.stroke();
+    }
+
+    this.penPoints.forEach((point, index) => {
+      const anchor = this.penPointToScreen(point.x, point.y);
+      if (point.inX || point.inY) {
+        const handle = this.penPointToScreen(point.x + point.inX, point.y + point.inY);
+        this.penCtx.beginPath();
+        this.penCtx.moveTo(anchor.x, anchor.y);
+        this.penCtx.lineTo(handle.x, handle.y);
+        this.penCtx.strokeStyle = 'rgba(245, 177, 61, 0.55)';
+        this.penCtx.lineWidth = 1;
+        this.penCtx.stroke();
+        this.penCtx.beginPath();
+        this.penCtx.arc(handle.x, handle.y, 3, 0, Math.PI * 2);
+        this.penCtx.fillStyle = '#f5b13d';
+        this.penCtx.fill();
+      }
+      if (point.outX || point.outY) {
+        const handle = this.penPointToScreen(point.x + point.outX, point.y + point.outY);
+        this.penCtx.beginPath();
+        this.penCtx.moveTo(anchor.x, anchor.y);
+        this.penCtx.lineTo(handle.x, handle.y);
+        this.penCtx.strokeStyle = 'rgba(245, 177, 61, 0.55)';
+        this.penCtx.lineWidth = 1;
+        this.penCtx.stroke();
+        this.penCtx.beginPath();
+        this.penCtx.arc(handle.x, handle.y, 3, 0, Math.PI * 2);
+        this.penCtx.fillStyle = '#f5b13d';
+        this.penCtx.fill();
+      }
+      const isFirst = index === 0;
+      const isLast = index === this.penPoints.length - 1;
+      this.penCtx.beginPath();
+      this.penCtx.rect(anchor.x - 4, anchor.y - 4, 8, 8);
+      this.penCtx.fillStyle = isFirst ? '#7ee2a8' : isLast ? '#7db7ff' : '#ffffff';
+      this.penCtx.fill();
+      this.penCtx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+      this.penCtx.lineWidth = 1;
+      this.penCtx.stroke();
+      if (isFirst || isLast) {
+        this.penCtx.font = '600 10px "Segoe UI", sans-serif';
+        this.penCtx.textAlign = 'center';
+        this.penCtx.fillStyle = isFirst ? '#7ee2a8' : '#7db7ff';
+        this.penCtx.fillText(isFirst ? '头' : '尾', anchor.x, anchor.y - 9);
+      }
+    });
   }
 
   private clampSequenceGrid(value: string): number {
@@ -4176,12 +4807,14 @@ export class TextureView {
     this.camera.zoom = 1;
     this.camera.position.set(0, 0, 1);
     this.camera.updateProjectionMatrix();
+    this.renderPenOverlay();
   }
 
   private updateCamera(): void {
     this.camera.zoom = this.zoom;
     this.camera.position.set(this.panX, this.panY, 1);
     this.camera.updateProjectionMatrix();
+    this.renderPenOverlay();
   }
 
   private resize(): void {
@@ -4194,6 +4827,8 @@ export class TextureView {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     if (this.mesh) this.fit();
     this.renderer.render(this.scene, this.camera);
+    this.syncPenOverlayRect();
+    this.renderPenOverlay();
     this.updateCompareLayout();
   }
 
@@ -4201,6 +4836,7 @@ export class TextureView {
     if (!this.mesh) return;
     this.mesh.rotation.z = THREE.MathUtils.degToRad(this.rotation);
     this.mesh.scale.set(this.flipH ? -1 : 1, this.flipV ? -1 : 1, 1);
+    this.renderPenOverlay();
   }
 
   private snapshot(): TransformState {
