@@ -211,6 +211,26 @@ export class TextureView {
     size: number;
   } | null = null;
 
+  private tilePreview: HTMLCanvasElement;
+  private tilePreviewCtx: CanvasRenderingContext2D;
+  private tileRepeatX: HTMLInputElement;
+  private tileRepeatY: HTMLInputElement;
+  private tileOffsetX: HTMLInputElement;
+  private tileOffsetXValue: HTMLInputElement;
+  private tileOffsetY: HTMLInputElement;
+  private tileOffsetYValue: HTMLInputElement;
+  private tileMode: HTMLSelectElement;
+  private tileEdgeBlend: HTMLInputElement;
+  private tileSharp: HTMLInputElement;
+  private tileBlend: HTMLInputElement;
+  private tileBlendValue: HTMLElement;
+  private tileSeed: HTMLInputElement;
+  private tileCustomSize: HTMLInputElement;
+  private tileWidth: HTMLInputElement;
+  private tileHeight: HTMLInputElement;
+  private tileOutput: HTMLCanvasElement | null = null;
+  private tilePreviewTimer = 0;
+
   private aiSeqSource: HTMLSelectElement;
   private aiSeqCols: HTMLInputElement;
   private aiSeqRows: HTMLInputElement;
@@ -357,6 +377,61 @@ export class TextureView {
               <div class="ai-button-row">
                 <button type="button" class="primary" data-ai-cut>一键抠图</button>
                 <button type="button" data-ai-cut-restore disabled>还原抠图</button>
+              </div>
+            </section>
+
+            <section class="ai-section tile-section">
+              <div class="ai-section-head"><span>平铺合成</span><span class="ai-pill">无缝</span></div>
+              <p class="ai-copy">把图片合成为无缝平铺贴图，可控制重复、位移、边缘融合和输出尺寸。</p>
+              <div class="tile-preview-wrap">
+                <canvas id="tile-preview" width="320" height="320"></canvas>
+              </div>
+              <div class="ai-button-row tile-actions">
+                <button type="button" class="primary" data-tile-apply>应用</button>
+                <button type="button" data-tile-export>导出 PNG</button>
+                <button type="button" data-tile-reset>重置</button>
+              </div>
+              <div class="tile-pair">
+                <label>水平重复 <input id="tile-repeat-x" type="number" min="1" max="8" value="1"></label>
+                <label>垂直重复 <input id="tile-repeat-y" type="number" min="1" max="8" value="1"></label>
+              </div>
+              <div class="tile-slider-row">
+                <span>水平位移</span>
+                <input id="tile-offset-x" type="range" min="0" max="2048" step="1" value="0">
+                <input id="tile-offset-x-value" class="tile-number" type="number" min="0" max="4096" step="1" value="0">
+              </div>
+              <div class="tile-slider-row">
+                <span>垂直位移</span>
+                <input id="tile-offset-y" type="range" min="0" max="2048" step="1" value="0">
+                <input id="tile-offset-y-value" class="tile-number" type="number" min="0" max="4096" step="1" value="0">
+              </div>
+              <div class="tile-mode-row">
+                <span>混合模式</span>
+                <select id="tile-mode">
+                  <option value="both" selected>四方连续</option>
+                  <option value="horizontal">左右二方连续</option>
+                  <option value="vertical">上下二方连续</option>
+                </select>
+              </div>
+              <div class="tile-checks">
+                <label><input id="tile-edge-blend" type="checkbox" checked> 边缘混合</label>
+                <label><input id="tile-sharp" type="checkbox"> 清晰衔接</label>
+              </div>
+              <div class="tile-slider-row">
+                <span>边缘混合</span>
+                <input id="tile-blend" type="range" min="0" max="50" step="1" value="20">
+                <span id="tile-blend-value">20%</span>
+              </div>
+              <div class="tile-row">
+                <span>随机种子</span>
+                <input id="tile-seed" type="number" min="1" max="9999" step="1" value="1">
+              </div>
+              <div class="tile-row tile-custom-row">
+                <label><input id="tile-custom-size" type="checkbox"> 启用自定义尺寸</label>
+                <div class="tile-size-inputs">
+                  <input id="tile-width" type="number" min="1" max="4096" value="512" disabled>
+                  <input id="tile-height" type="number" min="1" max="4096" value="512" disabled>
+                </div>
               </div>
             </section>
 
@@ -679,6 +754,23 @@ export class TextureView {
     this.aiCutFeather = this.element.querySelector('#ai-cut-feather') as HTMLInputElement;
     this.aiCutFeatherValue = this.element.querySelector('#ai-cut-feather-value') as HTMLElement;
     this.aiCutRestoreButton = this.element.querySelector('[data-ai-cut-restore]') as HTMLButtonElement;
+    this.tilePreview = this.element.querySelector('#tile-preview') as HTMLCanvasElement;
+    this.tilePreviewCtx = this.tilePreview.getContext('2d') as CanvasRenderingContext2D;
+    this.tileRepeatX = this.element.querySelector('#tile-repeat-x') as HTMLInputElement;
+    this.tileRepeatY = this.element.querySelector('#tile-repeat-y') as HTMLInputElement;
+    this.tileOffsetX = this.element.querySelector('#tile-offset-x') as HTMLInputElement;
+    this.tileOffsetXValue = this.element.querySelector('#tile-offset-x-value') as HTMLInputElement;
+    this.tileOffsetY = this.element.querySelector('#tile-offset-y') as HTMLInputElement;
+    this.tileOffsetYValue = this.element.querySelector('#tile-offset-y-value') as HTMLInputElement;
+    this.tileMode = this.element.querySelector('#tile-mode') as HTMLSelectElement;
+    this.tileEdgeBlend = this.element.querySelector('#tile-edge-blend') as HTMLInputElement;
+    this.tileSharp = this.element.querySelector('#tile-sharp') as HTMLInputElement;
+    this.tileBlend = this.element.querySelector('#tile-blend') as HTMLInputElement;
+    this.tileBlendValue = this.element.querySelector('#tile-blend-value') as HTMLElement;
+    this.tileSeed = this.element.querySelector('#tile-seed') as HTMLInputElement;
+    this.tileCustomSize = this.element.querySelector('#tile-custom-size') as HTMLInputElement;
+    this.tileWidth = this.element.querySelector('#tile-width') as HTMLInputElement;
+    this.tileHeight = this.element.querySelector('#tile-height') as HTMLInputElement;
     this.aiSeqSource = this.element.querySelector('#ai-seq-source') as HTMLSelectElement;
     this.aiSeqCols = this.element.querySelector('#ai-seq-cols') as HTMLInputElement;
     this.aiSeqRows = this.element.querySelector('#ai-seq-rows') as HTMLInputElement;
@@ -883,6 +975,51 @@ export class TextureView {
     });
     this.element.querySelector('[data-ai-cut]')?.addEventListener('click', () => this.runAiCutout());
     this.aiCutRestoreButton.addEventListener('click', () => this.restoreAiCutout());
+    const scheduleTilePreview = (): void => {
+      window.clearTimeout(this.tilePreviewTimer);
+      this.tilePreviewTimer = window.setTimeout(() => this.renderTilePreview(), 80);
+    };
+    this.tileRepeatX.addEventListener('change', scheduleTilePreview);
+    this.tileRepeatY.addEventListener('change', scheduleTilePreview);
+    this.tileMode.addEventListener('change', scheduleTilePreview);
+    this.tileEdgeBlend.addEventListener('change', scheduleTilePreview);
+    this.tileSharp.addEventListener('change', scheduleTilePreview);
+    this.tileSeed.addEventListener('change', scheduleTilePreview);
+    this.tileCustomSize.addEventListener('change', () => {
+      const custom = this.tileCustomSize.checked;
+      this.tileWidth.disabled = !custom;
+      this.tileHeight.disabled = !custom;
+      scheduleTilePreview();
+    });
+    this.tileWidth.addEventListener('change', scheduleTilePreview);
+    this.tileHeight.addEventListener('change', scheduleTilePreview);
+    this.tileOffsetX.addEventListener('input', () => {
+      this.tileOffsetXValue.value = this.tileOffsetX.value;
+      scheduleTilePreview();
+    });
+    this.tileOffsetY.addEventListener('input', () => {
+      this.tileOffsetYValue.value = this.tileOffsetY.value;
+      scheduleTilePreview();
+    });
+    this.tileOffsetXValue.addEventListener('change', () => {
+      const value = Math.max(0, Math.min(4096, Number(this.tileOffsetXValue.value) || 0));
+      this.tileOffsetX.value = String(value);
+      this.tileOffsetXValue.value = String(value);
+      scheduleTilePreview();
+    });
+    this.tileOffsetYValue.addEventListener('change', () => {
+      const value = Math.max(0, Math.min(4096, Number(this.tileOffsetYValue.value) || 0));
+      this.tileOffsetY.value = String(value);
+      this.tileOffsetYValue.value = String(value);
+      scheduleTilePreview();
+    });
+    this.tileBlend.addEventListener('input', () => {
+      this.tileBlendValue.textContent = `${this.tileBlend.value}%`;
+      scheduleTilePreview();
+    });
+    this.element.querySelector('[data-tile-apply]')?.addEventListener('click', () => this.applyTileOutput());
+    this.element.querySelector('[data-tile-export]')?.addEventListener('click', () => void this.exportTileOutput());
+    this.element.querySelector('[data-tile-reset]')?.addEventListener('click', () => this.resetTileControls());
     this.aiSeqSource.addEventListener('change', () => {
       this.resetAiSequenceSelection();
       this.renderAiSequenceGrid();
@@ -2139,6 +2276,8 @@ export class TextureView {
     if (active) {
       if (!this.composeSource && this.aiSeqSource.value === 'child') this.aiSeqSource.value = 'parent';
       this.updateAiCutButtons();
+      this.syncTileDefaults();
+      this.renderTilePreview();
       this.resetAiSequenceSelection();
       this.renderAiSequenceGrid();
       void this.refreshAiStatus();
@@ -2305,6 +2444,240 @@ export class TextureView {
     );
     this.setAiMode(true);
     this.callbacks.toast('已还原抠图前的图片', 'success');
+  }
+
+  private syncTileDefaults(): void {
+    if (!this.bitmap || !this.imageWidth || !this.imageHeight) return;
+    const maxRepeatX = Math.max(1, Math.min(8, Math.floor(4096 / this.imageWidth)));
+    const maxRepeatY = Math.max(1, Math.min(8, Math.floor(4096 / this.imageHeight)));
+    this.tileRepeatX.max = String(maxRepeatX);
+    this.tileRepeatY.max = String(maxRepeatY);
+    this.tileRepeatX.value = String(Math.min(Number(this.tileRepeatX.value) || 1, maxRepeatX));
+    this.tileRepeatY.value = String(Math.min(Number(this.tileRepeatY.value) || 1, maxRepeatY));
+    this.tileOffsetX.max = String(this.imageWidth);
+    this.tileOffsetY.max = String(this.imageHeight);
+    if (!this.tileCustomSize.checked) {
+      this.tileWidth.value = String(this.imageWidth);
+      this.tileHeight.value = String(this.imageHeight);
+    }
+  }
+
+  private tileValue(input: HTMLInputElement, fallback: number, min: number, max: number): number {
+    const parsed = Number(input.value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(min, Math.min(max, Math.round(parsed)));
+  }
+
+  private buildTileOutput(): HTMLCanvasElement | null {
+    if (!this.bitmap || !this.imageWidth || !this.imageHeight) return null;
+    const repeatX = this.tileValue(this.tileRepeatX, 1, 1, 8);
+    const repeatY = this.tileValue(this.tileRepeatY, 1, 1, 8);
+    this.tileRepeatX.value = String(repeatX);
+    this.tileRepeatY.value = String(repeatY);
+    const custom = this.tileCustomSize.checked;
+    const width = custom
+      ? this.tileValue(this.tileWidth, this.imageWidth, 1, 4096)
+      : Math.min(4096, this.imageWidth * repeatX);
+    const height = custom
+      ? this.tileValue(this.tileHeight, this.imageHeight, 1, 4096)
+      : Math.min(4096, this.imageHeight * repeatY);
+    if (custom) {
+      this.tileWidth.value = String(width);
+      this.tileHeight.value = String(height);
+    }
+    const seed = this.tileValue(this.tileSeed, 1, 1, 9999);
+    this.tileSeed.value = String(seed);
+    const random = (value: number): number => {
+      const n = Math.sin(value * 12.9898 + 78.233) * 43758.5453;
+      return n - Math.floor(n);
+    };
+    const offsetX = (Number(this.tileOffsetXValue.value) || 0) + random(seed) * this.imageWidth;
+    const offsetY = (Number(this.tileOffsetYValue.value) || 0) + random(seed + 1) * this.imageHeight;
+
+    const sourceTile = document.createElement('canvas');
+    sourceTile.width = this.imageWidth;
+    sourceTile.height = this.imageHeight;
+    const sourceContext = sourceTile.getContext('2d');
+    if (!sourceContext) return null;
+    const startX = -(((offsetX % this.imageWidth) + this.imageWidth) % this.imageWidth);
+    const startY = -(((offsetY % this.imageHeight) + this.imageHeight) % this.imageHeight);
+    for (let x = startX; x < this.imageWidth; x += this.imageWidth) {
+      for (let y = startY; y < this.imageHeight; y += this.imageHeight) {
+        sourceContext.drawImage(this.bitmap as CanvasImageSource, x, y);
+      }
+    }
+
+    const output = document.createElement('canvas');
+    output.width = width;
+    output.height = height;
+    const context = output.getContext('2d', { willReadFrequently: true });
+    if (!context) return null;
+    const cellsX = Math.ceil(width / this.imageWidth);
+    const cellsY = Math.ceil(height / this.imageHeight);
+    for (let row = 0; row < cellsY; row += 1) {
+      for (let col = 0; col < cellsX; col += 1) {
+        const flipX = col % 2 === 1;
+        const flipY = row % 2 === 1;
+        context.save();
+        context.translate(col * this.imageWidth + (flipX ? this.imageWidth : 0), row * this.imageHeight + (flipY ? this.imageHeight : 0));
+        context.scale(flipX ? -1 : 1, flipY ? -1 : 1);
+        context.drawImage(sourceTile, 0, 0);
+        context.restore();
+      }
+    }
+
+    if (this.tileEdgeBlend.checked) {
+      const percent = Math.max(0, Math.min(50, Number(this.tileBlend.value) || 0));
+      this.applyTileEdgeBlend(output, percent, this.tileMode.value as 'both' | 'horizontal' | 'vertical', this.tileSharp.checked);
+    }
+    return output;
+  }
+
+  private applyTileEdgeBlend(
+    canvas: HTMLCanvasElement,
+    percent: number,
+    mode: 'both' | 'horizontal' | 'vertical',
+    sharp: boolean
+  ): void {
+    if (percent <= 0) return;
+    const width = canvas.width;
+    const height = canvas.height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return;
+    const imageData = context.getImageData(0, 0, width, height);
+    let data = imageData.data;
+    let band = Math.max(1, Math.round(Math.min(width, height) * percent / 100));
+    if (sharp) band = Math.max(1, Math.round(band * 0.65));
+    band = Math.min(band, Math.floor(width / 2), Math.floor(height / 2));
+    const blend = (t: number): number => t * t * (3 - 2 * t);
+    if (mode === 'horizontal' || mode === 'both') {
+      for (let y = 0; y < height; y += 1) {
+        const row = y * width * 4;
+        const left = row;
+        const right = row + (width - 1) * 4;
+        const seam = [
+          (data[left] + data[right]) / 2,
+          (data[left + 1] + data[right + 1]) / 2,
+          (data[left + 2] + data[right + 2]) / 2,
+          (data[left + 3] + data[right + 3]) / 2
+        ];
+        for (let x = 0; x < band; x += 1) {
+          const t = blend(x / band);
+          const target = row + x * 4;
+          for (let channel = 0; channel < 4; channel += 1) {
+            data[target + channel] = Math.round(seam[channel] * (1 - t) + data[target + channel] * t);
+          }
+          const mirror = row + (width - 1 - x) * 4;
+          for (let channel = 0; channel < 4; channel += 1) {
+            data[mirror + channel] = Math.round(seam[channel] * (1 - t) + data[mirror + channel] * t);
+          }
+        }
+      }
+    }
+    if (mode === 'vertical' || mode === 'both') {
+      data = imageData.data;
+      for (let x = 0; x < width; x += 1) {
+        const top = x * 4;
+        const bottom = ((height - 1) * width + x) * 4;
+        const seam = [
+          (data[top] + data[bottom]) / 2,
+          (data[top + 1] + data[bottom + 1]) / 2,
+          (data[top + 2] + data[bottom + 2]) / 2,
+          (data[top + 3] + data[bottom + 3]) / 2
+        ];
+        for (let y = 0; y < band; y += 1) {
+          const t = blend(y / band);
+          const target = (y * width + x) * 4;
+          for (let channel = 0; channel < 4; channel += 1) {
+            data[target + channel] = Math.round(seam[channel] * (1 - t) + data[target + channel] * t);
+          }
+          const mirror = ((height - 1 - y) * width + x) * 4;
+          for (let channel = 0; channel < 4; channel += 1) {
+            data[mirror + channel] = Math.round(seam[channel] * (1 - t) + data[mirror + channel] * t);
+          }
+        }
+      }
+    }
+    context.putImageData(imageData, 0, 0);
+  }
+
+  private renderTilePreview(): void {
+    const output = this.buildTileOutput();
+    this.tileOutput = output;
+    const context = this.tilePreviewCtx;
+    const canvas = this.tilePreview;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#0b0d10';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    if (!output) {
+      context.fillStyle = '#7f8b96';
+      context.font = '12px "Microsoft YaHei", sans-serif';
+      context.textAlign = 'center';
+      context.fillText('载入图片后可用', canvas.width / 2, canvas.height / 2);
+      return;
+    }
+    const scale = Math.min(canvas.width / output.width, canvas.height / output.height);
+    const drawWidth = output.width * scale;
+    const drawHeight = output.height * scale;
+    context.imageSmoothingEnabled = true;
+    context.drawImage(output, (canvas.width - drawWidth) / 2, (canvas.height - drawHeight) / 2, drawWidth, drawHeight);
+  }
+
+  private applyTileOutput(): void {
+    if (!this.bitmap) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    const output = this.buildTileOutput();
+    if (!output) return;
+    this.tileOutput = output;
+    this.setImage(
+      output,
+      output.width,
+      output.height,
+      `${this.currentBaseName()}_tile.png`,
+      '',
+      output.width * output.height * 4,
+      { preserveTransform: true, preserveHistory: false }
+    );
+    this.setAiMode(true);
+    this.callbacks.toast('已应用无缝平铺贴图', 'success');
+  }
+
+  private async exportTileOutput(): Promise<void> {
+    const output = this.tileOutput ?? this.buildTileOutput();
+    if (!output) return;
+    try {
+      const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('PNG 编码失败');
+      const data = new Uint8Array(await blob.arrayBuffer());
+      const saved = await window.nyxel.file.savePng(data, `${this.currentBaseName()}_tile.png`);
+      if (saved) this.callbacks.toast(`已导出：${saved}`, 'success');
+    } catch (error) {
+      this.callbacks.toast(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private resetTileControls(): void {
+    this.tileRepeatX.value = '1';
+    this.tileRepeatY.value = '1';
+    this.tileOffsetX.value = '0';
+    this.tileOffsetXValue.value = '0';
+    this.tileOffsetY.value = '0';
+    this.tileOffsetYValue.value = '0';
+    this.tileMode.value = 'both';
+    this.tileEdgeBlend.checked = true;
+    this.tileSharp.checked = false;
+    this.tileBlend.value = '20';
+    this.tileBlendValue.textContent = '20%';
+    this.tileSeed.value = '1';
+    this.tileCustomSize.checked = false;
+    this.tileWidth.disabled = true;
+    this.tileHeight.disabled = true;
+    this.tileWidth.value = String(this.imageWidth || 512);
+    this.tileHeight.value = String(this.imageHeight || 512);
+    this.syncTileDefaults();
+    this.renderTilePreview();
   }
 
   private clampSequenceGrid(value: string): number {
