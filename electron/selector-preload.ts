@@ -6,7 +6,14 @@ contextBridge.exposeInMainWorld('selector', {
     ipcRenderer.on('selector:image', listener);
     return () => ipcRenderer.removeListener('selector:image', listener);
   },
-  confirm: (rect: { x: number; y: number; width: number; height: number }) => {
+  confirm: (rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    viewportWidth: number;
+    viewportHeight: number;
+  }) => {
     ipcRenderer.send('selector:confirm', rect);
   },
   cancel: () => {

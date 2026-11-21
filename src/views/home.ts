@@ -17,7 +17,7 @@ export class HomeView {
       <div class="home-hero">
         <img class="hero-mark" src="${heroUrl}" alt="Texture map" draggable="false" />
         <h1>Texture map</h1>
-        <p>贴图 · 模型 · 视频 · 绘画 · v0.2 正式版</p>
+        <p>贴图 · 模型 · 视频 · 绘画 · v1.0 正式版</p>
         <div class="home-actions">
           <button class="primary" data-action="open-texture">打开贴图</button>
           <button data-action="open-model">打开模型</button>
@@ -80,7 +80,15 @@ export class HomeView {
       name.textContent = item.name;
       const path = document.createElement('div');
       path.className = 'recent-path';
-      path.textContent = item.path;
+      const parts = item.path.replace(/\\/g, '/').split('/').filter(Boolean);
+      const parent = parts.length > 1 ? parts[parts.length - 2] : '';
+      const parentLabel = /^[a-z]:$/i.test(parent) ? '' : parent;
+      path.textContent = parentLabel
+        ? `${item.type === 'model' ? '模型' : '贴图'} · ${parentLabel}`
+        : item.type === 'model'
+          ? 'FBX 模型'
+          : '贴图';
+      path.title = item.path;
       const time = document.createElement('div');
       time.className = 'recent-time';
       time.textContent = formatTime(item.time);

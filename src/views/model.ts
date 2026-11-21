@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { ViewCallbacks } from '../types';
 import { basename } from '../utils';
 
@@ -10,10 +14,7 @@ type ViewMode = '3d' | 'uv';
 
 const UV_ATTRIBUTES = ['uv', 'uv1', 'uv2', 'uv3'] as const;
 const UV_LABELS: Record<string, string> = { uv: 'UV1', uv1: 'UV2', uv2: 'UV3', uv3: 'UV4' };
-const UV_COLORS = [
-  0x55d6a0, 0x60a5fa, 0xf59e0b, 0xf472b6, 0xa78bfa,
-  0x22d3ee, 0xf87171, 0xa3e635, 0xfb923c, 0x38bdf8
-];
+const UV_LINE_COLOR = 0xe8f0ec;
 const UV_OUT_OF_BOUNDS = 0xff5d5d;
 
 interface UvTriangle {
@@ -28,6 +29,59 @@ interface UvTriangle {
   v2: number;
   oob: boolean;
 }
+
+type MaterialChannel = 'rgba' | 'r' | 'g' | 'b' | 'a' | 'l';
+
+type MaterialAlphaChannel = 'r' | 'g' | 'b' | 'a';
+
+interface MaterialSettings {
+  channel: MaterialChannel;
+  alphaChannel: MaterialAlphaChannel;
+  offsetU: number;
+  offsetV: number;
+  scaleU: number;
+  scaleV: number;
+  emissive: string;
+  emissiveIntensity: number;
+  bloomStrength: number;
+  brightness: number;
+  contrast: number;
+}
+
+const MATERIAL_CHANNEL_INDEX: Record<MaterialChannel, number> = {
+  rgba: 0,
+  r: 1,
+  g: 2,
+  b: 3,
+  a: 4,
+  l: 5
+};
+
+const MATERIAL_ALPHA_CHANNEL_INDEX: Record<MaterialAlphaChannel, number> = {
+  r: 1,
+  g: 2,
+  b: 3,
+  a: 4
+};
+
+const MATERIAL_SETTINGS_KEY = 'texturemap.model.material.settings';
+const MATERIAL_PRESET_KEY = 'texturemap.model.material.preset';
+
+const MATERIAL_PRESETS: Record<string, MaterialSettings> = {
+  default: {
+    channel: 'rgba',
+    alphaChannel: 'r',
+    offsetU: 0,
+    offsetV: 0,
+    scaleU: 1,
+    scaleV: 1,
+    emissive: '#8fc3a2',
+    emissiveIntensity: 0,
+    bloomStrength: 0.18,
+    brightness: 1,
+    contrast: 1
+  }
+};
 
 interface UvOverlapResponse {
   requestId: number;
@@ -48,8 +102,42 @@ export class ModelView {
   private fileLabel: HTMLElement;
   private axisDialog: HTMLElement;
   private lightPanel: HTMLElement;
+  private materialPanel: HTMLElement;
+  private materialBallCanvas: HTMLCanvasElement;
+  private materialPresetSelect: HTMLSelectElement;
+  private materialOffsetU: HTMLInputElement;
+  private materialOffsetUValue: HTMLInputElement;
+  private materialOffsetV: HTMLInputElement;
+  private materialOffsetVValue: HTMLInputElement;
+  private materialScaleU: HTMLInputElement;
+  private materialScaleUValue: HTMLInputElement;
+  private materialScaleV: HTMLInputElement;
+  private materialScaleVValue: HTMLInputElement;
+  private materialEmissive: HTMLInputElement;
+  private materialEmissiveIntensity: HTMLInputElement;
+  private materialEmissiveIntensityValue: HTMLInputElement;
+  private materialBloom: HTMLInputElement;
+  private materialBloomValue: HTMLInputElement;
+  private materialBrightness: HTMLInputElement;
+  private materialBrightnessValue: HTMLInputElement;
+  private materialContrast: HTMLInputElement;
+  private materialContrastValue: HTMLInputElement;
+  private materialSettings: MaterialSettings = { ...MATERIAL_PRESETS.default };
+  private materialPresetKey = 'default';
+  private materialBallRenderer: THREE.WebGLRenderer | null = null;
+  private materialBallScene: THREE.Scene | null = null;
+  private materialBallCamera: THREE.PerspectiveCamera | null = null;
+  private materialBallMesh: THREE.Mesh | null = null;
+  private materialBallMaterial: THREE.MeshStandardMaterial | null = null;
+  private materialBallTexture: THREE.Texture | null = null;
+  private materialBallSource: THREE.Texture | null = null;
+  private materialBallComposer: EffectComposer | null = null;
+  private materialBallBloom: UnrealBloomPass | null = null;
+  private generatedMaterialTextures: THREE.Texture[] = [];
 
   private renderer: THREE.WebGLRenderer;
+  private composer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
@@ -99,9 +187,20 @@ export class ModelView {
 
   private uvZoom = 1;
   private uvCenter = new THREE.Vector2(0, 0);
-  private uvDragging = false;
-  private uvLastX = 0;
-  private uvLastY = 0;
+  private uvPanning = false;
+  private uvZooming = false;
+  private uvNavLastX = 0;
+  private uvNavLastY = 0;
+  private marqueeActive = false;
+  private marqueeMode: ViewMode | null = null;
+  private marqueeStartX = 0;
+  private marqueeStartY = 0;
+  private marqueeCurrentX = 0;
+  private marqueeCurrentY = 0;
+  private marqueeAdditive = false;
+  private marqueeSubtractive = false;
+  private marquee: HTMLElement;
+  private altHeld = false;
   private pointerDownX = -1;
   private pointerDownY = -1;
   private pointerMoved = false;
@@ -118,12 +217,15 @@ export class ModelView {
   private uvRulerTop: HTMLElement;
   private uvRulerLeft: HTMLElement;
   private uvTileLabels: HTMLElement;
+  private uvRulersToggle: HTMLInputElement;
+  private uvRulersVisible = true;
   private uvBgMode: UvBackground = 'checker';
   private uvTriangles: UvTriangle[] = [];
   private uvOobCount = 0;
   private uvMeshCount = 0;
   private uvDataBuilt = false;
   private selectedUv: UvTriangle | null = null;
+  private selectedUvTriangles: UvTriangle[] = [];
   private raycaster = new THREE.Raycaster();
 
   private callbacks: ViewCallbacks;
@@ -158,13 +260,109 @@ export class ModelView {
             <option value="solid">纯色</option>
             <option value="texture">当前贴图</option>
           </select>
-          <button data-action="uv-tiles" id="uv-tiles">2×2 象限</button>
-          <button data-action="uv-overlap">检测重叠</button>
+          <label class="uv-toggle" title="显示 / 隐藏 UV 标尺">
+            <input type="checkbox" id="uv-rulers-toggle" checked>
+            <span>标尺</span>
+          </label>
+          <button data-action="uv-tiles" id="uv-tiles">2×2</button>
+          <button data-action="uv-overlap">重叠检测</button>
         </span>
         <span class="muted" id="model-file-label">未加载</span>
       </div>
       <div class="view-body model-body">
-        <canvas class="view-canvas"></canvas>
+        <canvas class="view-canvas" title="Alt+左键旋转（3D）· Alt+中键平移 · Alt+右键缩放 · 左键点击 / 框选"></canvas>
+        <aside class="material-panel">
+          <div class="material-panel-head">
+            <div class="material-panel-title">
+              <strong>材质预设</strong>
+              <span>Material Preview</span>
+            </div>
+            <button type="button" data-material-reset title="重置材质">重置</button>
+          </div>
+          <div class="material-ball-wrap">
+            <canvas id="material-ball"></canvas>
+            <span class="material-ball-label">MATERIAL BALL</span>
+          </div>
+          <div class="material-panel-body">
+            <label class="material-control-row">
+              <span>预设</span>
+              <select id="material-preset">
+                <option value="default">默认材质</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <section class="material-group">
+              <div class="material-group-title">通道</div>
+              <div class="segmented material-channel-group">
+                <button type="button" data-material-channel="rgba" class="active">RGBA</button>
+                <button type="button" data-material-channel="r">R</button>
+                <button type="button" data-material-channel="g">G</button>
+                <button type="button" data-material-channel="b">B</button>
+                <button type="button" data-material-channel="a">A</button>
+                <button type="button" data-material-channel="l">L</button>
+              </div>
+              <div class="material-group-title material-subtitle">透明通道</div>
+              <div class="segmented material-alpha-group">
+                <button type="button" data-material-alpha="r" class="active">R</button>
+                <button type="button" data-material-alpha="g">G</button>
+                <button type="button" data-material-alpha="b">B</button>
+                <button type="button" data-material-alpha="a">A</button>
+              </div>
+            </section>
+            <section class="material-group">
+              <div class="material-group-title">UV 变换</div>
+              <label class="material-control-row">
+                <span>U 偏移</span>
+                <input id="material-offset-u" type="range" min="-10" max="10" step="0.01" value="0">
+                <input id="material-offset-u-value" class="material-number" type="number" min="-10" max="10" step="0.01" value="0">
+              </label>
+              <label class="material-control-row">
+                <span>V 偏移</span>
+                <input id="material-offset-v" type="range" min="-10" max="10" step="0.01" value="0">
+                <input id="material-offset-v-value" class="material-number" type="number" min="-10" max="10" step="0.01" value="0">
+              </label>
+              <label class="material-control-row">
+                <span>U 大小</span>
+                <input id="material-scale-u" type="range" min="0.01" max="16" step="0.01" value="1">
+                <input id="material-scale-u-value" class="material-number" type="number" min="0.01" max="16" step="0.01" value="1">
+              </label>
+              <label class="material-control-row">
+                <span>V 大小</span>
+                <input id="material-scale-v" type="range" min="0.01" max="16" step="0.01" value="1">
+                <input id="material-scale-v-value" class="material-number" type="number" min="0.01" max="16" step="0.01" value="1">
+              </label>
+            </section>
+            <section class="material-group">
+              <div class="material-group-title">自发光</div>
+              <div class="material-control-row material-emissive-row">
+                <span>颜色</span>
+                <input id="material-emissive" type="color" value="#8fc3a2">
+                <input id="material-emissive-intensity" type="range" min="0" max="20" step="0.05" value="0">
+                <input id="material-emissive-intensity-value" class="material-number" type="number" min="0" max="20" step="0.05" value="0">
+              </div>
+              <label class="material-control-row">
+                <span>泛光</span>
+                <input id="material-bloom" type="range" min="0" max="3" step="0.01" value="0.18">
+                <input id="material-bloom-value" class="material-number" type="number" min="0" max="3" step="0.01" value="0.18">
+              </label>
+            </section>
+            <section class="material-group">
+              <div class="material-group-title">亮度 / 对比度</div>
+              <label class="material-control-row">
+                <span>亮度</span>
+                <input id="material-brightness" type="range" min="-8" max="8" step="0.01" value="1">
+                <input id="material-brightness-value" class="material-number" type="number" min="-8" max="8" step="0.01" value="1">
+              </label>
+              <label class="material-control-row">
+                <span>对比度</span>
+                <input id="material-contrast" type="range" min="-8" max="8" step="0.01" value="1">
+                <input id="material-contrast-value" class="material-number" type="number" min="-8" max="8" step="0.01" value="1">
+              </label>
+            </section>
+            <div class="material-hint">仅影响模型预览材质，不改动原始贴图。</div>
+          </div>
+        </aside>
+        <div class="model-marquee hidden" id="model-marquee"></div>
         <div class="view-empty"><strong>打开或拖入 FBX 文件</strong><span>支持 .fbx · 可切换 Y-up / Z-up</span></div>
         <div class="model-stats hidden"></div>
         <div class="model-warning hidden"></div>
@@ -212,6 +410,26 @@ export class ModelView {
     this.fileLabel = this.element.querySelector('#model-file-label') as HTMLElement;
     this.axisDialog = this.element.querySelector('.axis-dialog') as HTMLElement;
     this.lightPanel = this.element.querySelector('.light-panel') as HTMLElement;
+    this.materialPanel = this.element.querySelector('.material-panel') as HTMLElement;
+    this.materialBallCanvas = this.element.querySelector('#material-ball') as HTMLCanvasElement;
+    this.materialPresetSelect = this.element.querySelector('#material-preset') as HTMLSelectElement;
+    this.materialOffsetU = this.element.querySelector('#material-offset-u') as HTMLInputElement;
+    this.materialOffsetUValue = this.element.querySelector('#material-offset-u-value') as HTMLInputElement;
+    this.materialOffsetV = this.element.querySelector('#material-offset-v') as HTMLInputElement;
+    this.materialOffsetVValue = this.element.querySelector('#material-offset-v-value') as HTMLInputElement;
+    this.materialScaleU = this.element.querySelector('#material-scale-u') as HTMLInputElement;
+    this.materialScaleUValue = this.element.querySelector('#material-scale-u-value') as HTMLInputElement;
+    this.materialScaleV = this.element.querySelector('#material-scale-v') as HTMLInputElement;
+    this.materialScaleVValue = this.element.querySelector('#material-scale-v-value') as HTMLInputElement;
+    this.materialEmissive = this.element.querySelector('#material-emissive') as HTMLInputElement;
+    this.materialEmissiveIntensity = this.element.querySelector('#material-emissive-intensity') as HTMLInputElement;
+    this.materialEmissiveIntensityValue = this.element.querySelector('#material-emissive-intensity-value') as HTMLInputElement;
+    this.materialBloom = this.element.querySelector('#material-bloom') as HTMLInputElement;
+    this.materialBloomValue = this.element.querySelector('#material-bloom-value') as HTMLInputElement;
+    this.materialBrightness = this.element.querySelector('#material-brightness') as HTMLInputElement;
+    this.materialBrightnessValue = this.element.querySelector('#material-brightness-value') as HTMLInputElement;
+    this.materialContrast = this.element.querySelector('#material-contrast') as HTMLInputElement;
+    this.materialContrastValue = this.element.querySelector('#material-contrast-value') as HTMLInputElement;
     this.uvChannelSelect = this.element.querySelector('#uv-channel') as HTMLSelectElement;
     this.uvBgSelect = this.element.querySelector('#uv-bg') as HTMLSelectElement;
     this.uvHud = this.element.querySelector('.uv-hud') as HTMLElement;
@@ -222,6 +440,8 @@ export class ModelView {
     this.uvRulerTop = this.element.querySelector('#uv-ruler-top') as HTMLElement;
     this.uvRulerLeft = this.element.querySelector('#uv-ruler-left') as HTMLElement;
     this.uvTileLabels = this.element.querySelector('#uv-tile-labels') as HTMLElement;
+    this.uvRulersToggle = this.element.querySelector('#uv-rulers-toggle') as HTMLInputElement;
+    this.marquee = this.element.querySelector('#model-marquee') as HTMLElement;
 
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -267,6 +487,19 @@ export class ModelView {
     this.controls.minDistance = 0.01;
     this.controls.maxDistance = 1000000;
     this.controls.target.set(0, 0, 0);
+    // Maya viewport: Alt+LMB orbit, Alt+MMB pan, Alt+RMB dolly.
+    this.controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.PAN,
+      RIGHT: THREE.MOUSE.DOLLY
+    };
+    this.controls.enabled = false;
+
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.18, 0.35, 1);
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(new OutputPass());
 
     this.uvCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
     this.uvCamera.position.z = 5;
@@ -347,41 +580,54 @@ export class ModelView {
     this.uvTileGrid.renderOrder = 0;
     this.uvTileGrid.visible = false;
 
-    const uColor = new THREE.Color(0x5ee8a0);
-    const vColor = new THREE.Color(0x60a5fa);
-    const axisGeometry = new THREE.BufferGeometry();
-    axisGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
-      -1, -1, 0.07, 1, -1, 0.07,
-      -1, -1, 0.07, -1, 1, 0.07
-    ], 3));
-    axisGeometry.setAttribute('color', new THREE.Float32BufferAttribute([
-      uColor.r, uColor.g, uColor.b, uColor.r, uColor.g, uColor.b,
-      vColor.r, vColor.g, vColor.b, vColor.r, vColor.g, vColor.b
-    ], 3));
-    const axisLines = new THREE.LineSegments(
-      axisGeometry,
-      new THREE.LineBasicMaterial({
-        vertexColors: true,
-        depthTest: false,
-        toneMapped: false
-      })
+    const axisOrigin = new THREE.Vector3(-1, -1, 0.07);
+    const uAxis = new THREE.ArrowHelper(
+      new THREE.Vector3(1, 0, 0),
+      axisOrigin,
+      2.6,
+      0x60a5fa,
+      0.24,
+      0.13
     );
-    axisLines.renderOrder = 1;
+    const vAxis = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 1, 0),
+      axisOrigin,
+      2.6,
+      0xf87171,
+      0.24,
+      0.13
+    );
+    for (const axis of [uAxis, vAxis]) {
+      axis.renderOrder = 1;
+      const lineMaterial = axis.line.material as THREE.LineBasicMaterial;
+      const coneMaterial = axis.cone.material as THREE.MeshBasicMaterial;
+      lineMaterial.depthTest = false;
+      lineMaterial.transparent = true;
+      lineMaterial.opacity = 0.92;
+      lineMaterial.toneMapped = false;
+      coneMaterial.depthTest = false;
+      coneMaterial.transparent = true;
+      coneMaterial.opacity = 0.92;
+      coneMaterial.toneMapped = false;
+    }
 
     this.uvScene.add(
       this.uvBgPlane,
       border,
       this.uvTileGrid,
-      axisLines,
+      uAxis,
+      vAxis,
       this.uvOverlapMesh,
       this.uvLineGroup,
       this.uvSelectionGroup
     );
     this.scene.add(this.modelSelectionGroup);
 
+    this.setupMaterialPanel();
     this.bindEvents();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.body);
+    this.resizeObserver.observe(this.canvas);
     this.resize();
     this.fitUv();
   }
@@ -454,6 +700,10 @@ export class ModelView {
       this.uvBgMode = (this.uvBgSelect.value as UvBackground) || 'checker';
       this.updateUvBackground();
     });
+    this.uvRulersToggle.addEventListener('change', () => {
+      this.uvRulersVisible = this.uvRulersToggle.checked;
+      this.uvRulers.classList.toggle('hide-scales', !this.uvRulersVisible);
+    });
     this.element.querySelector('[data-action="uv-overlap"]')?.addEventListener('click', () => {
       this.detectOverlap();
     });
@@ -461,46 +711,97 @@ export class ModelView {
       this.uvTiles = !this.uvTiles;
       this.element.querySelector('[data-action="uv-tiles"]')?.classList.toggle('active', this.uvTiles);
       this.updateUvTiles();
+      if (this.selectedUvTriangles.length) this.rebuildSelectionVisuals();
       this.fitUv();
       this.updateUvBackground();
     });
 
-    this.canvas.addEventListener('wheel', (event) => {
-      if (this.mode !== 'uv') return;
+    window.addEventListener('keydown', (event) => {
+      if (event.key !== 'Alt' || !this.active) return;
       event.preventDefault();
-      const rect = this.canvas.getBoundingClientRect();
-      const width = Math.max(1, rect.width);
-      const height = Math.max(1, rect.height);
-      const ndcX = ((event.clientX - rect.left) / width) * 2 - 1;
-      const ndcY = -((event.clientY - rect.top) / height) * 2 + 1;
-      const aspect = width / height;
-      const halfW = (this.uvCamera.right - this.uvCamera.left) / 2;
-      const halfH = (this.uvCamera.top - this.uvCamera.bottom) / 2;
-      const centerX = (this.uvCamera.left + this.uvCamera.right) / 2;
-      const centerY = (this.uvCamera.top + this.uvCamera.bottom) / 2;
-      const worldX = centerX + ndcX * halfW;
-      const worldY = centerY + ndcY * halfH;
-      const nextZoom = Math.min(40, Math.max(0.15, this.uvZoom * Math.exp(-event.deltaY * 0.0015)));
-      this.uvZoom = nextZoom;
-      this.uvCenter.set(worldX - ndcX * (aspect / nextZoom), worldY - ndcY * (1 / nextZoom));
-      this.updateUvCamera();
+      if (this.altHeld) return;
+      this.altHeld = true;
+      if (this.mode === '3d') this.controls.enabled = true;
+      this.updateNavCursor();
+    });
+    window.addEventListener('keyup', (event) => {
+      if (event.key !== 'Alt') return;
+      this.altHeld = false;
+      this.controls.enabled = false;
+      this.updateNavCursor();
+    });
+    window.addEventListener('blur', () => {
+      this.altHeld = false;
+      this.controls.enabled = false;
+      this.endNavigation();
+      this.updateNavCursor();
+    });
+
+    this.canvas.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+    });
+
+    this.canvas.addEventListener('wheel', (event) => {
+      if (this.mode === 'uv') {
+        event.preventDefault();
+        const rect = this.canvas.getBoundingClientRect();
+        const width = Math.max(1, rect.width);
+        const height = Math.max(1, rect.height);
+        const ndcX = ((event.clientX - rect.left) / width) * 2 - 1;
+        const ndcY = -((event.clientY - rect.top) / height) * 2 + 1;
+        const aspect = width / height;
+        const halfW = (this.uvCamera.right - this.uvCamera.left) / 2;
+        const halfH = (this.uvCamera.top - this.uvCamera.bottom) / 2;
+        const centerX = (this.uvCamera.left + this.uvCamera.right) / 2;
+        const centerY = (this.uvCamera.top + this.uvCamera.bottom) / 2;
+        const worldX = centerX + ndcX * halfW;
+        const worldY = centerY + ndcY * halfH;
+        const nextZoom = Math.min(40, Math.max(0.15, this.uvZoom * Math.exp(-event.deltaY * 0.0015)));
+        this.uvZoom = nextZoom;
+        this.uvCenter.set(worldX - ndcX * (aspect / nextZoom), worldY - ndcY * (1 / nextZoom));
+        this.updateUvCamera();
+        return;
+      }
+      if (this.mode === '3d' && !this.altHeld) {
+        event.preventDefault();
+        const direction = this.camera.position.clone().sub(this.controls.target);
+        const distance = Math.max(1e-6, direction.length());
+        const nextDistance = THREE.MathUtils.clamp(
+          distance * Math.exp(event.deltaY * 0.001),
+          this.controls.minDistance,
+          this.controls.maxDistance
+        );
+        this.camera.position.copy(this.controls.target).add(direction.setLength(nextDistance));
+        this.controls.update();
+      }
     }, { passive: false });
 
     this.canvas.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0) return;
-      this.pointerDownX = event.clientX;
-      this.pointerDownY = event.clientY;
-      this.pointerMoved = false;
       if (this.mode === 'uv') {
-        this.uvDragging = true;
-        this.uvLastX = event.clientX;
-        this.uvLastY = event.clientY;
-        try {
-          this.canvas.setPointerCapture(event.pointerId);
-        } catch {
-          // synthetic pointer events in automation have no active pointer
+        if (event.altKey && event.button === 1) {
+          event.preventDefault();
+          this.uvPanning = true;
+          this.uvNavLastX = event.clientX;
+          this.uvNavLastY = event.clientY;
+          this.capturePointer(event);
+          this.updateNavCursor();
+          return;
         }
+        if (event.altKey && event.button === 2) {
+          event.preventDefault();
+          this.uvZooming = true;
+          this.uvNavLastX = event.clientX;
+          this.uvNavLastY = event.clientY;
+          this.capturePointer(event);
+          this.updateNavCursor();
+          return;
+        }
+        if (event.button !== 0 || event.altKey) return;
+        this.beginMarquee(event, 'uv');
+        return;
       }
+      if (event.button !== 0 || event.altKey) return;
+      this.beginMarquee(event, '3d');
     });
 
     this.canvas.addEventListener('pointermove', (event) => {
@@ -509,23 +810,52 @@ export class ModelView {
           this.pointerMoved = true;
         }
       }
-      if (!this.uvDragging || this.mode !== 'uv') return;
-      const rect = this.canvas.getBoundingClientRect();
-      const halfW = (this.uvCamera.right - this.uvCamera.left) / 2;
-      const halfH = (this.uvCamera.top - this.uvCamera.bottom) / 2;
-      const dx = event.clientX - this.uvLastX;
-      const dy = event.clientY - this.uvLastY;
-      this.uvCenter.x -= (dx / Math.max(1, rect.width)) * halfW * 2;
-      this.uvCenter.y += (dy / Math.max(1, rect.height)) * halfH * 2;
-      this.uvLastX = event.clientX;
-      this.uvLastY = event.clientY;
-      this.updateUvCamera();
+      if (this.uvPanning) {
+        const rect = this.canvas.getBoundingClientRect();
+        const halfW = (this.uvCamera.right - this.uvCamera.left) / 2;
+        const halfH = (this.uvCamera.top - this.uvCamera.bottom) / 2;
+        const dx = event.clientX - this.uvNavLastX;
+        const dy = event.clientY - this.uvNavLastY;
+        this.uvCenter.x -= (dx / Math.max(1, rect.width)) * halfW * 2;
+        this.uvCenter.y += (dy / Math.max(1, rect.height)) * halfH * 2;
+        this.uvNavLastX = event.clientX;
+        this.uvNavLastY = event.clientY;
+        this.updateUvCamera();
+        return;
+      }
+      if (this.uvZooming) {
+        const factor = Math.exp((this.uvNavLastY - event.clientY) * 0.008);
+        this.uvZoom = Math.min(40, Math.max(0.15, this.uvZoom * factor));
+        this.uvNavLastX = event.clientX;
+        this.uvNavLastY = event.clientY;
+        this.updateUvCamera();
+        return;
+      }
+      if (!this.marqueeMode) return;
+      this.marqueeCurrentX = event.clientX;
+      this.marqueeCurrentY = event.clientY;
+      if (!this.marqueeActive && this.pointerMoved) {
+        this.marqueeActive = true;
+        this.marquee.classList.remove('hidden');
+      }
+      if (this.marqueeActive) this.updateMarqueeBox();
     });
 
     const endPointer = (event: PointerEvent) => {
-      if (event.button !== 0) return;
+      const mode = this.marqueeMode;
       const moved = this.pointerMoved;
-      this.uvDragging = false;
+      const marqueeActive = this.marqueeActive;
+      const additive = this.marqueeAdditive;
+      const subtractive = this.marqueeSubtractive;
+      const startX = this.marqueeStartX;
+      const startY = this.marqueeStartY;
+      const currentX = this.marqueeCurrentX;
+      const currentY = this.marqueeCurrentY;
+      this.marqueeMode = null;
+      this.marqueeActive = false;
+      this.marquee.classList.add('hidden');
+      this.uvPanning = false;
+      this.uvZooming = false;
       this.pointerDownX = -1;
       this.pointerDownY = -1;
       try {
@@ -535,16 +865,85 @@ export class ModelView {
       } catch {
         // ignore synthetic pointer events without capture
       }
+      this.updateNavCursor();
+      if (!mode) return;
+      if (marqueeActive) {
+        if (mode === 'uv') this.selectUvInMarquee(startX, startY, currentX, currentY, additive, subtractive);
+        else this.select3dInMarquee(startX, startY, currentX, currentY, additive, subtractive);
+        return;
+      }
       if (moved) return;
-      if (this.mode === 'uv') this.pickUv(event.clientX, event.clientY);
-      else this.pick3d(event.clientX, event.clientY);
+      if (mode === 'uv') this.pickUv(event.clientX, event.clientY, additive, subtractive);
+      else this.pick3d(event.clientX, event.clientY, additive, subtractive);
     };
     this.canvas.addEventListener('pointerup', endPointer);
     this.canvas.addEventListener('pointercancel', () => {
-      this.uvDragging = false;
+      this.endNavigation();
       this.pointerDownX = -1;
       this.pointerDownY = -1;
+      this.updateNavCursor();
     });
+  }
+
+  private capturePointer(event: PointerEvent): void {
+    try {
+      this.canvas.setPointerCapture(event.pointerId);
+    } catch {
+      // synthetic pointer events in automation have no active pointer
+    }
+  }
+
+  private beginMarquee(event: PointerEvent, mode: ViewMode): void {
+    event.preventDefault();
+    this.pointerDownX = event.clientX;
+    this.pointerDownY = event.clientY;
+    this.pointerMoved = false;
+    this.marqueeMode = mode;
+    this.marqueeAdditive = event.shiftKey;
+    this.marqueeSubtractive = event.ctrlKey || event.metaKey;
+    this.marqueeActive = false;
+    this.marqueeStartX = event.clientX;
+    this.marqueeStartY = event.clientY;
+    this.marqueeCurrentX = event.clientX;
+    this.marqueeCurrentY = event.clientY;
+    this.marquee.classList.add('hidden');
+    this.capturePointer(event);
+    this.canvas.style.cursor = 'crosshair';
+  }
+
+  private updateMarqueeBox(): void {
+    const rect = this.body.getBoundingClientRect();
+    const left = Math.min(this.marqueeStartX, this.marqueeCurrentX) - rect.left;
+    const top = Math.min(this.marqueeStartY, this.marqueeCurrentY) - rect.top;
+    const width = Math.abs(this.marqueeCurrentX - this.marqueeStartX);
+    const height = Math.abs(this.marqueeCurrentY - this.marqueeStartY);
+    this.marquee.style.left = `${left}px`;
+    this.marquee.style.top = `${top}px`;
+    this.marquee.style.width = `${width}px`;
+    this.marquee.style.height = `${height}px`;
+  }
+
+  private endNavigation(): void {
+    this.marqueeMode = null;
+    this.marqueeActive = false;
+    this.marquee.classList.add('hidden');
+    this.uvPanning = false;
+    this.uvZooming = false;
+    this.pointerDownX = -1;
+    this.pointerDownY = -1;
+  }
+
+  private updateNavCursor(): void {
+    if (!this.active) return;
+    if (this.mode === 'uv') {
+      this.canvas.style.cursor = this.uvPanning
+        ? 'grabbing'
+        : this.uvZooming
+          ? 'ns-resize'
+          : 'default';
+      return;
+    }
+    this.canvas.style.cursor = this.altHeld ? 'grab' : 'default';
   }
 
   private async pickOpen(): Promise<void> {
@@ -715,7 +1114,29 @@ export class ModelView {
   private rebuildMaterials(): void {
     this.generatedMaterials.forEach((material) => material.dispose());
     this.generatedMaterials = [];
-    if (!this.model) return;
+    this.generatedMaterialTextures.forEach((texture) => texture.dispose());
+    this.generatedMaterialTextures = [];
+    if (!this.model) {
+      this.updateMaterialBall();
+      return;
+    }
+
+    const textureCache = new Map<THREE.Texture, THREE.Texture>();
+    const prepareTexture = (source: THREE.Texture | null | undefined): THREE.Texture | null => {
+      if (!source) return null;
+      let clone = textureCache.get(source);
+      if (!clone) {
+        clone = source.clone();
+        clone.wrapS = THREE.RepeatWrapping;
+        clone.wrapT = THREE.RepeatWrapping;
+        clone.offset.set(this.materialSettings.offsetU, this.materialSettings.offsetV);
+        clone.repeat.set(this.materialSettings.scaleU, this.materialSettings.scaleV);
+        clone.needsUpdate = true;
+        textureCache.set(source, clone);
+        this.generatedMaterialTextures.push(clone);
+      }
+      return clone;
+    };
 
     this.model.traverse((child) => {
       const mesh = child as THREE.Mesh;
@@ -737,17 +1158,458 @@ export class ModelView {
             alphaTest: source.alphaTest
           });
         }
-        if (this.externalTexture) {
-          const textured = next as THREE.MeshStandardMaterial;
-          textured.map = this.externalTexture;
-          if (textured.color) textured.color.set(0xffffff);
+        const sourceMap = this.externalTexture ?? (material as THREE.MeshStandardMaterial).map ?? null;
+        const map = prepareTexture(sourceMap);
+        if (map) {
+          (next as THREE.MeshStandardMaterial).map = map;
+          if (this.externalTexture && (next as THREE.MeshStandardMaterial).color) {
+            (next as THREE.MeshStandardMaterial).color.set(0xffffff);
+          }
         }
+        this.applyMaterialSettings(next);
         next.needsUpdate = true;
         this.generatedMaterials.push(next);
         return next;
       };
       mesh.material = Array.isArray(original) ? original.map(build) : build(original);
     });
+    this.updateMaterialBall();
+  }
+
+  private applyMaterialSettings(material: THREE.Material): void {
+    const map = (material as THREE.MeshStandardMaterial).map as THREE.Texture | null;
+    if (map) {
+      map.offset.set(this.materialSettings.offsetU, this.materialSettings.offsetV);
+      map.repeat.set(this.materialSettings.scaleU, this.materialSettings.scaleV);
+    }
+    if (map) {
+      material.transparent = true;
+      material.depthWrite = false;
+    }
+    const emissiveMaterial = material as THREE.MeshStandardMaterial;
+    if (emissiveMaterial.emissive) {
+      emissiveMaterial.emissive.set(this.materialSettings.emissive);
+      if (typeof emissiveMaterial.emissiveIntensity === 'number') {
+        emissiveMaterial.emissiveIntensity = this.materialSettings.emissiveIntensity;
+      }
+    }
+    this.patchMaterialShader(material);
+    this.updateMaterialUniforms(material);
+  }
+
+  private patchMaterialShader(material: THREE.Material): void {
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uNyxelChannel = { value: MATERIAL_CHANNEL_INDEX[this.materialSettings.channel] };
+      shader.uniforms.uNyxelAlphaChannel = { value: MATERIAL_ALPHA_CHANNEL_INDEX[this.materialSettings.alphaChannel] };
+      shader.uniforms.uNyxelBrightness = { value: this.materialSettings.brightness };
+      shader.uniforms.uNyxelContrast = { value: this.materialSettings.contrast };
+      shader.uniforms.uNyxelEmissive = { value: new THREE.Color(this.materialSettings.emissive) };
+      shader.uniforms.uNyxelEmissiveIntensity = { value: this.materialSettings.emissiveIntensity };
+      shader.fragmentShader = `
+        uniform int uNyxelChannel;
+        uniform int uNyxelAlphaChannel;
+        uniform float uNyxelBrightness;
+        uniform float uNyxelContrast;
+        uniform vec3 uNyxelEmissive;
+        uniform float uNyxelEmissiveIntensity;
+      ` + shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        `
+        #ifdef USE_MAP
+          vec4 nyxelTexel = texture2D( map, vMapUv );
+          vec3 nyxelColor = nyxelTexel.rgb;
+          if ( uNyxelChannel == 1 ) nyxelColor = vec3( nyxelTexel.r );
+          else if ( uNyxelChannel == 2 ) nyxelColor = vec3( nyxelTexel.g );
+          else if ( uNyxelChannel == 3 ) nyxelColor = vec3( nyxelTexel.b );
+          else if ( uNyxelChannel == 4 ) nyxelColor = vec3( nyxelTexel.a );
+          else if ( uNyxelChannel == 5 ) nyxelColor = vec3( dot( nyxelTexel.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) );
+          nyxelColor = ( nyxelColor - 0.5 ) * uNyxelContrast + 0.5;
+          float nyxelBrightnessFactor = uNyxelBrightness;
+          if ( uNyxelBrightness < 0.0 ) nyxelBrightnessFactor = 1.0 / ( 1.0 - uNyxelBrightness );
+          nyxelColor *= nyxelBrightnessFactor;
+          diffuseColor.rgb *= clamp( nyxelColor, 0.0, 1.0 );
+          float nyxelAlpha = 1.0;
+          if ( uNyxelAlphaChannel == 1 ) nyxelAlpha = nyxelTexel.r;
+          else if ( uNyxelAlphaChannel == 2 ) nyxelAlpha = nyxelTexel.g;
+          else if ( uNyxelAlphaChannel == 3 ) nyxelAlpha = nyxelTexel.b;
+          diffuseColor.a *= nyxelTexel.a * nyxelAlpha;
+        #endif
+        `
+      );
+      if ((material as THREE.MeshBasicMaterial).isMeshBasicMaterial) {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <envmap_fragment>',
+          `#include <envmap_fragment>
+           outgoingLight += uNyxelEmissive * uNyxelEmissiveIntensity;`
+        );
+      }
+      material.userData.nyxelUniforms = {
+        channel: shader.uniforms.uNyxelChannel,
+        alphaChannel: shader.uniforms.uNyxelAlphaChannel,
+        brightness: shader.uniforms.uNyxelBrightness,
+        contrast: shader.uniforms.uNyxelContrast,
+        emissive: shader.uniforms.uNyxelEmissive,
+        emissiveIntensity: shader.uniforms.uNyxelEmissiveIntensity
+      };
+    };
+    material.customProgramCacheKey = () => 'nyxel-material';
+  }
+
+  private updateMaterialUniforms(material: THREE.Material): void {
+    const map = (material as THREE.MeshStandardMaterial).map as THREE.Texture | null;
+    if (map) {
+      map.offset.set(this.materialSettings.offsetU, this.materialSettings.offsetV);
+      map.repeat.set(this.materialSettings.scaleU, this.materialSettings.scaleV);
+    }
+    const emissiveMaterial = material as THREE.MeshStandardMaterial;
+    if (emissiveMaterial.emissive) {
+      emissiveMaterial.emissive.set(this.materialSettings.emissive);
+      if (typeof emissiveMaterial.emissiveIntensity === 'number') {
+        emissiveMaterial.emissiveIntensity = this.materialSettings.emissiveIntensity;
+      }
+    }
+    const uniforms = material.userData.nyxelUniforms as
+      | Record<string, { value: number | THREE.Color }>
+      | undefined;
+    if (!uniforms) return;
+    uniforms.channel.value = MATERIAL_CHANNEL_INDEX[this.materialSettings.channel];
+    uniforms.alphaChannel.value = MATERIAL_ALPHA_CHANNEL_INDEX[this.materialSettings.alphaChannel];
+    uniforms.brightness.value = this.materialSettings.brightness;
+    uniforms.contrast.value = this.materialSettings.contrast;
+    if (uniforms.emissive.value instanceof THREE.Color) {
+      uniforms.emissive.value.set(this.materialSettings.emissive);
+    }
+    uniforms.emissiveIntensity.value = this.materialSettings.emissiveIntensity;
+  }
+
+  private setupMaterialPanel(): void {
+    this.restoreMaterialSettings();
+    this.bindMaterialPanelEvents();
+    this.syncMaterialControls();
+    this.initMaterialBall();
+    this.applyBloomStrength();
+    this.updateMaterialBall(true);
+  }
+
+  private normalizeMaterialSettings(data: Partial<MaterialSettings>): MaterialSettings {
+    const base = MATERIAL_PRESETS.default;
+    const number = (value: unknown, fallback: number, min: number, max: number): number => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+      return Math.min(max, Math.max(min, value));
+    };
+    const channel = Object.prototype.hasOwnProperty.call(MATERIAL_CHANNEL_INDEX, data.channel as string)
+      ? (data.channel as MaterialChannel)
+      : base.channel;
+    const alphaChannel = Object.prototype.hasOwnProperty.call(MATERIAL_ALPHA_CHANNEL_INDEX, data.alphaChannel as string)
+      ? (data.alphaChannel as MaterialAlphaChannel)
+      : base.alphaChannel;
+    const legacy = data as Partial<MaterialSettings> & { scale?: number };
+    const hasNewScale = typeof data.scaleU === 'number' || typeof data.scaleV === 'number';
+    const legacyScale = typeof legacy.scale === 'number' ? legacy.scale : undefined;
+    const legacyBrightness = !hasNewScale && legacyScale === undefined;
+    return {
+      channel,
+      alphaChannel,
+      offsetU: number(data.offsetU, base.offsetU, -10, 10),
+      offsetV: number(data.offsetV, base.offsetV, -10, 10),
+      scaleU: number(data.scaleU, legacyScale ?? base.scaleU, 0.01, 16),
+      scaleV: number(data.scaleV, legacyScale ?? base.scaleV, 0.01, 16),
+      emissive: typeof data.emissive === 'string' && /^#[0-9a-f]{6}$/i.test(data.emissive) ? data.emissive : base.emissive,
+      emissiveIntensity: number(data.emissiveIntensity, base.emissiveIntensity, 0, 20),
+      bloomStrength: number(data.bloomStrength, base.bloomStrength, 0, 3),
+      brightness: legacyBrightness
+        ? number(1 + number(data.brightness, 0, -1, 1), base.brightness, -8, 8)
+        : number(data.brightness, base.brightness, -8, 8),
+      contrast: number(data.contrast, base.contrast, -8, 8)
+    };
+  }
+
+  private readStoredMaterialSettings(): MaterialSettings | null {
+    try {
+      const raw = localStorage.getItem(MATERIAL_SETTINGS_KEY);
+      if (!raw) return null;
+      return this.normalizeMaterialSettings(JSON.parse(raw) as Partial<MaterialSettings>);
+    } catch {
+      return null;
+    }
+  }
+
+  private saveMaterialSettings(): void {
+    try {
+      if (this.materialPresetKey === 'custom') {
+        localStorage.setItem(MATERIAL_SETTINGS_KEY, JSON.stringify(this.materialSettings));
+      }
+      localStorage.setItem(MATERIAL_PRESET_KEY, this.materialPresetKey);
+    } catch {
+      // Storage can be unavailable in restricted environments.
+    }
+  }
+
+  private restoreMaterialSettings(): void {
+    let presetKey = 'default';
+    try {
+      presetKey = localStorage.getItem(MATERIAL_PRESET_KEY) ?? 'default';
+    } catch {
+      presetKey = 'default';
+    }
+    if (presetKey === 'custom') {
+      const stored = this.readStoredMaterialSettings();
+      if (stored) {
+        this.materialSettings = stored;
+        this.materialPresetKey = 'custom';
+        return;
+      }
+    }
+    this.materialSettings = { ...MATERIAL_PRESETS.default };
+    this.materialPresetKey = 'default';
+  }
+
+  private markMaterialCustom(): void {
+    this.materialPresetKey = 'custom';
+    this.saveMaterialSettings();
+    this.syncMaterialControls();
+    this.refreshMaterialAppearance();
+  }
+
+  private bindMaterialPanelEvents(): void {
+    this.materialPresetSelect.addEventListener('change', () => {
+      if (this.materialPresetSelect.value === 'custom') {
+        const stored = this.readStoredMaterialSettings();
+        this.materialSettings = stored ? { ...stored } : { ...this.materialSettings };
+        this.materialPresetKey = 'custom';
+      } else {
+        this.materialSettings = { ...MATERIAL_PRESETS.default };
+        this.materialPresetKey = 'default';
+      }
+      this.saveMaterialSettings();
+      this.syncMaterialControls();
+      this.refreshMaterialAppearance();
+    });
+
+    this.element.querySelectorAll<HTMLElement>('[data-material-channel]').forEach((button) => {
+      button.addEventListener('click', () => {
+        this.materialSettings.channel = (button.dataset.materialChannel as MaterialChannel) ?? 'r';
+        this.markMaterialCustom();
+      });
+    });
+
+    this.element.querySelectorAll<HTMLElement>('[data-material-alpha]').forEach((button) => {
+      button.addEventListener('click', () => {
+        this.materialSettings.alphaChannel = (button.dataset.materialAlpha as MaterialAlphaChannel) ?? 'r';
+        this.markMaterialCustom();
+      });
+    });
+
+    const bindRange = (input: HTMLInputElement, apply: (value: number) => void): void => {
+      input.addEventListener('input', () => {
+        apply(Number(input.value));
+        this.markMaterialCustom();
+      });
+    };
+    bindRange(this.materialOffsetU, (value) => { this.materialSettings.offsetU = value; });
+    bindRange(this.materialOffsetV, (value) => { this.materialSettings.offsetV = value; });
+    bindRange(this.materialScaleU, (value) => { this.materialSettings.scaleU = value; });
+    bindRange(this.materialScaleV, (value) => { this.materialSettings.scaleV = value; });
+    bindRange(this.materialEmissiveIntensity, (value) => { this.materialSettings.emissiveIntensity = value; });
+    bindRange(this.materialBloom, (value) => { this.materialSettings.bloomStrength = value; });
+    bindRange(this.materialBrightness, (value) => { this.materialSettings.brightness = value; });
+    bindRange(this.materialContrast, (value) => { this.materialSettings.contrast = value; });
+
+    const bindNumber = (input: HTMLInputElement, min: number, max: number, apply: (value: number) => void): void => {
+      input.addEventListener('change', () => {
+        const raw = Number(input.value);
+        if (!Number.isFinite(raw)) {
+          this.syncMaterialControls();
+          return;
+        }
+        const value = Math.min(max, Math.max(min, raw));
+        apply(value);
+        this.markMaterialCustom();
+      });
+    };
+    bindNumber(this.materialOffsetUValue, -10, 10, (value) => { this.materialSettings.offsetU = value; });
+    bindNumber(this.materialOffsetVValue, -10, 10, (value) => { this.materialSettings.offsetV = value; });
+    bindNumber(this.materialScaleUValue, 0.01, 16, (value) => { this.materialSettings.scaleU = value; });
+    bindNumber(this.materialScaleVValue, 0.01, 16, (value) => { this.materialSettings.scaleV = value; });
+    bindNumber(this.materialEmissiveIntensityValue, 0, 20, (value) => { this.materialSettings.emissiveIntensity = value; });
+    bindNumber(this.materialBloomValue, 0, 3, (value) => { this.materialSettings.bloomStrength = value; });
+    bindNumber(this.materialBrightnessValue, -8, 8, (value) => { this.materialSettings.brightness = value; });
+    bindNumber(this.materialContrastValue, -8, 8, (value) => { this.materialSettings.contrast = value; });
+
+    this.materialEmissive.addEventListener('input', () => {
+      this.materialSettings.emissive = this.materialEmissive.value;
+      this.markMaterialCustom();
+    });
+    this.element.querySelector('[data-material-reset]')?.addEventListener('click', () => {
+      this.materialSettings = { ...MATERIAL_PRESETS.default };
+      this.materialPresetKey = 'default';
+      this.saveMaterialSettings();
+      this.syncMaterialControls();
+      this.refreshMaterialAppearance();
+    });
+  }
+
+  private syncMaterialControls(): void {
+    const settings = this.materialSettings;
+    this.materialPresetSelect.value = this.materialPresetKey;
+    this.materialOffsetU.value = String(settings.offsetU);
+    this.materialOffsetV.value = String(settings.offsetV);
+    this.materialScaleU.value = String(settings.scaleU);
+    this.materialScaleV.value = String(settings.scaleV);
+    this.materialOffsetUValue.value = settings.offsetU.toFixed(2);
+    this.materialOffsetVValue.value = settings.offsetV.toFixed(2);
+    this.materialScaleUValue.value = settings.scaleU.toFixed(2);
+    this.materialScaleVValue.value = settings.scaleV.toFixed(2);
+    this.materialEmissive.value = settings.emissive;
+    this.materialEmissiveIntensity.value = String(settings.emissiveIntensity);
+    this.materialEmissiveIntensityValue.value = settings.emissiveIntensity.toFixed(2);
+    this.materialBloom.value = String(settings.bloomStrength);
+    this.materialBloomValue.value = settings.bloomStrength.toFixed(2);
+    this.materialBrightness.value = String(settings.brightness);
+    this.materialBrightnessValue.value = settings.brightness.toFixed(2);
+    this.materialContrast.value = String(settings.contrast);
+    this.materialContrastValue.value = settings.contrast.toFixed(2);
+    this.element.querySelectorAll<HTMLElement>('[data-material-channel]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.materialChannel === settings.channel);
+    });
+    this.element.querySelectorAll<HTMLElement>('[data-material-alpha]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.materialAlpha === settings.alphaChannel);
+    });
+  }
+
+  private applyBloomStrength(): void {
+    const strength = Math.max(0, this.materialSettings.bloomStrength);
+    if (this.bloomPass) this.bloomPass.strength = strength;
+    if (this.materialBallBloom) this.materialBallBloom.strength = strength * 0.75;
+  }
+
+  private refreshMaterialAppearance(): void {
+    this.applyBloomStrength();
+    for (const material of this.generatedMaterials) this.updateMaterialUniforms(material);
+    this.updateMaterialBall();
+  }
+
+  private initMaterialBall(): void {
+    if (this.materialBallRenderer) return;
+    const renderer = new THREE.WebGLRenderer({ canvas: this.materialBallCanvas, antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0d10);
+    const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 20);
+    camera.position.set(0, 0.1, 3.4);
+    camera.lookAt(0, 0, 0);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x223044, 2.2));
+    const key = new THREE.DirectionalLight(0xffffff, 2.4);
+    key.position.set(2.5, 3.5, 4);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0x7dd3fc, 1.2);
+    rim.position.set(-3, 1.5, -2);
+    scene.add(rim);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.52,
+      metalness: 0.04
+    });
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 48), material);
+    scene.add(mesh);
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    this.materialBallBloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.135, 0.35, 1);
+    composer.addPass(this.materialBallBloom);
+    composer.addPass(new OutputPass());
+    this.materialBallRenderer = renderer;
+    this.materialBallScene = scene;
+    this.materialBallCamera = camera;
+    this.materialBallMaterial = material;
+    this.materialBallMesh = mesh;
+    this.materialBallComposer = composer;
+    this.resizeMaterialBall();
+  }
+
+  private resizeMaterialBall(): void {
+    if (!this.materialBallRenderer || !this.materialBallScene || !this.materialBallCamera) return;
+    const width = this.materialBallCanvas.clientWidth;
+    const height = this.materialBallCanvas.clientHeight;
+    if (width < 2 || height < 2) return;
+    this.materialBallRenderer.setSize(width, height, false);
+    this.materialBallComposer?.setPixelRatio(this.materialBallRenderer.getPixelRatio());
+    this.materialBallComposer?.setSize(width, height);
+    this.materialBallCamera.aspect = width / height;
+    this.materialBallCamera.updateProjectionMatrix();
+    if (this.materialBallComposer) this.materialBallComposer.render();
+    else this.materialBallRenderer.render(this.materialBallScene, this.materialBallCamera);
+  }
+
+  private updateMaterialBall(forceTexture = false): void {
+    if (!this.materialBallMaterial) return;
+    const source = this.externalTexture ?? this.getModelTexture();
+    const hasModelTexture = Boolean(source);
+    if (forceTexture || !this.materialBallTexture || source !== this.materialBallSource) {
+      this.materialBallTexture?.dispose();
+      let texture: THREE.Texture;
+      if (source) {
+        texture = source.clone();
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.needsUpdate = true;
+      } else {
+        texture = this.createMaterialBallTexture();
+      }
+      this.materialBallTexture = texture;
+      this.materialBallSource = source;
+      this.materialBallMaterial.map = texture;
+      this.materialBallMaterial.needsUpdate = true;
+    }
+    this.applyMaterialSettings(this.materialBallMaterial);
+    if (!hasModelTexture) {
+      this.materialBallMaterial.transparent = false;
+      this.materialBallMaterial.depthWrite = true;
+    }
+    this.resizeMaterialBall();
+  }
+
+  private createMaterialBallTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const context = canvas.getContext('2d');
+    if (context) {
+      const cell = 64;
+      const colors = ['#4f6b8a', '#7a5c8f', '#8a6a4f', '#4f8a6f'];
+      for (let y = 0; y < 8; y += 1) {
+        for (let x = 0; x < 8; x += 1) {
+          context.fillStyle = colors[(x + y) % colors.length];
+          context.fillRect(x * cell, y * cell, cell, cell);
+        }
+      }
+      context.strokeStyle = 'rgba(255,255,255,0.34)';
+      context.lineWidth = 2;
+      for (let i = 0; i <= 8; i += 1) {
+        context.beginPath();
+        context.moveTo(i * cell, 0);
+        context.lineTo(i * cell, 512);
+        context.moveTo(0, i * cell);
+        context.lineTo(512, i * cell);
+        context.stroke();
+      }
+      context.fillStyle = 'rgba(255,255,255,0.8)';
+      context.font = 'bold 64px sans-serif';
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText('UV', 256, 256);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+    return texture;
   }
 
   async applyExternalTexturePath(filePath: string): Promise<void> {
@@ -760,6 +1622,19 @@ export class ModelView {
       const blob = new Blob([new Uint8Array(buffer)], { type: 'image/png' });
       const bitmap = await createImageBitmap(blob);
       this.setExternalTexture(bitmap, basename(filePath));
+    } catch (error) {
+      this.callbacks.toast(`贴图加载失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  async applyExternalTextureFile(file: File): Promise<void> {
+    if (!this.model) {
+      this.callbacks.toast('请先加载一个 FBX 模型', 'info');
+      return;
+    }
+    try {
+      const bitmap = await createImageBitmap(file);
+      this.setExternalTexture(bitmap, file.name);
     } catch (error) {
       this.callbacks.toast(`贴图加载失败：${error instanceof Error ? error.message : String(error)}`, 'error');
     }
@@ -883,13 +1758,16 @@ export class ModelView {
   }
 
   private resize(): void {
-    const width = Math.max(1, this.body.clientWidth);
-    const height = Math.max(1, this.body.clientHeight);
+    const width = Math.max(1, this.canvas.clientWidth);
+    const height = Math.max(1, this.canvas.clientHeight);
     this.renderer.setSize(width, height, false);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.composer?.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer?.setSize(width, height);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.updateUvCamera();
+    this.resizeMaterialBall();
   }
 
   private showError(message: string): void {
@@ -905,7 +1783,12 @@ export class ModelView {
 
   private disposeModel(): void {
     this.clearUvData();
-    if (!this.model) return;
+    this.generatedMaterialTextures.forEach((texture) => texture.dispose());
+    this.generatedMaterialTextures = [];
+    if (!this.model) {
+      this.updateMaterialBall(true);
+      return;
+    }
     this.scene.remove(this.model);
     this.model.traverse((child) => {
       const mesh = child as THREE.Mesh;
@@ -925,6 +1808,10 @@ export class ModelView {
     }
     this.generatedMaterials = [];
     this.model = null;
+    this.materialBallSource = null;
+    this.materialBallTexture?.dispose();
+    this.materialBallTexture = null;
+    this.updateMaterialBall(true);
   }
 
   private createCheckerTexture(): THREE.CanvasTexture {
@@ -959,7 +1846,8 @@ export class ModelView {
     if (this.mode === mode) return;
     this.mode = mode;
     this.element.classList.toggle('uv-mode', mode === 'uv');
-    this.controls.enabled = mode === '3d';
+    this.controls.enabled = mode === '3d' && this.altHeld;
+    this.updateNavCursor();
     this.element.querySelectorAll('[data-mode]').forEach((button) => {
       button.classList.toggle('active', (button as HTMLElement).dataset.mode === mode);
     });
@@ -976,6 +1864,12 @@ export class ModelView {
     this.updateStats();
     this.updateUvHud();
     this.updateUvRulers();
+    if (mode === '3d') {
+      requestAnimationFrame(() => {
+        this.resize();
+        this.resizeMaterialBall();
+      });
+    }
   }
 
   private ensureUvData(): void {
@@ -1031,9 +1925,8 @@ export class ModelView {
 
     const positions: number[] = [];
     const colors: number[] = [];
-    const materialColors = new Map<THREE.Material, THREE.Color>();
+    const faceColor = new THREE.Color(UV_LINE_COLOR);
     const outOfBounds = new THREE.Color(UV_OUT_OF_BOUNDS);
-    let colorIndex = 0;
 
     this.model.traverse((child) => {
       const mesh = child as THREE.Mesh;
@@ -1047,7 +1940,6 @@ export class ModelView {
       const count = index ? index.count : posAttr.count;
       const triangleCount = Math.floor(count / 3);
       const groups = mesh.geometry.groups;
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       let groupIndex = 0;
 
       for (let face = 0; face < triangleCount; face += 1) {
@@ -1062,14 +1954,6 @@ export class ModelView {
         if (groupIndex < groups.length && start >= groups[groupIndex].start) {
           materialIndex = groups[groupIndex].materialIndex ?? 0;
         }
-        const material = (materials[Math.min(materialIndex, materials.length - 1)] ?? materials[0]) as THREE.Material;
-        let faceColor = materialColors.get(material);
-        if (!faceColor) {
-          faceColor = new THREE.Color(UV_COLORS[colorIndex % UV_COLORS.length]);
-          materialColors.set(material, faceColor);
-          colorIndex += 1;
-        }
-
         const ia = index ? index.getX(start) : start;
         const ib = index ? index.getX(start + 1) : start + 1;
         const ic = index ? index.getX(start + 2) : start + 2;
@@ -1315,7 +2199,8 @@ export class ModelView {
       if (found) return;
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh) return;
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const source = this.originalMaterials.get(mesh) ?? mesh.material;
+      const materials = Array.isArray(source) ? source : [source];
       for (const material of materials) {
         const map = (material as THREE.MeshStandardMaterial).map;
         if (map) {
@@ -1390,7 +2275,11 @@ export class ModelView {
       return;
     }
 
-    if (this.selectedUv) {
+    if (this.selectedUvTriangles.length > 1) {
+      const totalArea = this.selectedUvTriangles.reduce((sum, triangle) => sum + this.uvArea(triangle), 0);
+      this.uvHudInfo.textContent = `${this.uvChannelLabel(this.uvChannel)} · 已选 ${this.selectedUvTriangles.length.toLocaleString()} 个面`;
+      this.uvHudDetail.textContent = `UV 总面积 ${totalArea.toExponential(2)} · Shift 加选 · Ctrl 减选 · 左键框选`;
+    } else if (this.selectedUv) {
       const triangle = this.selectedUv;
       this.uvHudInfo.textContent = `${this.uvChannelLabel(this.uvChannel)} · 材质 ${triangle.materialIndex + 1} · 面 ${(triangle.faceIndex + 1).toLocaleString()}`;
       const parts = [
@@ -1405,7 +2294,7 @@ export class ModelView {
       this.uvHudDetail.textContent = parts.join(' · ');
     } else {
       this.uvHudInfo.textContent = `${this.uvChannelLabel(this.uvChannel)} · ${this.uvTriangles.length.toLocaleString()} 面 · ${this.uvMeshCount} 个网格`;
-      this.uvHudDetail.textContent = '滚轮缩放 · 拖拽平移 · 点击选择 UV 面';
+      this.uvHudDetail.textContent = '滚轮缩放 · Alt+中键平移 · Alt+右键缩放 · 左键点击 / 框选';
     }
 
     if (this.uvOverlapBusy) {
@@ -1512,7 +2401,7 @@ export class ModelView {
     this.updateUvHud();
   }
 
-  private pickUv(clientX: number, clientY: number): void {
+  private pickUv(clientX: number, clientY: number, additive = false, subtractive = false): void {
     if (!this.uvTriangles.length) return;
     const rect = this.canvas.getBoundingClientRect();
     const ndcX = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
@@ -1521,8 +2410,12 @@ export class ModelView {
     const halfH = (this.uvCamera.top - this.uvCamera.bottom) / 2;
     const centerX = (this.uvCamera.left + this.uvCamera.right) / 2;
     const centerY = (this.uvCamera.top + this.uvCamera.bottom) / 2;
-    const u = ((centerX + ndcX * halfW) + 1) / 2;
-    const v = ((centerY + ndcY * halfH) + 1) / 2;
+    const rawU = ((centerX + ndcX * halfW) + 1) / 2;
+    const rawV = ((centerY + ndcY * halfH) + 1) / 2;
+    // In 2x2 tile mode every quadrant shows a copy of the same UV layout.
+    // Fold the click back into the base tile so all four copies are pickable.
+    const u = this.uvTiles ? ((rawU % 1) + 1) % 1 : rawU;
+    const v = this.uvTiles ? ((rawV % 1) + 1) % 1 : rawV;
 
     let hit: UvTriangle | null = null;
     for (const triangle of this.uvTriangles) {
@@ -1543,11 +2436,125 @@ export class ModelView {
       }
     }
 
-    if (hit) this.selectUvTriangle(hit);
-    else this.clearSelection();
+    if (hit) this.selectUvTriangle(hit, additive, subtractive);
+    else if (!additive && !subtractive) this.clearSelection();
   }
 
-  private pick3d(clientX: number, clientY: number): void {
+  private selectUvInMarquee(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    additive: boolean,
+    subtractive: boolean
+  ): void {
+    if (!this.uvTriangles.length) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const left = Math.min(startX, endX);
+    const right = Math.max(startX, endX);
+    const top = Math.min(startY, endY);
+    const bottom = Math.max(startY, endY);
+    const dragRight = endX >= startX;
+    const offsets: Array<[number, number]> = this.uvTiles
+      ? [[0, 0], [1, 0], [0, 1], [1, 1]]
+      : [[0, 0]];
+    const toScreen = (u: number, v: number): { x: number; y: number } => {
+      const worldX = u * 2 - 1;
+      const worldY = v * 2 - 1;
+      return {
+        x: rect.left + ((worldX - this.uvCamera.left) / (this.uvCamera.right - this.uvCamera.left)) * rect.width,
+        y: rect.top + (1 - (worldY - this.uvCamera.bottom) / (this.uvCamera.top - this.uvCamera.bottom)) * rect.height
+      };
+    };
+    const selected: UvTriangle[] = [];
+    for (const triangle of this.uvTriangles) {
+      for (const [offsetU, offsetV] of offsets) {
+        const points = [
+          toScreen(triangle.u0 + offsetU, triangle.v0 + offsetV),
+          toScreen(triangle.u1 + offsetU, triangle.v1 + offsetV),
+          toScreen(triangle.u2 + offsetU, triangle.v2 + offsetV)
+        ];
+        const minX = Math.min(points[0].x, points[1].x, points[2].x);
+        const maxX = Math.max(points[0].x, points[1].x, points[2].x);
+        const minY = Math.min(points[0].y, points[1].y, points[2].y);
+        const maxY = Math.max(points[0].y, points[1].y, points[2].y);
+        const insideAll = points.every((point) => (
+          point.x >= left && point.x <= right && point.y >= top && point.y <= bottom
+        ));
+        const intersects = maxX >= left && minX <= right && maxY >= top && minY <= bottom;
+        if ((dragRight && insideAll) || (!dragRight && intersects)) {
+          selected.push(triangle);
+          break;
+        }
+      }
+    }
+    this.selectUvTriangles(selected, additive, subtractive);
+  }
+
+  private select3dInMarquee(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    additive: boolean,
+    subtractive: boolean
+  ): void {
+    if (!this.model) return;
+    if (!this.uvDataBuilt) this.ensureUvData();
+    if (!this.uvTriangles.length) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const left = Math.min(startX, endX);
+    const right = Math.max(startX, endX);
+    const top = Math.min(startY, endY);
+    const bottom = Math.max(startY, endY);
+    const dragRight = endX >= startX;
+    this.camera.updateMatrixWorld();
+    const selected: UvTriangle[] = [];
+    for (const triangle of this.uvTriangles) {
+      const world = this.triangleWorldPoints(triangle);
+      if (!world) continue;
+      const points = world.map((point) => {
+        const projected = point.clone().project(this.camera);
+        return {
+          x: rect.left + (projected.x * 0.5 + 0.5) * rect.width,
+          y: rect.top + (-projected.y * 0.5 + 0.5) * rect.height,
+          z: projected.z
+        };
+      });
+      if (points.some((point) => point.z < -1 || point.z > 1)) continue;
+      const minX = Math.min(points[0].x, points[1].x, points[2].x);
+      const maxX = Math.max(points[0].x, points[1].x, points[2].x);
+      const minY = Math.min(points[0].y, points[1].y, points[2].y);
+      const maxY = Math.max(points[0].y, points[1].y, points[2].y);
+      const insideAll = points.every((point) => (
+        point.x >= left && point.x <= right && point.y >= top && point.y <= bottom
+      ));
+      const intersects = maxX >= left && minX <= right && maxY >= top && minY <= bottom;
+      if ((dragRight && insideAll) || (!dragRight && intersects)) selected.push(triangle);
+    }
+    this.selectUvTriangles(selected, additive, subtractive);
+  }
+
+  private triangleWorldPoints(triangle: UvTriangle): [THREE.Vector3, THREE.Vector3, THREE.Vector3] | null {
+    const geometry = triangle.mesh.geometry;
+    const posAttr = geometry.getAttribute('position');
+    if (!posAttr) return null;
+    const index = geometry.index;
+    const start = triangle.faceIndex * 3;
+    const ia = index ? index.getX(start) : start;
+    const ib = index ? index.getX(start + 1) : start + 1;
+    const ic = index ? index.getX(start + 2) : start + 2;
+    triangle.mesh.updateWorldMatrix(true, false);
+    const p0 = new THREE.Vector3().fromBufferAttribute(posAttr, ia);
+    const p1 = new THREE.Vector3().fromBufferAttribute(posAttr, ib);
+    const p2 = new THREE.Vector3().fromBufferAttribute(posAttr, ic);
+    triangle.mesh.localToWorld(p0);
+    triangle.mesh.localToWorld(p1);
+    triangle.mesh.localToWorld(p2);
+    return [p0, p1, p2];
+  }
+
+  private pick3d(clientX: number, clientY: number, additive = false, subtractive = false): void {
     const model = this.model;
     if (!model) return;
     if (!this.uvDataBuilt) this.ensureUvData();
@@ -1560,7 +2567,7 @@ export class ModelView {
     const hits = this.raycaster.intersectObject(model, true);
     const hit = hits.find((entry) => (entry.object as THREE.Mesh).isMesh && entry.faceIndex !== undefined);
     if (!hit) {
-      this.clearSelection();
+      if (!additive && !subtractive) this.clearSelection();
       return;
     }
     const mesh = hit.object as THREE.Mesh;
@@ -1570,92 +2577,131 @@ export class ModelView {
       this.callbacks.toast(`该面没有 ${this.uvChannelLabel(this.uvChannel)} 数据`, 'info');
       return;
     }
-    this.selectUvTriangle(triangle);
+    this.selectUvTriangle(triangle, additive, subtractive);
   }
 
-  private selectUvTriangle(triangle: UvTriangle): void {
-    this.clearSelectionVisuals();
-    this.selectedUv = triangle;
+  private selectUvTriangle(triangle: UvTriangle, additive = false, subtractive = false): void {
+    if (subtractive) {
+      this.selectedUvTriangles = this.selectedUvTriangles.filter((item) => item !== triangle);
+      this.selectedUv = this.selectedUvTriangles[this.selectedUvTriangles.length - 1] ?? null;
+    } else if (additive) {
+      if (!this.selectedUvTriangles.includes(triangle)) this.selectedUvTriangles.push(triangle);
+      this.selectedUv = triangle;
+    } else {
+      this.selectedUvTriangles = [triangle];
+      this.selectedUv = triangle;
+    }
+    this.rebuildSelectionVisuals();
+    this.updateUvHud();
+  }
 
-    const uvGeometry = new THREE.BufferGeometry();
-    uvGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
-      triangle.u0 * 2 - 1, triangle.v0 * 2 - 1, 0.2,
-      triangle.u1 * 2 - 1, triangle.v1 * 2 - 1, 0.2,
-      triangle.u2 * 2 - 1, triangle.v2 * 2 - 1, 0.2
-    ], 3));
-    const uvFill = new THREE.Mesh(
-      uvGeometry,
+  private selectUvTriangles(triangles: UvTriangle[], additive = false, subtractive = false): void {
+    if (subtractive) {
+      const removed = new Set(triangles);
+      this.selectedUvTriangles = this.selectedUvTriangles.filter((triangle) => !removed.has(triangle));
+    } else {
+      if (!additive) this.selectedUvTriangles = [];
+      const merged = new Set(this.selectedUvTriangles);
+      for (const triangle of triangles) merged.add(triangle);
+      this.selectedUvTriangles = [...merged];
+    }
+    this.selectedUv = this.selectedUvTriangles[this.selectedUvTriangles.length - 1] ?? null;
+    this.rebuildSelectionVisuals();
+    this.updateUvHud();
+  }
+
+  private rebuildSelectionVisuals(): void {
+    this.clearSelectionVisuals();
+    if (!this.selectedUvTriangles.length) return;
+    const uvOffsets: Array<[number, number]> = this.uvTiles
+      ? [[0, 0], [2, 0], [0, 2], [2, 2]]
+      : [[0, 0]];
+    const uvFill: number[] = [];
+    const uvLines: number[] = [];
+    for (const triangle of this.selectedUvTriangles) {
+      for (const [offsetX, offsetY] of uvOffsets) {
+        const ax = triangle.u0 * 2 - 1 + offsetX;
+        const ay = triangle.v0 * 2 - 1 + offsetY;
+        const bx = triangle.u1 * 2 - 1 + offsetX;
+        const by = triangle.v1 * 2 - 1 + offsetY;
+        const cx = triangle.u2 * 2 - 1 + offsetX;
+        const cy = triangle.v2 * 2 - 1 + offsetY;
+        uvFill.push(ax, ay, 0.2, bx, by, 0.2, cx, cy, 0.2);
+        uvLines.push(
+          ax, ay, 0.25, bx, by, 0.25,
+          bx, by, 0.25, cx, cy, 0.25,
+          cx, cy, 0.25, ax, ay, 0.25
+        );
+      }
+    }
+    const uvFillGeometry = new THREE.BufferGeometry();
+    uvFillGeometry.setAttribute('position', new THREE.Float32BufferAttribute(uvFill, 3));
+    const uvFillMesh = new THREE.Mesh(
+      uvFillGeometry,
       new THREE.MeshBasicMaterial({
-        color: 0x8affc1,
+        color: 0x4ade80,
         transparent: true,
-        opacity: 0.35,
+        opacity: 0.32,
         side: THREE.DoubleSide,
         depthTest: false,
         toneMapped: false
       })
     );
-    uvFill.renderOrder = 3;
-    this.uvSelectionGroup.add(uvFill);
+    uvFillMesh.renderOrder = 3;
+    this.uvSelectionGroup.add(uvFillMesh);
 
-    const uvOutline = new THREE.LineLoop(
-      new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(triangle.u0 * 2 - 1, triangle.v0 * 2 - 1, 0.25),
-        new THREE.Vector3(triangle.u1 * 2 - 1, triangle.v1 * 2 - 1, 0.25),
-        new THREE.Vector3(triangle.u2 * 2 - 1, triangle.v2 * 2 - 1, 0.25)
-      ]),
-      new THREE.LineBasicMaterial({ color: 0xc4ffe0, depthTest: false, toneMapped: false })
+    const uvLineGeometry = new THREE.BufferGeometry();
+    uvLineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(uvLines, 3));
+    const uvOutline = new THREE.LineSegments(
+      uvLineGeometry,
+      new THREE.LineBasicMaterial({ color: 0x22c55e, depthTest: false, toneMapped: false })
     );
     uvOutline.renderOrder = 4;
     this.uvSelectionGroup.add(uvOutline);
 
-    const geometry = triangle.mesh.geometry;
-    const posAttr = geometry.getAttribute('position');
-    if (posAttr) {
-      const index = geometry.index;
-      const start = triangle.faceIndex * 3;
-      const ia = index ? index.getX(start) : start;
-      const ib = index ? index.getX(start + 1) : start + 1;
-      const ic = index ? index.getX(start + 2) : start + 2;
-      triangle.mesh.updateWorldMatrix(true, false);
-      const p0 = new THREE.Vector3().fromBufferAttribute(posAttr, ia);
-      const p1 = new THREE.Vector3().fromBufferAttribute(posAttr, ib);
-      const p2 = new THREE.Vector3().fromBufferAttribute(posAttr, ic);
-      triangle.mesh.localToWorld(p0);
-      triangle.mesh.localToWorld(p1);
-      triangle.mesh.localToWorld(p2);
-
-      const worldGeometry = new THREE.BufferGeometry();
-      worldGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
-        p0.x, p0.y, p0.z,
-        p1.x, p1.y, p1.z,
-        p2.x, p2.y, p2.z
-      ], 3));
-      const worldFill = new THREE.Mesh(
-        worldGeometry,
+    const worldFill: number[] = [];
+    const worldLines: number[] = [];
+    for (const triangle of this.selectedUvTriangles) {
+      const points = this.triangleWorldPoints(triangle);
+      if (!points) continue;
+      const [p0, p1, p2] = points;
+      worldFill.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+      worldLines.push(
+        p0.x, p0.y, p0.z, p1.x, p1.y, p1.z,
+        p1.x, p1.y, p1.z, p2.x, p2.y, p2.z,
+        p2.x, p2.y, p2.z, p0.x, p0.y, p0.z
+      );
+    }
+    if (worldFill.length) {
+      const worldFillGeometry = new THREE.BufferGeometry();
+      worldFillGeometry.setAttribute('position', new THREE.Float32BufferAttribute(worldFill, 3));
+      const worldFillMesh = new THREE.Mesh(
+        worldFillGeometry,
         new THREE.MeshBasicMaterial({
-          color: 0x8affc1,
+          color: 0x4ade80,
           transparent: true,
-          opacity: 0.4,
+          opacity: 0.42,
           side: THREE.DoubleSide,
           depthTest: false,
           toneMapped: false
         })
       );
-      worldFill.renderOrder = 999;
-      this.modelSelectionGroup.add(worldFill);
+      worldFillMesh.renderOrder = 999;
+      this.modelSelectionGroup.add(worldFillMesh);
 
-      const worldOutline = new THREE.LineLoop(
-        new THREE.BufferGeometry().setFromPoints([p0, p1, p2]),
-        new THREE.LineBasicMaterial({ color: 0xc4ffe0, depthTest: false, toneMapped: false })
+      const worldLineGeometry = new THREE.BufferGeometry();
+      worldLineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(worldLines, 3));
+      const worldOutline = new THREE.LineSegments(
+        worldLineGeometry,
+        new THREE.LineBasicMaterial({ color: 0x22c55e, depthTest: false, toneMapped: false })
       );
       worldOutline.renderOrder = 1000;
       this.modelSelectionGroup.add(worldOutline);
     }
-
-    this.updateUvHud();
   }
 
   private clearSelection(): void {
+    this.selectedUvTriangles = [];
     this.clearSelectionVisuals();
     this.selectedUv = null;
     this.updateUvHud();
@@ -1674,19 +2720,22 @@ export class ModelView {
     };
     disposeGroup(this.uvSelectionGroup);
     disposeGroup(this.modelSelectionGroup);
-    this.selectedUv = null;
   }
 
   activate(): void {
     this.active = true;
+    this.controls.enabled = this.mode === '3d' && this.altHeld;
+    this.updateNavCursor();
     this.resize();
+    this.resizeMaterialBall();
     const loop = () => {
       if (!this.active) return;
       if (this.mode === 'uv') {
         this.renderer.render(this.uvScene, this.uvCamera);
       } else {
         this.controls.update();
-        this.renderer.render(this.scene, this.camera);
+        if (this.composer) this.composer.render();
+        else this.renderer.render(this.scene, this.camera);
       }
       this.raf = requestAnimationFrame(loop);
     };
@@ -1696,6 +2745,8 @@ export class ModelView {
 
   deactivate(): void {
     this.active = false;
+    this.controls.enabled = false;
+    this.endNavigation();
     cancelAnimationFrame(this.raf);
   }
 }

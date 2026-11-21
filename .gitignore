@@ -3,6 +3,8 @@ dist/
 dist-electron/
 release/
 *.log
+__pycache__/
+*.pyc
 .DS_Store
 
 .update-test-profile/

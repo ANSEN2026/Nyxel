@@ -1,5 +1,6 @@
 import './styles.css';
 import logoUrl from './assets/app-icon-face.png';
+import { MOTION_CAPTURE_ENABLED } from './feature-flags';
 import { audioMonitor } from './lib/audio-monitor';
 import { startTitleWave } from './lib/title-wave';
 import type { AccountUser, AppInfo, RecentProject, Settings, StatusApi, ToastApi, ToastKind, UpdateCheckResult, ViewName } from './types';
@@ -11,6 +12,7 @@ import { DrawView } from './views/draw';
 import { FilesView } from './views/files';
 import { HomeView } from './views/home';
 import { ModelView } from './views/model';
+import { MotionCaptureView } from './motion_capture/view';
 import { NotesView } from './views/notes';
 import { SettingsView } from './views/settings';
 import { TextureView } from './views/texture';
@@ -27,54 +29,66 @@ appRoot.innerHTML = `
         <span class="logo-tooltip" id="logo-tooltip">登录 / 注册</span>
       </button>
       <nav class="nav">
-        <button class="nav-button active" data-view="home" type="button">⌂<span class="nav-tooltip">首页 Ctrl+0</span></button>
+        <button class="nav-button active" data-view="home" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10.8 12 4l8 6.8"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-5.5h4V20"/></svg>
+          <span class="nav-tooltip">首页 Ctrl+0</span>
+        </button>
         <button class="nav-button" data-view="texture" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.5h16M4 14.5h16M9.5 4v16M14.5 4v16"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.2"/><circle cx="8.3" cy="8.8" r="1.4"/><path d="m4.5 16.8 4.6-4.3 3.2 2.8 3-2.7 4.2 4"/></svg>
           <span class="nav-tooltip">贴图 Ctrl+1</span>
         </button>
         <button class="nav-button" data-view="model" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 21 8v8l-9 5-9-5V8z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.2 8.2 4.6v8.4L12 20.8l-8.2-4.6V7.8z"/><path d="m3.8 7.8 8.2 4.6 8.2-4.6M12 12.4v8.4"/></svg>
           <span class="nav-tooltip">模型 Ctrl+2</span>
         </button>
-        <button class="nav-button" data-view="color" type="button">◑<span class="nav-tooltip">配色 Ctrl+3</span></button>
+        <button class="nav-button" data-view="color" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6a8.4 8.4 0 1 0 0 16.8h1.2a1.9 1.9 0 0 0 0-3.8h-1.1a1.7 1.7 0 0 1 0-3.4h2.4a4.3 4.3 0 0 0 0-8.6z"/><circle cx="8.4" cy="9.8" r=".95" fill="currentColor" stroke="none"/><circle cx="10.4" cy="6.8" r=".95" fill="currentColor" stroke="none"/><circle cx="14.1" cy="7.5" r=".95" fill="currentColor" stroke="none"/></svg>
+          <span class="nav-tooltip">配色 Ctrl+3</span>
+        </button>
         <div class="nav-divider"></div>
         <div class="nav-section-title">文件</div>
         <button class="nav-button" data-view="gallery" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.4"/><rect x="13" y="4" width="7" height="7" rx="1.4"/><rect x="4" y="13" width="7" height="7" rx="1.4"/><rect x="13" y="13" width="7" height="7" rx="1.4"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.4"/></svg>
           <span class="nav-tooltip">图库 Ctrl+4</span>
         </button>
         <button class="nav-button" data-view="textures" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="12" height="12" rx="2"/><path d="M16.5 4H6a2 2 0 0 0-2 2v10.5"/><circle cx="11" cy="10.8" r="1.1"/><path d="m8.3 16.7 2.9-2.9 2.2 2 2-2 2.4 2.7"/></svg>
           <span class="nav-tooltip">贴图资源 Ctrl+5</span>
         </button>
         <button class="nav-button" data-view="notes" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h9l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 20V5a1.5 1.5 0 0 1 1-1.5Z"/><path d="M15 3.5V8h4M8 12h7M8 15.5h7"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 3.8h8.2l3.8 3.8V20H6.2z"/><path d="M14.4 3.8v3.9h3.8M9 12h6M9 15.5h6"/></svg>
           <span class="nav-tooltip">备忘录 Ctrl+Shift+N</span>
         </button>
         <div class="nav-divider"></div>
         <div class="nav-section-title">媒体</div>
         <button class="nav-button" data-view="video" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.2"/><path d="m9 9 4 2.6-4 2.6z"/><path d="M16.8 9v4.2M15.6 12l1.2 1.2 1.2-1.2"/></svg>
           <span class="nav-tooltip">视频压缩 Ctrl+6</span>
         </button>
         <button class="nav-button" data-view="videos" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.2"/><path d="M3 9h18M7 5v4M17 5v4M8.5 13.2l4 2.3-4 2.3z"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9h17M7 5v4M17 5v4"/><path d="m10 12.2 4.2 2.4-4.2 2.4z"/></svg>
           <span class="nav-tooltip">视频作品 Ctrl+7</span>
         </button>
         <div class="nav-divider"></div>
         <div class="nav-section-title">工具</div>
         <button class="nav-button" data-view="draw" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.2-1 10.9-10.9a2.1 2.1 0 0 0-3-3L5.2 16z"/><path d="m13.8 6.5 3.7 3.7M4 20l1-4.2"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.2 19.8 4-1 11-11a2.1 2.1 0 0 0-3-3l-11 11z"/><path d="m13.7 6.3 3.9 3.9M4.2 19.8l1-4"/></svg>
           <span class="nav-tooltip">绘画 Ctrl+8</span>
         </button>
+        <button class="nav-button${MOTION_CAPTURE_ENABLED ? '' : ' hidden'}" data-view="motion" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4.4" r="2"/><path d="M12 6.4v6.8M12 9.3 8.2 11.5M12 9.3l3.8 2.2M12 13.2l-3.1 6M12 13.2l3.1 6"/></svg>
+          <span class="nav-tooltip">从视频生成动作 Ctrl+Shift+M</span>
+        </button>
         <button class="nav-button" data-view="download" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v11.8"/><path d="m7.4 10.7 4.6 4.6 4.6-4.6"/><path d="M4.5 20h15"/></svg>
           <span class="nav-tooltip">下载 Ctrl+9</span>
         </button>
       </nav>
       <div class="sidebar-bottom">
-        <button class="about-button" id="btn-about" type="button" title="关于我们">!</button>
-        <div class="sidebar-footer">v0.2</div>
+        <button class="about-button" id="btn-about" type="button" title="关于我们" aria-label="关于我们">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 11v6"/><circle cx="12" cy="7.7" r=".9" fill="currentColor" stroke="none"/></svg>
+        </button>
+        <div class="sidebar-footer">v1.0</div>
       </div>
     </aside>
     <div class="main">
@@ -82,6 +96,9 @@ appRoot.innerHTML = `
         <canvas class="titlebar-wave" id="titlebar-wave" aria-hidden="true"></canvas>
         <div class="titlebar-title" id="titlebar-title">当前：<strong>首页</strong></div>
         <div class="titlebar-actions">
+          <button id="btn-update" class="update-button" type="button" title="检查更新" aria-label="检查更新">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 16.2V7.8M8.6 11.2 12 7.8l3.4 3.4"/></svg>
+          </button>
           <button id="btn-screenshot" type="button" title="截图（Ctrl+Alt+A）">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6.5" r="2.4"/><circle cx="6" cy="17.5" r="2.4"/><path d="M8.2 7.6 20 18.5M8.2 16.4 20 5.5"/></svg>
           </button>
@@ -131,23 +148,34 @@ const titlebarTitle = document.querySelector('#titlebar-title') as HTMLElement;
 const statusFile = document.querySelector('#status-file') as HTMLElement;
 const statusInfo = document.querySelector('#status-info') as HTMLElement;
 const statusLog = document.querySelector('#status-log') as HTMLElement;
+const sidebarFooter = document.querySelector('.sidebar-footer') as HTMLElement | null;
 const toastContainer = document.querySelector('#toast-container') as HTMLElement;
 const sponsorCard = document.querySelector('#sponsor-card') as HTMLElement | null;
 const updateBanner = document.querySelector('#update-banner') as HTMLElement | null;
 const updateBannerTitle = document.querySelector('#update-banner-title') as HTMLElement | null;
 const updateBannerSub = document.querySelector('#update-banner-sub') as HTMLElement | null;
 const updateBannerAction = document.querySelector('#update-banner-action') as HTMLAnchorElement | null;
+const updateButton = document.querySelector('#btn-update') as HTMLButtonElement | null;
 const titleWaveCanvas = document.querySelector('#titlebar-wave') as HTMLCanvasElement | null;
 if (titleWaveCanvas) startTitleWave(titleWaveCanvas);
 
 let updateCheckInFlight = false;
 let lastAutoUpdateCheck = 0;
-let pendingUpdateVersion = '';
-let dismissedUpdateVersion = '';
+let pendingUpdate: UpdateCheckResult | null = null;
+
+function setUpdateIndicator(result: UpdateCheckResult | null): void {
+  if (!updateButton) return;
+  const available = Boolean(result?.ok && result.hasUpdate && result.latestVersion);
+  updateButton.classList.toggle('has-update', available);
+  const title = available ? `发现新版本 v${result?.latestVersion}，点击查看` : '检查更新';
+  updateButton.title = title;
+  updateButton.setAttribute('aria-label', title);
+}
 
 function showUpdateBanner(result: UpdateCheckResult): void {
   if (!updateBanner || !result.latestVersion) return;
-  pendingUpdateVersion = result.latestVersion;
+  pendingUpdate = result;
+  setUpdateIndicator(result);
   if (updateBannerTitle) updateBannerTitle.textContent = `发现新版本 v${result.latestVersion}`;
   if (updateBannerSub) {
     updateBannerSub.textContent = `当前 v${result.currentVersion}${result.channel === 'beta' ? ' · 测试频道' : ''}`;
@@ -160,7 +188,6 @@ function showUpdateBanner(result: UpdateCheckResult): void {
 
 function dismissUpdateBanner(): void {
   updateBanner?.classList.add('hidden');
-  if (pendingUpdateVersion) dismissedUpdateVersion = pendingUpdateVersion;
 }
 
 async function autoCheckForUpdates(): Promise<void> {
@@ -171,9 +198,9 @@ async function autoCheckForUpdates(): Promise<void> {
   updateCheckInFlight = true;
   try {
     const result = await window.nyxel.update.check();
-    if (!result.ok || !result.hasUpdate || !result.latestVersion) return;
-    if (result.latestVersion === dismissedUpdateVersion) return;
-    showUpdateBanner(result);
+    if (!result.ok) return;
+    pendingUpdate = result.hasUpdate && result.latestVersion ? result : null;
+    setUpdateIndicator(pendingUpdate);
   } catch {
     // Offline or GitHub unavailable: update checks stay silent.
   } finally {
@@ -181,6 +208,35 @@ async function autoCheckForUpdates(): Promise<void> {
   }
 }
 
+async function checkForUpdatesManually(): Promise<void> {
+  if (!updateButton || updateCheckInFlight) return;
+  if (pendingUpdate) {
+    showUpdateBanner(pendingUpdate);
+    return;
+  }
+  updateCheckInFlight = true;
+  updateButton.classList.add('checking');
+  try {
+    const result = await window.nyxel.update.check();
+    pendingUpdate = result.ok && result.hasUpdate && result.latestVersion ? result : null;
+    setUpdateIndicator(pendingUpdate);
+    if (pendingUpdate) {
+      showUpdateBanner(pendingUpdate);
+      toast(`发现新版本 v${pendingUpdate.latestVersion}`, 'success');
+    } else if (result.ok) {
+      toast('当前已是最新版本', 'info');
+    } else {
+      toast('更新检查失败，请稍后再试', 'error');
+    }
+  } catch {
+    toast('更新检查失败，请检查网络', 'error');
+  } finally {
+    updateCheckInFlight = false;
+    updateButton.classList.remove('checking');
+  }
+}
+
+updateButton?.addEventListener('click', () => void checkForUpdatesManually());
 document.querySelector('#update-banner-dismiss')?.addEventListener('click', dismissUpdateBanner);
 document.querySelector('#update-banner-close')?.addEventListener('click', dismissUpdateBanner);
 
@@ -264,6 +320,7 @@ let texturesView: FilesView;
 let videoView: VideoView;
 let videosView: FilesView;
 let drawView: DrawView;
+let motionView: MotionCaptureView;
 let downloadView: DownloadView;
 let notesView: NotesView;
 let settingsView: SettingsView;
@@ -418,6 +475,7 @@ function showView(view: ViewName): void {
   if (currentView === 'video') videoView.deactivate();
   if (currentView === 'videos') videosView.deactivate();
   if (currentView === 'draw') drawView.deactivate();
+  if (currentView === 'motion') motionView.deactivate();
   if (currentView === 'download') downloadView.deactivate();
   if (currentView === 'notes') notesView.deactivate();
 
@@ -431,12 +489,29 @@ function showView(view: ViewName): void {
   videoView.element.classList.toggle('hidden', view !== 'video');
   videosView.element.classList.toggle('hidden', view !== 'videos');
   drawView.element.classList.toggle('hidden', view !== 'draw');
+  motionView.element.classList.toggle('hidden', view !== 'motion');
   downloadView.element.classList.toggle('hidden', view !== 'download');
   notesView.element.classList.toggle('hidden', view !== 'notes');
 
   document.querySelectorAll('.nav-button').forEach((button) => {
     button.classList.toggle('active', (button as HTMLElement).dataset.view === view);
   });
+
+  const viewLabels: Record<ViewName, string> = {
+    home: '首页',
+    texture: '贴图',
+    model: '模型',
+    color: '配色',
+    gallery: '图库',
+    textures: '贴图资源',
+    video: '视频压缩',
+    videos: '视频作品',
+    draw: '绘画',
+    motion: '从视频生成动作',
+    download: '下载',
+    notes: '备忘录'
+  };
+  status.set(viewLabels[view], '', '');
 
   if (view === 'home') {
     homeView.activate();
@@ -462,6 +537,9 @@ function showView(view: ViewName): void {
   } else if (view === 'draw') {
     drawView.activate();
     updateTitle('绘画');
+  } else if (view === 'motion') {
+    void motionView.activate();
+    updateTitle('从视频生成动作');
   } else if (view === 'download') {
     downloadView.activate();
     updateTitle('下载');
@@ -521,6 +599,11 @@ function bindKeyboard(): void {
       showView('notes');
       return;
     }
+    if (MOTION_CAPTURE_ENABLED && event.shiftKey && event.key.toLowerCase() === 'm') {
+      event.preventDefault();
+      showView('motion');
+      return;
+    }
     if (event.key === '0') {
       event.preventDefault();
       showView('home');
@@ -569,7 +652,8 @@ function bindDrop(): void {
     if (isModelFile(file.name)) {
       void openModelFile(file);
     } else if (isImageFile(file.name)) {
-      if (currentView === 'color') void openColorFile(file);
+      if (currentView === 'model') void modelView.applyExternalTextureFile(file);
+      else if (currentView === 'color') void openColorFile(file);
       else void openTextureFile(file);
     } else {
       toast('只支持贴图图片或 .fbx 模型', 'error');
@@ -588,6 +672,7 @@ function bindNav(): void {
 async function bootstrap(): Promise<void> {
   settings = await window.nyxel.settings.load();
   appInfo = await window.nyxel.app.info();
+  if (sidebarFooter) sidebarFooter.textContent = `v${appInfo.version}`;
   applyTheme(settings.theme);
 
   const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -606,6 +691,7 @@ async function bootstrap(): Promise<void> {
   videoView = new VideoView(callbacks);
   videosView = new FilesView('videos', callbacks);
   drawView = new DrawView(callbacks);
+  motionView = new MotionCaptureView(callbacks, { autoRefresh: MOTION_CAPTURE_ENABLED });
   downloadView = new DownloadView(callbacks);
   notesView = new NotesView(callbacks);
   settingsView = new SettingsView(saveSettings, toast);
@@ -622,6 +708,7 @@ async function bootstrap(): Promise<void> {
     videoView.element,
     videosView.element,
     drawView.element,
+    motionView.element,
     downloadView.element,
     notesView.element
   );
@@ -633,6 +720,7 @@ async function bootstrap(): Promise<void> {
   videoView.element.classList.add('hidden');
   videosView.element.classList.add('hidden');
   drawView.element.classList.add('hidden');
+  motionView.element.classList.add('hidden');
   downloadView.element.classList.add('hidden');
   notesView.element.classList.add('hidden');
   document.body.append(settingsView.element, aboutView.element, accountView.element);
@@ -656,6 +744,12 @@ async function bootstrap(): Promise<void> {
     openModelPath,
     openColorPath,
     openVideoPath,
+    openMotionPath: async (path: string) => {
+      if (!MOTION_CAPTURE_ENABLED) return;
+      showView('motion');
+      updateTitle('从视频生成动作', basename(path));
+      motionView.loadPath(path);
+    },
     applyModelTexturePath: (path: string) => modelView.applyExternalTexturePath(path)
   };
 

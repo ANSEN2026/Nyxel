@@ -20,7 +20,8 @@ contextBridge.exposeInMainWorld('nyxel', {
     openImage: () => ipcRenderer.invoke('dialog:openImage'),
     openModel: () => ipcRenderer.invoke('dialog:openModel'),
     openVideo: () => ipcRenderer.invoke('dialog:openVideo'),
-    openDirectory: () => ipcRenderer.invoke('dialog:openDirectory')
+    openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
+    openExecutable: () => ipcRenderer.invoke('dialog:openExecutable')
   },
   file: {
     read: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
@@ -135,6 +136,23 @@ contextBridge.exposeInMainWorld('nyxel', {
     save: (notePath: string, updates: { text?: string; textHtml?: string; drawing?: string; image?: string; imageRect?: { x: number; y: number; width: number; height: number }; canvasWidth?: number; canvasHeight?: number }) => ipcRenderer.invoke('notes:save', notePath, updates),
     delete: (notePath: string) => ipcRenderer.invoke('notes:delete', notePath),
     openDir: () => ipcRenderer.invoke('notes:openDir')
+  },
+  motionCapture: {
+    config: () => ipcRenderer.invoke('motion-capture:config'),
+    saveConfig: (config: unknown) => ipcRenderer.invoke('motion-capture:config-save', config),
+    runtime: () => ipcRenderer.invoke('motion-capture:runtime'),
+    start: (options: unknown) => ipcRenderer.invoke('motion-capture:start', options),
+    cancel: (jobId?: string) => ipcRenderer.invoke('motion-capture:cancel', jobId),
+    preview: (jobId: string) => ipcRenderer.invoke('motion-capture:preview', jobId),
+    exportResult: (jobId: string) => ipcRenderer.invoke('motion-capture:export', jobId),
+    exportFbx: (jobId: string, preset: 'unreal' | 'threejs', profile: 'generic' | 'ue5' = 'generic') =>
+      ipcRenderer.invoke('motion-capture:export-fbx', jobId, preset, profile),
+    log: (jobId: string) => ipcRenderer.invoke('motion-capture:log', jobId),
+    onProgress: (callback: (progress: unknown) => void) => {
+      const listener = (_event: unknown, progress: unknown) => callback(progress);
+      ipcRenderer.on('motion-capture:progress', listener);
+      return () => ipcRenderer.removeListener('motion-capture:progress', listener);
+    }
   },
   audio: {
     source: () => ipcRenderer.invoke('audio:source')

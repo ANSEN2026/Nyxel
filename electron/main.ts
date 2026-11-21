@@ -27,6 +27,7 @@ import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { unzipSync } from 'fflate';
 import { extractText } from 'unpdf';
+import { MotionCaptureService } from './motion_capture/service';
 
 // Keep the existing AppData folder name after the Texture map rename so
 // downloaded ffmpeg / AI runtimes and Chromium caches survive upgrades.
@@ -151,6 +152,7 @@ let aiDownloading = false;
 let aiProgress: AiProgress | null = null;
 let aiProcess: ChildProcess | null = null;
 let aiCancelled = false;
+const motionCapture = new MotionCaptureService(() => mainWindow);
 
 function settingsFile(): string {
   return path.join(app.getPath('appData'), 'Nyxel', 'settings.json');
@@ -461,7 +463,22 @@ async function runAutomation(): Promise<void> {
   const texturePath = process.env.NYXEL_TEST_TEXTURE;
   const modelPath = process.env.NYXEL_TEST_MODEL;
   const videoPath = process.env.NYXEL_TEST_VIDEO;
+  const motionPath = process.env.NYXEL_TEST_MOTION;
 
+  if (motionPath) {
+    setTimeout(() => {
+      void mainWindow?.webContents.executeJavaScript(
+        `window.__nyxel?.openMotionPath(${JSON.stringify(motionPath)})`
+      ).catch((error) => console.error(error));
+    }, 700);
+    if (process.env.NYXEL_TEST_MOTION_START !== '0') {
+      setTimeout(() => {
+        void mainWindow?.webContents.executeJavaScript(
+          `document.querySelector('.motion-view [data-action="start"]')?.click()`
+        ).catch((error) => console.error(error));
+      }, 1500);
+    }
+  }
   if (videoPath) {
     setTimeout(() => {
       void mainWindow?.webContents.executeJavaScript(
@@ -637,7 +654,7 @@ async function ensureLibraryDirs(): Promise<void> {
   ]);
 }
 
-const OFFICIAL_TEXTURE_PACK_VERSION = 1;
+const OFFICIAL_TEXTURE_PACK_VERSION = 2;
 
 function officialTexturePackSource(): string {
   const packaged = path.join(process.resourcesPath, 'official-textures', '官方贴图');
@@ -2234,12 +2251,17 @@ function createSelectorWindow(session: SelectorSession): void {
 
   selectorWindows.push(win);
   selectorSessions.set(win.id, session);
+  // Windows clamps a new window to the work area (taskbar excluded), which would
+  // squeeze the capture and cut off the bottom/right edge. Re-apply the full
+  // display bounds after construction so the overlay maps 1:1 to the screenshot.
+  win.setBounds(display.bounds);
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setIgnoreMouseEvents(false);
 
   win.webContents.on('did-finish-load', () => {
     win.webContents.send('selector:image', image.toDataURL());
+    win.setBounds(display.bounds);
     win.show();
     win.focus();
   });
@@ -2431,7 +2453,8 @@ const AI_RUNTIME_URLS = process.env.NYXEL_AI_RUNTIME_URL
     `https://ghproxy.net/${AI_RUNTIME_URL}`,
     `https://gh-proxy.com/${AI_RUNTIME_URL}`
   ];
-const AI_MODEL_NAME = 'realesrgan-x4plus';
+const REALESRGAN_MODEL_NAME = 'realesrgan-x4plus-anime';
+const REALESRGAN_MODELS = ['realesrgan-x4plus-anime', 'realesrgan-x4plus'];
 const UPSCAYL_BIN_URL = process.env.NYXEL_UPSCAYL_BIN_URL || 'https://github.com/upscayl/upscayl-ncnn/releases/download/20251207-174704/upscayl-bin-20251207-174704-windows.zip';
 const UPSCAYL_BIN_URLS = process.env.NYXEL_UPSCAYL_BIN_URL
   ? [UPSCAYL_BIN_URL]
@@ -2467,6 +2490,10 @@ function normalizeUpscaylModel(model?: string): string {
   return model && UPSCAYL_MODELS.includes(model) ? model : UPSCAYL_MODEL_NAME;
 }
 
+function normalizeRealesrganModel(model?: string): string {
+  return model && REALESRGAN_MODELS.includes(model) ? model : REALESRGAN_MODEL_NAME;
+}
+
 function aiStatus(engine: AiEngine = 'realesrgan', model?: string): AiStatus {
   let modelFiles: string[] = [];
   try {
@@ -2475,14 +2502,14 @@ function aiStatus(engine: AiEngine = 'realesrgan', model?: string): AiStatus {
     // runtime not downloaded yet
   }
   const upscaylModel = normalizeUpscaylModel(model);
-  const available = engine === 'upscayl'
-    ? fs.existsSync(aiExePath(engine)) &&
-      modelFiles.includes(`${upscaylModel}.param`) &&
-      modelFiles.includes(`${upscaylModel}.bin`)
-    : fs.existsSync(aiExePath(engine)) && modelFiles.some((name) => name.endsWith('.param'));
+  const realesrganModel = normalizeRealesrganModel(model);
+  const activeModel = engine === 'upscayl' ? upscaylModel : realesrganModel;
+  const available = fs.existsSync(aiExePath(engine)) &&
+    modelFiles.includes(`${activeModel}.param`) &&
+    modelFiles.includes(`${activeModel}.bin`);
   return {
     engine,
-    model: engine === 'upscayl' ? upscaylModel : undefined,
+    model: activeModel,
     available,
     dir: aiRuntimeDir(engine),
     downloading: aiDownloading,
@@ -3135,6 +3162,7 @@ async function upscaleWithAi(
 ): Promise<AiUpscaleResult> {
   const status = aiStatus(engine, model);
   const upscaylModel = normalizeUpscaylModel(model);
+  const realesrganModel = normalizeRealesrganModel(model);
   if (!status.available) {
     return {
       ok: false,
@@ -3143,6 +3171,15 @@ async function upscaleWithAi(
   }
   if (aiProcess) return { ok: false, error: '已有 AI 任务在进行' };
   if (![2, 3, 4].includes(scale)) return { ok: false, error: '不支持的放大倍数' };
+
+  const sourceImage = nativeImage.createFromBuffer(Buffer.from(data));
+  const sourceSize = sourceImage.getSize();
+  if (!sourceSize.width || !sourceSize.height) return { ok: false, error: '源图无效' };
+  const targetWidth = Math.max(1, Math.round(sourceSize.width * scale));
+  const targetHeight = Math.max(1, Math.round(sourceSize.height * scale));
+  if (targetWidth > 16384 || targetHeight > 16384) {
+    return { ok: false, error: '目标尺寸超过 16384，已取消' };
+  }
 
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'nyxel-ai-'));
   const input = path.join(tempDir, 'input.png');
@@ -3164,9 +3201,17 @@ async function upscaleWithAi(
       };
 
       const engineLabel = engine === 'upscayl' ? 'Upscayl' : 'Real-ESRGAN';
+      // Run the model at native 4x and downscale for 2x/3x when the intermediate
+      // stays within an 8K working size. This keeps lines crisper and reduces
+      // edge aliasing versus letting the binary resize directly. Larger sources
+      // fall back to the requested scale so we do not build a 16K/32K image.
+      const native4x = sourceSize.width * 4 <= 8192 && sourceSize.height * 4 <= 8192;
+      const modelScale = native4x ? 4 : scale;
       const args = engine === 'upscayl'
-        ? ['-i', input, '-o', output, '-s', String(scale), '-m', aiModelsDir(engine), '-n', upscaylModel, '-f', 'png']
-        : ['-i', input, '-o', output, '-n', AI_MODEL_NAME, '-s', String(scale), '-f', 'png'];
+        ? (native4x
+          ? ['-i', input, '-o', output, '-z', '4', '-s', '4', '-m', aiModelsDir(engine), '-n', upscaylModel, '-f', 'png']
+          : ['-i', input, '-o', output, '-s', String(scale), '-m', aiModelsDir(engine), '-n', upscaylModel, '-f', 'png'])
+        : ['-i', input, '-o', output, '-n', realesrganModel, '-s', String(modelScale), '-f', 'png'];
       const child = spawn(aiExePath(engine), args, {
         cwd: aiRuntimeDir(engine),
         windowsHide: true
@@ -3206,13 +3251,18 @@ async function upscaleWithAi(
             return;
           }
           const buffer = await fs.promises.readFile(output);
-          const image = nativeImage.createFromBuffer(buffer);
-          const size = image.getSize();
+          let image = nativeImage.createFromBuffer(buffer);
+          let size = image.getSize();
           if (!size.width || !size.height) throw new Error(`${engineLabel} 输出无效`);
+          if (size.width !== targetWidth || size.height !== targetHeight) {
+            image = image.resize({ width: targetWidth, height: targetHeight, quality: 'best' });
+            size = image.getSize();
+          }
+          const resultBuffer = image.toPNG();
           sendAiProgress({ phase: 'done', percent: 100, message: 'AI 超分完成' });
           finish({
             ok: true,
-            data: new Uint8Array(buffer),
+            data: new Uint8Array(resultBuffer),
             width: size.width,
             height: size.height
           });
@@ -3956,6 +4006,15 @@ function registerIpc(): void {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  ipcMain.handle('dialog:openExecutable', async () => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [{ name: '可执行文件', extensions: ['exe'] }]
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+
   ipcMain.handle('download:defaultDir', async () => {
     const dir = path.join(app.getPath('downloads'), 'Texture map');
     await fs.promises.mkdir(dir, { recursive: true });
@@ -4142,6 +4201,31 @@ function registerIpc(): void {
     return true;
   });
 
+  ipcMain.handle('motion-capture:config', () => motionCapture.getConfig());
+  ipcMain.handle('motion-capture:config-save', (_event, partial: Record<string, unknown>) => {
+    return motionCapture.saveConfig(partial ?? {});
+  });
+  ipcMain.handle('motion-capture:runtime', () => motionCapture.checkRuntime());
+  ipcMain.handle('motion-capture:start', (event, options: { inputPath?: string; fps?: number; targetRig?: string }) => {
+    const inputPath = String(options?.inputPath ?? '');
+    return motionCapture.start(inputPath, {
+      inputPath,
+      fps: options?.fps,
+      targetRig: options?.targetRig
+    }, event.sender);
+  });
+  ipcMain.handle('motion-capture:cancel', (_event, jobId?: string) => motionCapture.cancel(jobId));
+  ipcMain.handle('motion-capture:preview', (_event, jobId: string) => motionCapture.getPreview(jobId));
+  ipcMain.handle('motion-capture:export', (_event, jobId: string) => motionCapture.exportResult(jobId));
+  ipcMain.handle('motion-capture:export-fbx', (_event, jobId: string, preset: string, profile: string) => {
+    return motionCapture.exportFbx(
+      jobId,
+      preset === 'threejs' ? 'threejs' : 'unreal',
+      profile === 'ue5' ? 'ue5' : 'generic'
+    );
+  });
+  ipcMain.handle('motion-capture:log', (_event, jobId: string) => motionCapture.getLog(jobId));
+
   ipcMain.handle('app:openPath', async (_event, target: string) => {
     const error = await shell.openPath(target);
     return error;
@@ -4158,7 +4242,14 @@ function registerIpc(): void {
     return true;
   });
 
-  ipcMain.on('selector:confirm', (event, rect: { x: number; y: number; width: number; height: number }) => {
+  ipcMain.on('selector:confirm', (event, rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    viewportWidth?: number;
+    viewportHeight?: number;
+  }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || !selectorResolver || captureInEditor) return;
     const session = selectorSessions.get(win.id);
@@ -4169,8 +4260,10 @@ function registerIpc(): void {
         return;
       }
       const size = session.image.getSize();
-      const scaleX = size.width / Math.max(1, session.display.bounds.width);
-      const scaleY = size.height / Math.max(1, session.display.bounds.height);
+      const viewportWidth = Number(rect.viewportWidth) > 0 ? Number(rect.viewportWidth) : session.display.bounds.width;
+      const viewportHeight = Number(rect.viewportHeight) > 0 ? Number(rect.viewportHeight) : session.display.bounds.height;
+      const scaleX = size.width / Math.max(1, viewportWidth);
+      const scaleY = size.height / Math.max(1, viewportHeight);
       const x = Math.max(0, Math.min(size.width - 1, Math.round(rect.x * scaleX)));
       const y = Math.max(0, Math.min(size.height - 1, Math.round(rect.y * scaleY)));
       const width = Math.max(1, Math.min(size.width - x, Math.round(rect.width * scaleX)));
@@ -4414,6 +4507,7 @@ if (!gotLock) {
   });
 
   app.on('will-quit', () => {
+    motionCapture.dispose();
     globalShortcut.unregisterAll();
   });
 }

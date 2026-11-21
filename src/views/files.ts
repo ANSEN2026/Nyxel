@@ -7,6 +7,33 @@ type FilesMode = 'gallery' | 'textures' | 'videos';
 const FOLDER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 const CALENDAR_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></svg>';
 const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>';
+const IMAGE_VIEWER_HTML = `
+  <div class="image-viewer hidden">
+    <div class="image-viewer-card">
+      <header class="image-viewer-head">
+        <div class="image-viewer-title">
+          <strong class="image-viewer-name"></strong>
+          <span class="image-viewer-meta"></span>
+        </div>
+        <div class="image-viewer-actions">
+          <button type="button" data-image-open>打开贴图</button>
+          <button type="button" data-image-show>在文件夹中显示</button>
+          <button type="button" class="image-viewer-close" data-image-close title="关闭">×</button>
+        </div>
+      </header>
+      <div class="image-viewer-stage">
+        <img class="image-viewer-img" alt="" draggable="false">
+        <div class="image-viewer-zoom">
+          <button type="button" data-image-zoom="out" title="缩小">−</button>
+          <span class="image-viewer-zoom-label">适应</span>
+          <button type="button" data-image-zoom="in" title="放大">＋</button>
+          <button type="button" data-image-zoom="fit">适应</button>
+          <button type="button" data-image-zoom="native">1:1</button>
+        </div>
+      </div>
+    </div>
+  </div>
+`;
 const FOLDER_COLORS = ['#a6d0b5', '#7dd3fc', '#a78bfa', '#fbbf24', '#fb7185', '#f97316', '#5eead4', '#cbd5e1'];
 const ZOOM_KEY = 'nyxel.files.thumbHeight';
 const COLLAPSED_KEY = 'nyxel.files.collapsedFolders';
@@ -63,17 +90,33 @@ export class FilesView {
   private playerPanStart = { x: 0, y: 0, ox: 0, oy: 0 };
   private contextMenu!: HTMLElement;
   private contextActions = new Map<string, () => void>();
+  private imageViewer: HTMLElement | null = null;
+  private imageViewerImg: HTMLImageElement | null = null;
+  private imageViewerStage: HTMLElement | null = null;
+  private imageViewerName: HTMLElement | null = null;
+  private imageViewerMeta: HTMLElement | null = null;
+  private imageViewerZoomLabel: HTMLElement | null = null;
+  private imageViewerPath = '';
+  private imageZoom = 1;
+  private imageFitZoom = 1;
+  private imageOffsetX = 0;
+  private imageOffsetY = 0;
+  private imagePanning = false;
+  private imagePanStart = { x: 0, y: 0, ox: 0, oy: 0 };
   private moveModal: HTMLElement | null = null;
   private moveTarget: HTMLSelectElement | null = null;
   private moveError: HTMLElement | null = null;
   private moveSource = '';
-  private longPressTimer: number | null = null;
-  private longPressCard: HTMLElement | null = null;
-  private longPressStart = { x: 0, y: 0 };
-  private longPressActive = false;
-  private longPressPath = '';
-  private longPressGhost: HTMLElement | null = null;
-  private longPressTarget: HTMLElement | null = null;
+  private moveImagePaths: string[] = [];
+  private selectedPaths = new Set<string>();
+  private marqueeTimer: number | null = null;
+  private marquee: HTMLElement | null = null;
+  private marqueeActive = false;
+  private marqueeStart = { x: 0, y: 0 };
+  private marqueeCurrent = { x: 0, y: 0 };
+  private marqueeAdditive = false;
+  private marqueeBaseSelection = new Set<string>();
+  private marqueePointerId = 0;
   private suppressFileClick = false;
   private externalDropTarget: HTMLElement | null = null;
 
@@ -124,7 +167,7 @@ export class FilesView {
             <input id="files-search" type="search" placeholder="搜索素材" spellcheck="false">
           </div>
           <span class="zoom-hint" data-zoom-hint>Ctrl + 滚轮缩放</span>
-          <span class="zoom-hint">单击打开 · 长按拖动 · 可拖入图片 / 文件夹</span>
+          <span class="zoom-hint">单击选择 · 双击预览 · 长按框选 · 右键操作</span>
           <span class="spacer"></span>
           <button class="primary" data-action="import">导入贴图</button>
           <button data-action="refresh">刷新</button>
@@ -252,6 +295,10 @@ export class FilesView {
       `;
     }
 
+    if (mode !== 'videos') {
+      this.element.insertAdjacentHTML('beforeend', IMAGE_VIEWER_HTML);
+    }
+
     this.grid = this.element.querySelector('#files-grid') as HTMLElement;
     this.empty = this.element.querySelector('.files-empty') as HTMLElement;
     this.count = this.element.querySelector('#files-count') as HTMLElement;
@@ -273,6 +320,12 @@ export class FilesView {
     this.playerDurationTime = this.element.querySelector('#video-duration-time');
     this.playerPlayButton = this.element.querySelector('[data-player-play]');
     this.playerMuteButton = this.element.querySelector('[data-player-mute]');
+    this.imageViewer = this.element.querySelector('.image-viewer');
+    this.imageViewerImg = this.element.querySelector('.image-viewer-img');
+    this.imageViewerStage = this.element.querySelector('.image-viewer-stage');
+    this.imageViewerName = this.element.querySelector('.image-viewer-name');
+    this.imageViewerMeta = this.element.querySelector('.image-viewer-meta');
+    this.imageViewerZoomLabel = this.element.querySelector('.image-viewer-zoom-label');
     const notebookElement = this.element.querySelector('#video-notebook');
     if (notebookElement) {
       this.notebook = new VideoNotebook(
@@ -331,7 +384,7 @@ export class FilesView {
 
   private bindEvents(): void {
     this.element.addEventListener('scroll', () => this.hideContextMenu(), true);
-    if (this.mode === 'textures') this.bindFileInteractions();
+    if (this.mode !== 'videos') this.bindFileInteractions();
     this.element.addEventListener('contextmenu', (event) => {
       const target = event.target as HTMLElement;
       if (target.closest('input, select, textarea')) return;
@@ -346,6 +399,10 @@ export class FilesView {
       } else if (videoCard) {
         this.showVideoContext(videoCard, event.clientX, event.clientY);
       } else if (fileCard) {
+        const filePath = fileCard.dataset.filePath ?? '';
+        if (filePath && !this.selectedPaths.has(filePath)) {
+          this.applySelection(new Set([filePath]));
+        }
         this.showFileContext(fileCard, event.clientX, event.clientY);
       }
     });
@@ -371,7 +428,11 @@ export class FilesView {
       }
       if (card && !target.closest('button')) {
         const filePath = card.dataset.filePath ?? '';
-        if (filePath) void this.callbacks.openTexturePath(filePath);
+        if (filePath) {
+          this.selectSingleFile(filePath, event.ctrlKey || event.metaKey || event.shiftKey);
+        }
+      } else if (this.grid.contains(target) && !target.closest('.asset-card')) {
+        this.applySelection(new Set());
       }
     });
 
@@ -590,130 +651,298 @@ export class FilesView {
         }
       });
     }
+
+    if (this.mode !== 'videos') this.bindImageViewer();
+  }
+
+  private bindImageViewer(): void {
+    if (!this.imageViewer || !this.imageViewerImg || !this.imageViewerStage) return;
+    this.imageViewer.addEventListener('click', (event) => {
+      if (event.target === this.imageViewer) this.closeImageViewer();
+    });
+    this.imageViewer.querySelector('[data-image-close]')?.addEventListener('click', () => this.closeImageViewer());
+    this.imageViewer.querySelector('[data-image-open]')?.addEventListener('click', () => {
+      if (this.imageViewerPath) void this.callbacks.openTexturePath(this.imageViewerPath);
+    });
+    this.imageViewer.querySelector('[data-image-show]')?.addEventListener('click', () => {
+      if (this.imageViewerPath) void window.nyxel.app.showItemInFolder(this.imageViewerPath);
+    });
+    this.imageViewer.querySelectorAll<HTMLElement>('[data-image-zoom]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const action = button.dataset.imageZoom;
+        if (action === 'in') this.zoomImageViewer(1.25);
+        else if (action === 'out') this.zoomImageViewer(0.8);
+        else if (action === 'native') this.setImageViewerZoom(1, true);
+        else this.resetImageViewerZoom();
+      });
+    });
+    this.imageViewerStage.addEventListener('wheel', (event) => {
+      if (this.imageViewer?.classList.contains('hidden')) return;
+      event.preventDefault();
+      this.zoomImageViewer(event.deltaY < 0 ? 1.18 : 1 / 1.18);
+    }, { passive: false });
+    this.imageViewerImg.addEventListener('dblclick', () => this.resetImageViewerZoom());
+    this.imageViewerStage.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || !this.imageViewerImg) return;
+      if (this.imageZoom <= this.imageFitZoom * 1.01) return;
+      if ((event.target as HTMLElement).closest('button')) return;
+      this.imagePanning = true;
+      this.imagePanStart = {
+        x: event.clientX,
+        y: event.clientY,
+        ox: this.imageOffsetX,
+        oy: this.imageOffsetY
+      };
+      this.imageViewerStage?.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    this.imageViewerStage.addEventListener('pointermove', (event) => {
+      if (!this.imagePanning) return;
+      this.imageOffsetX = this.imagePanStart.ox + (event.clientX - this.imagePanStart.x);
+      this.imageOffsetY = this.imagePanStart.oy + (event.clientY - this.imagePanStart.y);
+      this.applyImageViewerTransform();
+    });
+    const endPan = () => {
+      this.imagePanning = false;
+    };
+    this.imageViewerStage.addEventListener('pointerup', endPan);
+    this.imageViewerStage.addEventListener('pointercancel', endPan);
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && this.imageViewer && !this.imageViewer.classList.contains('hidden')) {
+        event.preventDefault();
+        this.closeImageViewer();
+      }
+    });
+  }
+
+  private openImageViewer(filePath: string): void {
+    if (!this.imageViewer || !this.imageViewerImg) return;
+    const file = this.currentFiles.find((item) => item.path === filePath);
+    this.imageViewerPath = filePath;
+    if (this.imageViewerName) this.imageViewerName.textContent = file?.name ?? filePath.split(/[\\/]/).pop() ?? '';
+    if (this.imageViewerMeta) {
+      this.imageViewerMeta.textContent = file
+        ? `${formatBytes(file.size)} · ${formatTime(file.mtime)}`
+        : '';
+    }
+    this.imageViewer.classList.remove('hidden');
+    this.imageViewerImg.src = `${window.nyxel.library.mediaUrl(filePath)}&v=${Date.now()}`;
+    const fit = () => {
+      this.resetImageViewerZoom();
+      if (this.imageViewerMeta && this.imageViewerImg) {
+        const width = this.imageViewerImg.naturalWidth;
+        const height = this.imageViewerImg.naturalHeight;
+        if (width && height) {
+          this.imageViewerMeta.textContent = file
+            ? `${width} × ${height} · ${formatBytes(file.size)} · ${formatTime(file.mtime)}`
+            : `${width} × ${height}`;
+        }
+      }
+    };
+    if (this.imageViewerImg.complete && this.imageViewerImg.naturalWidth > 0) {
+      requestAnimationFrame(fit);
+    } else {
+      this.imageViewerImg.onload = () => requestAnimationFrame(fit);
+    }
+  }
+
+  private closeImageViewer(): void {
+    if (!this.imageViewer) return;
+    this.imageViewer.classList.add('hidden');
+    this.imageViewerPath = '';
+    this.imagePanning = false;
+    if (this.imageViewerImg) this.imageViewerImg.removeAttribute('src');
+  }
+
+  private resetImageViewerZoom(): void {
+    if (!this.imageViewerImg || !this.imageViewerStage) return;
+    const width = this.imageViewerImg.naturalWidth;
+    const height = this.imageViewerImg.naturalHeight;
+    const stageWidth = this.imageViewerStage.clientWidth;
+    const stageHeight = this.imageViewerStage.clientHeight;
+    if (!width || !height || !stageWidth || !stageHeight) return;
+    const fit = Math.max(0.01, Math.min(stageWidth / width, stageHeight / height));
+    this.imageFitZoom = fit;
+    this.imageZoom = fit;
+    this.imageOffsetX = 0;
+    this.imageOffsetY = 0;
+    if (this.imageViewerZoomLabel) this.imageViewerZoomLabel.textContent = '适应';
+    this.applyImageViewerTransform();
+  }
+
+  private zoomImageViewer(factor: number): void {
+    const target = Math.max(this.imageFitZoom * 0.15, Math.min(12, this.imageZoom * factor));
+    this.setImageViewerZoom(target, false);
+  }
+
+  private setImageViewerZoom(value: number, native: boolean): void {
+    if (!this.imageViewerImg || !this.imageViewerStage) return;
+    const min = this.imageFitZoom * 0.15;
+    this.imageZoom = Math.max(min, Math.min(12, value));
+    if (native) {
+      this.imageZoom = 1;
+      this.imageOffsetX = 0;
+      this.imageOffsetY = 0;
+    }
+    if (!native && this.imageZoom <= this.imageFitZoom * 1.01) {
+      this.imageOffsetX = 0;
+      this.imageOffsetY = 0;
+    }
+    if (this.imageViewerZoomLabel) {
+      this.imageViewerZoomLabel.textContent = `${Math.round(this.imageZoom * 100)}%`;
+    }
+    this.applyImageViewerTransform();
+  }
+
+  private applyImageViewerTransform(): void {
+    if (!this.imageViewerImg) return;
+    this.imageViewerImg.style.transform =
+      `translate(-50%, -50%) translate(${this.imageOffsetX}px, ${this.imageOffsetY}px) scale(${this.imageZoom})`;
   }
 
   private bindFileInteractions(): void {
-    this.element.addEventListener('pointerdown', (event) => this.startFileLongPress(event));
-    window.addEventListener('pointermove', (event) => this.moveFileLongPress(event), { passive: false });
-    window.addEventListener('pointerup', (event) => void this.finishFileLongPress(event));
-    window.addEventListener('pointercancel', () => this.cancelFileLongPress());
-    window.addEventListener('blur', () => this.cancelFileLongPress());
-    this.element.addEventListener('dragenter', (event) => this.onExternalFileDrag(event));
-    this.element.addEventListener('dragover', (event) => this.onExternalFileDrag(event));
-    this.element.addEventListener('dragleave', (event) => {
-      if (!this.element.contains(event.relatedTarget as Node | null)) this.clearExternalDrop();
+    this.element.addEventListener('pointerdown', (event) => this.startMarquee(event));
+    window.addEventListener('pointermove', (event) => this.moveMarquee(event), { passive: false });
+    window.addEventListener('pointerup', (event) => this.finishMarquee(event));
+    window.addEventListener('pointercancel', () => this.cancelMarquee());
+    window.addEventListener('blur', () => this.cancelMarquee());
+    this.grid.addEventListener('dblclick', (event) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('button')) return;
+      const card = target.closest<HTMLElement>('[data-file-path]');
+      const filePath = card?.dataset.filePath ?? '';
+      if (filePath) this.openImageViewer(filePath);
     });
-    this.element.addEventListener('drop', (event) => void this.onExternalFileDrop(event));
+    if (this.mode === 'textures') {
+      this.element.addEventListener('dragenter', (event) => this.onExternalFileDrag(event));
+      this.element.addEventListener('dragover', (event) => this.onExternalFileDrag(event));
+      this.element.addEventListener('dragleave', (event) => {
+        if (!this.element.contains(event.relatedTarget as Node | null)) this.clearExternalDrop();
+      });
+      this.element.addEventListener('drop', (event) => void this.onExternalFileDrop(event));
+    }
   }
 
-  private startFileLongPress(event: PointerEvent): void {
+  private startMarquee(event: PointerEvent): void {
     if (event.button !== 0 || this.dragFolder) return;
+    if (this.imageViewer && !this.imageViewer.classList.contains('hidden')) return;
     const target = event.target as HTMLElement;
     if (target.closest('button, a, input, select, textarea')) return;
-    const card = target.closest<HTMLElement>('[data-file-path]');
-    if (!card || !this.grid.contains(card)) return;
-    const filePath = card.dataset.filePath ?? '';
-    if (!filePath) return;
-    this.cancelFileLongPress();
-    this.longPressCard = card;
-    this.longPressPath = filePath;
-    this.longPressStart = { x: event.clientX, y: event.clientY };
-    this.longPressTimer = window.setTimeout(() => {
-      this.longPressTimer = null;
-      this.activateFileLongPress(event.clientX, event.clientY);
-    }, 360);
+    if (!this.grid.contains(target)) return;
+    this.cancelMarquee();
+    this.marqueeStart = { x: event.clientX, y: event.clientY };
+    this.marqueeCurrent = { x: event.clientX, y: event.clientY };
+    this.marqueeAdditive = event.ctrlKey || event.metaKey || event.shiftKey;
+    this.marqueeBaseSelection = new Set(this.selectedPaths);
+    this.marqueePointerId = event.pointerId;
+    this.marqueeTimer = window.setTimeout(() => {
+      this.marqueeTimer = null;
+      this.activateMarquee();
+    }, 280);
   }
 
-  private activateFileLongPress(x: number, y: number): void {
-    if (!this.longPressCard) return;
-    this.longPressActive = true;
+  private activateMarquee(): void {
+    if (this.marqueeActive) return;
+    this.marqueeActive = true;
     this.suppressFileClick = true;
-    this.longPressCard.classList.add('long-press-dragging');
-    const ghost = document.createElement('div');
-    ghost.className = 'asset-drag-ghost';
-    ghost.textContent = this.longPressCard.querySelector('.asset-name')?.textContent ?? '拖动图片';
-    document.body.append(ghost);
-    this.longPressGhost = ghost;
-    this.positionFileGhost(x, y);
-    this.updateLongPressFolder(x, y);
+    this.element.classList.add('marquee-selecting');
+    if (!this.marqueeAdditive) this.applySelection(new Set());
+    const box = document.createElement('div');
+    box.className = 'file-marquee';
+    document.body.append(box);
+    this.marquee = box;
+    this.updateMarqueeBox();
   }
 
-  private moveFileLongPress(event: PointerEvent): void {
-    if (!this.longPressCard) return;
-    if (!this.longPressActive) {
-      if (Math.hypot(event.clientX - this.longPressStart.x, event.clientY - this.longPressStart.y) > 8) {
-        this.cancelFileLongPress();
+  private moveMarquee(event: PointerEvent): void {
+    if (event.pointerId !== this.marqueePointerId && this.marqueeActive) return;
+    if (this.marqueeTimer !== null && !this.marqueeActive) {
+      if (Math.hypot(event.clientX - this.marqueeStart.x, event.clientY - this.marqueeStart.y) > 8) {
+        this.cancelMarquee();
       }
       return;
     }
+    if (!this.marqueeActive) return;
     event.preventDefault();
-    this.positionFileGhost(event.clientX, event.clientY);
-    this.updateLongPressFolder(event.clientX, event.clientY);
+    this.marqueeCurrent = { x: event.clientX, y: event.clientY };
+    this.updateMarqueeBox();
+    this.updateMarqueeSelection();
   }
 
-  private positionFileGhost(x: number, y: number): void {
-    if (!this.longPressGhost) return;
-    this.longPressGhost.style.left = `${x + 14}px`;
-    this.longPressGhost.style.top = `${y + 14}px`;
-  }
-
-  private updateLongPressFolder(x: number, y: number): void {
-    const element = document.elementFromPoint(x, y) as HTMLElement | null;
-    const row = element?.closest<HTMLElement>('.folder-row[data-folder]') ?? null;
-    const next = row && this.element.contains(row) ? row : null;
-    if (next === this.longPressTarget) return;
-    this.longPressTarget?.classList.remove('folder-drop-target');
-    this.longPressTarget = next;
-    this.longPressTarget?.classList.add('folder-drop-target');
-  }
-
-  private async finishFileLongPress(_event: PointerEvent): Promise<void> {
-    if (!this.longPressCard) return;
-    if (!this.longPressActive) {
-      this.cancelFileLongPress();
-      return;
+  private finishMarquee(event: PointerEvent): void {
+    if (event.pointerId !== this.marqueePointerId && this.marqueeActive) return;
+    if (this.marqueeTimer !== null) {
+      window.clearTimeout(this.marqueeTimer);
+      this.marqueeTimer = null;
     }
-    const targetRow = this.longPressTarget;
-    const filePath = this.longPressPath;
-    this.clearLongPressState();
-    window.setTimeout(() => { this.suppressFileClick = false; }, 450);
-    if (!targetRow) return;
-    const folder = targetRow.dataset.folder ?? '';
-    try {
-      const result = await window.nyxel.library.moveImage(filePath, folder);
-      if (!result.ok) {
-        this.callbacks.toast(`移动失败：${result.error ?? '未知错误'}`, 'error');
-        return;
-      }
-      if (!result.moved) {
-        this.callbacks.toast('图片已经在这个文件夹里', 'info');
-        return;
-      }
-      this.callbacks.toast('图片已移动到目标文件夹', 'success');
-      await this.load();
-    } catch (error) {
-      this.callbacks.toast(`移动失败：${error instanceof Error ? error.message : String(error)}`, 'error');
-    }
+    if (!this.marqueeActive) return;
+    this.updateMarqueeSelection();
+    this.finishMarqueeVisual();
+    window.setTimeout(() => { this.suppressFileClick = false; }, 400);
   }
 
-  private cancelFileLongPress(): void {
-    if (this.longPressTimer !== null) {
-      window.clearTimeout(this.longPressTimer);
-      this.longPressTimer = null;
+  private cancelMarquee(): void {
+    if (this.marqueeTimer !== null) {
+      window.clearTimeout(this.marqueeTimer);
+      this.marqueeTimer = null;
     }
-    this.clearLongPressState();
+    this.finishMarqueeVisual();
     this.suppressFileClick = false;
   }
 
-  private clearLongPressState(): void {
-    this.longPressGhost?.remove();
-    this.longPressGhost = null;
-    this.longPressTarget?.classList.remove('folder-drop-target');
-    this.longPressTarget = null;
-    this.longPressCard?.classList.remove('long-press-dragging');
-    this.longPressCard = null;
-    this.longPressPath = '';
-    this.longPressActive = false;
+  private finishMarqueeVisual(): void {
+    this.marquee?.remove();
+    this.marquee = null;
+    this.marqueeActive = false;
+    this.element.classList.remove('marquee-selecting');
+  }
+
+  private updateMarqueeBox(): void {
+    if (!this.marquee) return;
+    const left = Math.min(this.marqueeStart.x, this.marqueeCurrent.x);
+    const top = Math.min(this.marqueeStart.y, this.marqueeCurrent.y);
+    const width = Math.abs(this.marqueeCurrent.x - this.marqueeStart.x);
+    const height = Math.abs(this.marqueeCurrent.y - this.marqueeStart.y);
+    this.marquee.style.left = `${left}px`;
+    this.marquee.style.top = `${top}px`;
+    this.marquee.style.width = `${width}px`;
+    this.marquee.style.height = `${height}px`;
+  }
+
+  private updateMarqueeSelection(): void {
+    if (!this.marqueeActive) return;
+    const left = Math.min(this.marqueeStart.x, this.marqueeCurrent.x);
+    const top = Math.min(this.marqueeStart.y, this.marqueeCurrent.y);
+    const right = Math.max(this.marqueeStart.x, this.marqueeCurrent.x);
+    const bottom = Math.max(this.marqueeStart.y, this.marqueeCurrent.y);
+    const next = new Set(this.marqueeAdditive ? this.marqueeBaseSelection : []);
+    this.grid.querySelectorAll<HTMLElement>('.asset-card[data-file-path]').forEach((card) => {
+      const rect = card.getBoundingClientRect();
+      if (rect.right < left || rect.left > right || rect.bottom < top || rect.top > bottom) return;
+      const filePath = card.dataset.filePath ?? '';
+      if (filePath) next.add(filePath);
+    });
+    this.applySelection(next);
+  }
+
+  private applySelection(paths: Set<string>): void {
+    this.selectedPaths = new Set(paths);
+    this.grid.querySelectorAll<HTMLElement>('.asset-card[data-file-path]').forEach((card) => {
+      card.classList.toggle('selected', this.selectedPaths.has(card.dataset.filePath ?? ''));
+    });
+    const count = this.selectedPaths.size;
+    this.callbacks.status.set(undefined, count ? `已选择 ${count} 张图片` : '', undefined);
+  }
+
+  private selectSingleFile(filePath: string, additive: boolean): void {
+    const next = new Set(additive ? this.selectedPaths : []);
+    if (additive && next.has(filePath)) next.delete(filePath);
+    else next.add(filePath);
+    this.applySelection(next);
+  }
+
+  private clearSelection(): void {
+    this.applySelection(new Set());
   }
 
   private isExternalFileDrag(event: DragEvent): boolean {
@@ -815,6 +1044,7 @@ export class FilesView {
   }
 
   private async load(): Promise<void> {
+    this.applySelection(new Set());
     if (this.mode === 'gallery') {
       await this.loadGallery();
     } else if (this.mode === 'textures') {
@@ -833,7 +1063,7 @@ export class FilesView {
         texturesDir: ''
       };
       this.renderFiles(result.files);
-      this.callbacks.status.set('图库', `${result.files.length} 张截图`, result.root);
+      this.callbacks.status.set('图库', `${result.files.length} 张截图`, '');
     } catch (error) {
       this.callbacks.toast(`读取图库失败：${error instanceof Error ? error.message : String(error)}`, 'error');
     }
@@ -876,7 +1106,7 @@ export class FilesView {
         videosDir: result.root
       };
       this.renderFiles(result.files);
-      this.callbacks.status.set('视频作品', `${result.files.length} 个视频`, result.root);
+      this.callbacks.status.set('视频作品', `${result.files.length} 个视频`, '');
     } catch (error) {
       this.callbacks.toast(`读取视频作品失败：${error instanceof Error ? error.message : String(error)}`, 'error');
     }
@@ -928,8 +1158,8 @@ export class FilesView {
     card.dataset.filePath = file.path;
     card.dataset.aspect = '1.6';
     card.title = this.mode === 'textures'
-      ? '单击打开贴图；长按并拖动到左侧文件夹可移动'
-      : '单击打开图片';
+      ? '单击选择；双击放大预览；长按左键框选；右键编辑 / 删除 / 迁移'
+      : '单击选择；双击放大预览；长按左键框选；右键编辑 / 删除';
 
     const thumb = document.createElement('div');
     thumb.className = 'asset-thumb';
@@ -1283,12 +1513,115 @@ export class FilesView {
   private showFileContext(card: HTMLElement, x: number, y: number): void {
     const filePath = card.dataset.filePath ?? '';
     if (!filePath) return;
-    this.openContextMenu(x, y, [
-      { label: '打开', action: () => void this.callbacks.openTexturePath(filePath) },
-      { label: '在文件夹中显示', action: () => void window.nyxel.app.showItemInFolder(filePath) },
-      { label: '打开本地资源库', action: () => void this.openRoot() },
-      { label: '删除文件', danger: true, action: () => void this.deleteFile(filePath) }
-    ]);
+    const paths = this.selectedPaths.has(filePath) && this.selectedPaths.size
+      ? [...this.selectedPaths]
+      : [filePath];
+    const multiple = paths.length > 1;
+    const items: Array<{ label: string; danger?: boolean; action: () => void }> = [
+      {
+        label: multiple ? '编辑第一张' : '编辑',
+        action: () => void this.callbacks.openTexturePath(paths[0])
+      }
+    ];
+    if (!multiple) {
+      items.push({
+        label: '在文件夹中显示',
+        action: () => void window.nyxel.app.showItemInFolder(paths[0])
+      });
+    }
+    if (this.mode === 'textures') {
+      items.push({
+        label: '迁移到文件夹…',
+        action: () => this.openImageMoveModal(paths)
+      });
+    }
+    items.push({
+      label: multiple ? `删除选中（${paths.length}）` : '删除文件',
+      danger: true,
+      action: () => void this.deleteSelected(paths)
+    });
+    items.push({ label: '打开本地资源库', action: () => void this.openRoot() });
+    if (this.selectedPaths.size) {
+      items.push({ label: '取消选择', action: () => this.applySelection(new Set()) });
+    }
+    this.openContextMenu(x, y, items);
+  }
+
+  private async deleteSelected(paths: string[]): Promise<void> {
+    const unique = [...new Set(paths)];
+    if (!unique.length) return;
+    const name = unique[0].split(/[\\/]/).pop() ?? '这个文件';
+    const message = unique.length === 1
+      ? `将「${name}」移到回收站？`
+      : `将选中的 ${unique.length} 个文件移到回收站？`;
+    if (!window.confirm(message)) return;
+    let deleted = 0;
+    let firstError = '';
+    for (const filePath of unique) {
+      try {
+        const result = await window.nyxel.library.delete(filePath);
+        if (result.ok) deleted += 1;
+        else firstError = result.error ?? '未知错误';
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (deleted) {
+      this.applySelection(new Set());
+      this.callbacks.toast(`已将 ${deleted} 个文件移到回收站`, 'success');
+      await this.load();
+    }
+    if (firstError) this.callbacks.toast(`部分文件删除失败：${firstError}`, 'error');
+  }
+
+  private openImageMoveModal(paths: string[]): void {
+    if (!this.moveModal || !this.moveTarget) return;
+    this.moveSource = '';
+    this.moveImagePaths = [...new Set(paths)];
+    const title = this.moveModal.querySelector('.move-modal-card h3');
+    if (title) title.textContent = '迁移图片';
+    const desc = this.moveModal.querySelector('#move-desc');
+    if (desc) desc.textContent = `把选中的 ${this.moveImagePaths.length} 张图片移动到：`;
+    this.moveTarget.innerHTML = '';
+    const rootOption = document.createElement('option');
+    rootOption.value = '';
+    rootOption.textContent = '全部贴图（根目录）';
+    this.moveTarget.append(rootOption);
+    this.element.querySelectorAll<HTMLElement>('.folder-row[data-folder]').forEach((row) => {
+      const value = row.dataset.folder ?? '';
+      if (!value) return;
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value.split('/').join(' / ');
+      this.moveTarget?.append(option);
+    });
+    if (this.currentFolder) this.moveTarget.value = this.currentFolder;
+    if (this.moveError) this.moveError.textContent = '';
+    this.moveModal.classList.remove('hidden');
+  }
+
+  private async moveImagesToFolder(paths: string[], folder: string): Promise<void> {
+    let moved = 0;
+    let skipped = 0;
+    let firstError = '';
+    for (const filePath of paths) {
+      try {
+        const result = await window.nyxel.library.moveImage(filePath, folder);
+        if (!result.ok) firstError = result.error ?? '未知错误';
+        else if (result.moved) moved += 1;
+        else skipped += 1;
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (moved) {
+      this.applySelection(new Set());
+      this.callbacks.toast(`已迁移 ${moved} 张图片`, 'success');
+      await this.load();
+    } else if (skipped) {
+      this.callbacks.toast('所选图片已经在目标文件夹', 'info');
+    }
+    if (firstError) this.callbacks.toast(`部分图片迁移失败：${firstError}`, 'error');
   }
 
   private openContextMenu(
@@ -1322,6 +1655,9 @@ export class FilesView {
   private openMoveFolderModal(source: string): void {
     if (!this.moveModal || !this.moveTarget) return;
     this.moveSource = source;
+    this.moveImagePaths = [];
+    const title = this.moveModal.querySelector('.move-modal-card h3');
+    if (title) title.textContent = '迁移文件夹';
     const desc = this.moveModal.querySelector('#move-desc');
     if (desc) desc.textContent = `把「${source.split('/').pop() ?? source}」移动到：`;
     this.moveTarget.innerHTML = '';
@@ -1346,13 +1682,20 @@ export class FilesView {
     this.moveModal?.classList.add('hidden');
     if (this.moveError) this.moveError.textContent = '';
     this.moveSource = '';
+    this.moveImagePaths = [];
   }
 
   private async confirmMoveFolder(): Promise<void> {
-    if (!this.moveTarget || !this.moveSource) return;
+    if (!this.moveTarget) return;
     const target = this.moveTarget.value;
     const source = this.moveSource;
+    const imagePaths = this.moveImagePaths;
     this.closeMoveModal();
+    if (imagePaths.length) {
+      await this.moveImagesToFolder(imagePaths, target);
+      return;
+    }
+    if (!source) return;
     await this.moveFolder(source, target);
   }
 

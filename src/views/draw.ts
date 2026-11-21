@@ -133,12 +133,17 @@ interface TransformState {
   original: HTMLCanvasElement;
   bounds: { x: number; y: number; width: number; height: number };
   box: { x: number; y: number; width: number; height: number };
+  rotation: number;
   drag: {
-    mode: 'move' | 'nw' | 'ne' | 'sw' | 'se';
+    mode: 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'rotate';
     pointerId: number;
     startX: number;
     startY: number;
     box: { x: number; y: number; width: number; height: number };
+    rotation: number;
+    startAngle: number;
+    startLocalX: number;
+    startLocalY: number;
   } | null;
 }
 
@@ -162,7 +167,7 @@ export class DrawView {
   private fgColorInput: HTMLInputElement;
   private bgColorInput: HTMLInputElement;
   private widthInput: HTMLInputElement;
-  private widthValue: HTMLElement;
+  private widthNumberInput: HTMLInputElement;
   private canvasWrap: HTMLElement;
   private viewBadge: HTMLButtonElement;
   private viewZoomLabel: HTMLElement;
@@ -384,7 +389,7 @@ export class DrawView {
             <div class="notebook-panel-row draw-brush-size">
               <span>大小</span>
               <input id="draw-width" type="range" min="1" max="60" step="1" value="8">
-              <strong id="draw-width-value">8</strong>
+              <input id="draw-width-number" class="draw-width-number" type="number" min="1" max="4000" step="1" value="8" aria-label="自定义画笔大小">
             </div>
             <div class="draw-quick-fill-row">
               <button type="button" data-draw-fill-layer title="用当前颜色填充整个图层（Alt+Delete）">快速填充整层</button>
@@ -499,7 +504,7 @@ export class DrawView {
     this.fgColorInput = this.element.querySelector('#draw-fg-color') as HTMLInputElement;
     this.bgColorInput = this.element.querySelector('#draw-bg-color') as HTMLInputElement;
     this.widthInput = this.element.querySelector('#draw-width') as HTMLInputElement;
-    this.widthValue = this.element.querySelector('#draw-width-value') as HTMLElement;
+    this.widthNumberInput = this.element.querySelector('#draw-width-number') as HTMLInputElement;
     this.canvasWrap = this.element.querySelector('#draw-canvas-wrap') as HTMLElement;
     this.viewBadge = this.element.querySelector('#draw-view-badge') as HTMLButtonElement;
     this.viewZoomLabel = this.element.querySelector('#draw-view-zoom') as HTMLElement;
@@ -680,7 +685,7 @@ export class DrawView {
     this.element.querySelectorAll<HTMLElement>('[data-draw-tool]').forEach((item) => {
       item.classList.toggle('active', item.dataset.drawTool === tool);
     });
-    this.canvas.style.cursor = tool === 'eraser' ? 'cell' : tool === 'fill' || tool === 'gradient' ? 'copy' : 'crosshair';
+    this.canvas.style.cursor = this.paintCursor();
     this.callbacks.status.set(undefined, undefined, this.toolLabel());
   }
 
@@ -1164,6 +1169,11 @@ export class DrawView {
         const scaleY = transform.box.height / Math.max(1, transform.bounds.height);
         const destX = transform.box.x - transform.bounds.x * scaleX;
         const destY = transform.box.y - transform.bounds.y * scaleY;
+        const localCenterX = transform.box.x + transform.box.width / 2 - centerX;
+        const localCenterY = transform.box.y + transform.box.height / 2 - centerY;
+        this.ctx.translate(localCenterX, localCenterY);
+        this.ctx.rotate(transform.rotation);
+        this.ctx.translate(-localCenterX, -localCenterY);
         this.ctx.drawImage(transform.original, destX - centerX, destY - centerY, CANVAS_WIDTH * scaleX, CANVAS_HEIGHT * scaleY);
       } else {
         this.ctx.drawImage(layer.canvas, -centerX, -centerY);
@@ -1841,8 +1851,17 @@ export class DrawView {
     });
 
     this.widthInput.addEventListener('input', () => {
-      this.lineWidth = Number(this.widthInput.value) || 8;
-      this.widthValue.textContent = String(this.lineWidth);
+      this.setBrushWidth(Number(this.widthInput.value));
+    });
+    this.widthNumberInput.addEventListener('change', () => {
+      this.setBrushWidth(Number(this.widthNumberInput.value));
+    });
+    this.widthNumberInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        this.setBrushWidth(Number(this.widthNumberInput.value));
+        this.widthNumberInput.blur();
+      }
     });
     this.element.querySelector('[data-draw-fill-layer]')?.addEventListener('click', () => {
       this.fillLayer(this.color, '当前颜色');
@@ -2372,11 +2391,12 @@ export class DrawView {
       original,
       bounds,
       box: { ...bounds },
+      rotation: 0,
       drag: null
     };
     this.canvas.style.cursor = 'move';
     this.renderComposite();
-    this.callbacks.status.set('绘画', `${CANVAS_WIDTH} × ${CANVAS_HEIGHT}`, '自由变换：拖动移动 · 拖角缩放 · Enter 应用 · Esc 取消');
+    this.callbacks.status.set('绘画', `${CANVAS_WIDTH} × ${CANVAS_HEIGHT}`, '自由变换：拖动移动 · 拖角缩放 · 角外拖动旋转 · Enter 应用 · Esc 取消');
   }
 
   private transformBusy(): boolean {
@@ -2388,9 +2408,26 @@ export class DrawView {
   private cancelTransform(): void {
     if (!this.transformState) return;
     this.transformState = null;
-    this.canvas.style.cursor = this.tool === 'eraser' ? 'cell' : this.tool === 'fill' || this.tool === 'gradient' ? 'copy' : 'crosshair';
+    this.canvas.style.cursor = this.paintCursor();
     this.renderComposite();
     this.callbacks.status.set('绘画', `${CANVAS_WIDTH} × ${CANVAS_HEIGHT}`, '已取消自由变换');
+  }
+
+  private paintCursor(): string {
+    if (this.tool === 'eraser') return 'cell';
+    if (this.tool === 'fill' || this.tool === 'gradient') return 'copy';
+    return 'default';
+  }
+
+  private setBrushWidth(value: number): void {
+    const numeric = Number(value);
+    const next = Number.isFinite(numeric) && numeric > 0
+      ? Math.max(1, Math.min(4000, Math.round(numeric)))
+      : this.lineWidth;
+    this.lineWidth = next;
+    this.widthInput.max = String(Math.max(60, next));
+    this.widthInput.value = String(next);
+    this.widthNumberInput.value = String(next);
   }
 
   private applyTransform(): void {
@@ -2409,31 +2446,54 @@ export class DrawView {
     temp.width = CANVAS_WIDTH;
     temp.height = CANVAS_HEIGHT;
     const tempCtx = temp.getContext('2d') as CanvasRenderingContext2D;
+    const centerBoxX = transform.box.x + transform.box.width / 2;
+    const centerBoxY = transform.box.y + transform.box.height / 2;
+    tempCtx.translate(centerBoxX, centerBoxY);
+    tempCtx.rotate(transform.rotation);
+    tempCtx.translate(-centerBoxX, -centerBoxY);
     tempCtx.drawImage(transform.original, destX, destY, CANVAS_WIDTH * scaleX, CANVAS_HEIGHT * scaleY);
     layer.ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     layer.ctx.drawImage(temp, 0, 0);
     this.transformState = null;
-    this.canvas.style.cursor = this.tool === 'eraser' ? 'cell' : this.tool === 'fill' || this.tool === 'gradient' ? 'copy' : 'crosshair';
+    this.canvas.style.cursor = this.paintCursor();
     this.pushLayerHistory(layer);
     this.renderComposite();
     this.callbacks.status.set('绘画', `${CANVAS_WIDTH} × ${CANVAS_HEIGHT}`, '自由变换已应用');
   }
 
-  private transformHandleAt(point: { x: number; y: number }): 'move' | 'nw' | 'ne' | 'sw' | 'se' | null {
+  private transformHandleAt(
+    point: { x: number; y: number }
+  ): 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'rotate' | null {
     const transform = this.transformState;
     if (!transform) return null;
-    const tolerance = 16;
     const { x, y, width, height } = transform.box;
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
+    const dx = point.x - centerX;
+    const dy = point.y - centerY;
+    const cos = Math.cos(-transform.rotation);
+    const sin = Math.sin(-transform.rotation);
+    const localX = centerX + dx * cos - dy * sin;
+    const localY = centerY + dx * sin + dy * cos;
+    const inside = localX >= x && localX <= x + width && localY >= y && localY <= y + height;
     const corners: Array<{ mode: 'nw' | 'ne' | 'sw' | 'se'; x: number; y: number }> = [
       { mode: 'nw', x, y },
       { mode: 'ne', x: x + width, y },
       { mode: 'sw', x, y: y + height },
       { mode: 'se', x: x + width, y: y + height }
     ];
+    let nearest: 'nw' | 'ne' | 'sw' | 'se' | null = null;
+    let nearestDistance = Infinity;
     for (const corner of corners) {
-      if (Math.abs(point.x - corner.x) <= tolerance && Math.abs(point.y - corner.y) <= tolerance) return corner.mode;
+      const distance = Math.hypot(localX - corner.x, localY - corner.y);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = corner.mode;
+      }
     }
-    if (point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height) return 'move';
+    if (inside && nearest && nearestDistance <= 18) return nearest;
+    if (inside) return 'move';
+    if (nearest && nearestDistance <= 36) return 'rotate';
     return null;
   }
 
@@ -2443,13 +2503,25 @@ export class DrawView {
     const mode = this.transformHandleAt(point);
     if (!mode) return;
     event.preventDefault();
+    const box = { ...this.transformState.box };
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+    const dx = point.x - centerX;
+    const dy = point.y - centerY;
+    const cos = Math.cos(-this.transformState.rotation);
+    const sin = Math.sin(-this.transformState.rotation);
     this.transformState.drag = {
       mode,
       pointerId: event.pointerId,
       startX: point.x,
       startY: point.y,
-      box: { ...this.transformState.box }
+      box,
+      rotation: this.transformState.rotation,
+      startAngle: Math.atan2(dy, dx),
+      startLocalX: dx * cos - dy * sin,
+      startLocalY: dx * sin + dy * cos
     };
+    this.canvas.style.cursor = mode === 'rotate' ? 'grabbing' : this.canvas.style.cursor;
     try { this.canvas.setPointerCapture(event.pointerId); } catch { /* synthetic pointer */ }
   }
 
@@ -2459,35 +2531,73 @@ export class DrawView {
     if (!transform || !drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
     const point = this.pointerPosition(event);
-    const dx = point.x - drag.startX;
-    const dy = point.y - drag.startY;
-    if (drag.mode === 'move') {
-      transform.box = { ...drag.box, x: drag.box.x + dx, y: drag.box.y + dy };
-    } else {
-      let x1 = drag.box.x;
-      let y1 = drag.box.y;
-      let x2 = drag.box.x + drag.box.width;
-      let y2 = drag.box.y + drag.box.height;
-      if (drag.mode === 'nw' || drag.mode === 'sw') x1 += dx;
-      else x2 += dx;
-      if (drag.mode === 'nw' || drag.mode === 'ne') y1 += dy;
-      else y2 += dy;
-      const minimum = 12;
-      if (x2 - x1 < minimum) {
-        if (drag.mode === 'nw' || drag.mode === 'sw') x1 = x2 - minimum;
-        else x2 = x1 + minimum;
+    const centerX = drag.box.x + drag.box.width / 2;
+    const centerY = drag.box.y + drag.box.height / 2;
+    const dx = point.x - centerX;
+    const dy = point.y - centerY;
+
+    if (drag.mode === 'rotate') {
+      const angle = Math.atan2(dy, dx);
+      let rotation = drag.rotation + angle - drag.startAngle;
+      if (event.shiftKey) {
+        const step = Math.PI / 12;
+        rotation = Math.round(rotation / step) * step;
       }
-      if (y2 - y1 < minimum) {
-        if (drag.mode === 'nw' || drag.mode === 'ne') y1 = y2 - minimum;
-        else y2 = y1 + minimum;
-      }
-      transform.box = {
-        x: Math.min(x1, x2),
-        y: Math.min(y1, y2),
-        width: Math.abs(x2 - x1),
-        height: Math.abs(y2 - y1)
-      };
+      transform.rotation = rotation;
+      this.renderComposite();
+      return;
     }
+
+    if (drag.mode === 'move') {
+      transform.box = {
+        ...drag.box,
+        x: drag.box.x + (point.x - drag.startX),
+        y: drag.box.y + (point.y - drag.startY)
+      };
+      this.renderComposite();
+      return;
+    }
+
+    const cos = Math.cos(-drag.rotation);
+    const sin = Math.sin(-drag.rotation);
+    const worldCos = Math.cos(drag.rotation);
+    const worldSin = Math.sin(drag.rotation);
+    const localX = dx * cos - dy * sin;
+    const localY = dx * sin + dy * cos;
+    const moveX = localX - drag.startLocalX;
+    const moveY = localY - drag.startLocalY;
+    let left = -drag.box.width / 2;
+    let right = drag.box.width / 2;
+    let top = -drag.box.height / 2;
+    let bottom = drag.box.height / 2;
+    if (drag.mode === 'nw' || drag.mode === 'sw') left += moveX;
+    else right += moveX;
+    if (drag.mode === 'nw' || drag.mode === 'ne') top += moveY;
+    else bottom += moveY;
+
+    const minimum = 12;
+    if (right - left < minimum) {
+      if (drag.mode === 'nw' || drag.mode === 'sw') left = right - minimum;
+      else right = left + minimum;
+    }
+    if (bottom - top < minimum) {
+      if (drag.mode === 'nw' || drag.mode === 'ne') top = bottom - minimum;
+      else bottom = top + minimum;
+    }
+
+    const width = right - left;
+    const height = bottom - top;
+    const localCenterX = (left + right) / 2;
+    const localCenterY = (top + bottom) / 2;
+    const worldCenterX = centerX + localCenterX * worldCos - localCenterY * worldSin;
+    const worldCenterY = centerY + localCenterX * worldSin + localCenterY * worldCos;
+    transform.box = {
+      x: worldCenterX - width / 2,
+      y: worldCenterY - height / 2,
+      width,
+      height
+    };
+    transform.rotation = drag.rotation;
     this.renderComposite();
   }
 
@@ -2511,6 +2621,11 @@ export class DrawView {
     this.ctx.scale(state.scale, state.scale);
     const boxX = transform.box.x - centerX;
     const boxY = transform.box.y - centerY;
+    const boxCenterX = boxX + transform.box.width / 2;
+    const boxCenterY = boxY + transform.box.height / 2;
+    this.ctx.translate(boxCenterX, boxCenterY);
+    this.ctx.rotate(transform.rotation);
+    this.ctx.translate(-boxCenterX, -boxCenterY);
     this.ctx.setLineDash([9 / scale, 6 / scale]);
     this.ctx.lineWidth = 4 / scale;
     this.ctx.strokeStyle = 'rgba(8, 8, 8, 0.7)';
@@ -2626,9 +2741,10 @@ export class DrawView {
     if (this.transformState) {
       const hit = this.transformHandleAt(this.pointerPosition(event));
       this.canvas.style.cursor = hit === 'move' ? 'move'
-        : hit === 'nw' || hit === 'se' ? 'nwse-resize'
-          : hit === 'ne' || hit === 'sw' ? 'nesw-resize'
-            : 'default';
+        : hit === 'rotate' ? 'grab'
+          : hit === 'nw' || hit === 'se' ? 'nwse-resize'
+            : hit === 'ne' || hit === 'sw' ? 'nesw-resize'
+              : 'default';
       return;
     }
     if (!this.lassoing && !this.shapeDraft && !this.drawing) return;

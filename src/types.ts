@@ -1,4 +1,28 @@
-export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video' | 'videos' | 'draw' | 'download' | 'notes';
+import type {
+  MotionCaptureConfig,
+  MotionCaptureExportResponse,
+  MotionCaptureLogResponse,
+  MotionCaptureProgress,
+  MotionCaptureResult,
+  MotionCaptureRunOptions,
+  MotionCaptureRunResponse,
+  MotionCaptureRuntime,
+  SkeletonAnimation
+} from '../electron/motion_capture/contracts';
+
+export type {
+  MotionCaptureConfig,
+  MotionCaptureExportResponse,
+  MotionCaptureLogResponse,
+  MotionCaptureProgress,
+  MotionCaptureResult,
+  MotionCaptureRunOptions,
+  MotionCaptureRunResponse,
+  MotionCaptureRuntime,
+  SkeletonAnimation
+};
+
+export type ViewName = 'home' | 'texture' | 'model' | 'color' | 'gallery' | 'textures' | 'video' | 'videos' | 'draw' | 'download' | 'notes' | 'motion';
 export type Theme = 'dark' | 'light' | 'system';
 export type UpdateChannel = 'stable' | 'beta';
 
@@ -322,6 +346,7 @@ export interface NyxelApi {
     openModel: () => Promise<string | null>;
     openVideo: () => Promise<string | null>;
     openDirectory: () => Promise<string | null>;
+    openExecutable: () => Promise<string | null>;
   };
   file: {
     read: (filePath: string) => Promise<Uint8Array>;
@@ -415,6 +440,18 @@ export interface NyxelApi {
     save: (notePath: string, updates: { text?: string; textHtml?: string; drawing?: string; image?: string; imageRect?: VideoNoteImageRect; canvasWidth?: number; canvasHeight?: number }) => Promise<{ ok: boolean; note?: VideoNoteDocument; path?: string; error?: string }>;
     delete: (notePath: string) => Promise<{ ok: boolean; error?: string }>;
     openDir: () => Promise<{ ok: boolean; dir: string; error?: string }>;
+  };
+  motionCapture: {
+    config: () => Promise<MotionCaptureConfig>;
+    saveConfig: (config: Partial<MotionCaptureConfig>) => Promise<MotionCaptureConfig>;
+    runtime: () => Promise<MotionCaptureRuntime>;
+    start: (options: MotionCaptureRunOptions) => Promise<MotionCaptureRunResponse>;
+    cancel: (jobId?: string) => Promise<boolean>;
+    preview: (jobId: string) => Promise<SkeletonAnimation | null>;
+    exportResult: (jobId: string) => Promise<MotionCaptureExportResponse>;
+    exportFbx: (jobId: string, preset: 'unreal' | 'threejs', profile?: 'generic' | 'ue5') => Promise<MotionCaptureExportResponse>;
+    log: (jobId: string) => Promise<MotionCaptureLogResponse>;
+    onProgress: (callback: (progress: MotionCaptureProgress) => void) => () => void;
   };
   audio: {
     source: () => Promise<{ id: string; name: string } | null>;

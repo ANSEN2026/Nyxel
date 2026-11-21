@@ -11,10 +11,15 @@ interface TransformState {
 }
 
 const UPSCAYL_MODEL_LABELS: Record<string, string> = {
-  'upscayl-standard-4x': 'Standard 4x',
-  'ultrasharp-4x': 'Ultrasharp 4x',
-  'ultramix-balanced-4x': 'Ultramix Balanced 4x',
-  'remacri-4x': 'Remacri 4x'
+  'ultrasharp-4x': 'Ultrasharp 4x · 锐利（线条推荐）',
+  'upscayl-standard-4x': 'Standard 4x · 通用',
+  'ultramix-balanced-4x': 'Ultramix Balanced 4x · 均衡',
+  'remacri-4x': 'Remacri 4x · 照片'
+};
+
+const REALESRGAN_MODEL_LABELS: Record<string, string> = {
+  'realesrgan-x4plus-anime': 'Anime x4 · 线条 / 特效贴图',
+  'realesrgan-x4plus': 'x4plus · 通用 / 照片'
 };
 
 const VERTEX_SHADER = `
@@ -141,11 +146,17 @@ export class TextureView {
   private composeChildOpacityValue: HTMLElement;
   private composeTarget: HTMLSelectElement;
   private composeAlphaMode: HTMLSelectElement;
+  private composeChildGroup: HTMLElement;
+  private composeAddChild: HTMLButtonElement;
   private composeColorRow: HTMLElement;
   private composeChannelRow: HTMLElement;
+  private composeFeatherRow: HTMLElement;
   private composeKey: HTMLInputElement;
   private composeTolerance: HTMLInputElement;
   private composeToleranceValue: HTMLElement;
+  private composeFeather: HTMLInputElement;
+  private composeFeatherValue: HTMLElement;
+  private composeGroupDrag: { group: HTMLElement; pointerId: number; grip: HTMLElement } | null = null;
   private composeChannel: HTMLSelectElement;
   private composeInvert: HTMLInputElement;
   private composePickButton: HTMLButtonElement;
@@ -174,7 +185,8 @@ export class TextureView {
   private aiEngine: AiEngine = 'upscayl';
   private aiModelRow: HTMLElement;
   private aiModelSelect: HTMLSelectElement;
-  private aiUpscaylModel = 'upscayl-standard-4x';
+  private aiUpscaylModel = 'ultrasharp-4x';
+  private aiRealesrganModel = 'realesrgan-x4plus-anime';
   private aiAvailable = false;
   private aiBusy = false;
 
@@ -205,8 +217,8 @@ export class TextureView {
       <div class="view-toolbar texture-actionbar">
         <button class="primary" data-action="open">打开贴图</button>
         <span class="spacer"></span>
-        <button data-action="ai">AI 超分</button>
-        <button data-action="export">导出 PNG</button>
+        <button data-action="ai" title="AI 超分">超分</button>
+        <button data-action="export" title="导出 PNG">导出</button>
         <span class="toolbar-sep"></span>
         <button data-action="undo">撤销</button>
         <button data-action="redo">重做</button>
@@ -267,9 +279,10 @@ export class TextureView {
               <strong>细节调节</strong>
               <span>父级 / 子级 · 去底 / 叠加</span>
             </div>
+            <button type="button" class="compose-add-child" data-compose-add-child title="载入附件图 2">＋ 附件图</button>
           </div>
           <div class="compose-panel-body">
-            <section class="compose-group">
+            <section class="compose-group" data-compose-group="parent">
               <div class="compose-group-title">父级图片</div>
               <div class="compose-layer parent">
                 <span class="compose-layer-badge">父</span>
@@ -299,7 +312,7 @@ export class TextureView {
               </div>
             </section>
 
-            <section class="compose-group">
+            <section class="compose-group" data-compose-group="child">
               <div class="compose-group-title">子级图片</div>
               <div class="compose-layer child standalone">
                 <span class="compose-layer-badge child">子</span>
@@ -336,11 +349,11 @@ export class TextureView {
               </div>
             </section>
 
-            <section class="compose-group">
+            <section class="compose-group" data-compose-group="view">
               <div class="compose-group-title">视图</div>
               <div class="compose-view-tools">
                 <div class="compose-view-row">
-                  <button data-action="pack" class="compose-tool-button">通道打包</button>
+                  <button data-action="pack" class="compose-tool-button" title="通道打包">打包…</button>
                   <span class="compose-view-hint">右键画布：适配 / 旋转 / 翻转</span>
                 </div>
                 <div class="compose-view-row">
@@ -364,7 +377,7 @@ export class TextureView {
               </div>
             </section>
 
-            <section class="compose-group">
+            <section class="compose-group" data-compose-group="adjust">
               <div class="compose-group-title">调整</div>
               <div class="compose-view-row">
                 <span class="compose-view-label">调整</span>
@@ -384,7 +397,7 @@ export class TextureView {
               </div>
             </section>
 
-            <section class="compose-group">
+            <section class="compose-group" data-compose-group="transparency">
               <div class="compose-group-title">透明处理</div>
               <div class="compose-row">
                 <span class="compose-label">目标</span>
@@ -401,11 +414,16 @@ export class TextureView {
               <div class="compose-row" id="compose-color-row">
                 <span class="compose-label">底色</span>
                 <input id="compose-key" type="color" value="#ffffff">
-                <button data-compose-pick>从预览拾取</button>
+                <button data-compose-pick title="从预览拾取底色">拾取</button>
                 <label class="compose-inline">容差
                   <input id="compose-tolerance" type="range" min="0" max="128" step="1" value="18">
                   <span id="compose-tolerance-value">18</span>
                 </label>
+              </div>
+              <div class="compose-row" id="compose-feather-row">
+                <span class="compose-label">柔边</span>
+                <input id="compose-feather" type="range" min="0" max="32" step="1" value="0">
+                <span id="compose-feather-value" class="compose-value">0</span>
               </div>
               <div class="compose-row hidden" id="compose-channel-row">
                 <span class="compose-label">遮罩通道</span>
@@ -420,14 +438,14 @@ export class TextureView {
               </div>
             </section>
 
-            <section class="compose-group">
+            <section class="compose-group" data-compose-group="preview">
               <div class="compose-group-title">预览</div>
               <div class="pack-preview-wrap compose-preview-wrap"><canvas id="compose-preview"></canvas></div>
               <div class="pack-actions">
                 <span class="pack-hint" id="compose-size"></span>
                 <span class="spacer"></span>
-                <button class="primary" data-compose-apply>应用到当前贴图</button>
-                <button data-compose-export>导出 PNG</button>
+                <button class="primary" data-compose-apply title="应用到当前贴图">应用</button>
+                <button data-compose-export title="导出 PNG">导出</button>
               </div>
             </section>
           </div>
@@ -449,14 +467,14 @@ export class TextureView {
               <label for="ai-engine">超分引擎</label>
               <select id="ai-engine">
                 <option value="upscayl">Upscayl</option>
-                <option value="realesrgan">Real-ESRGAN x4plus</option>
+                <option value="realesrgan">Real-ESRGAN</option>
               </select>
             </div>
             <div class="ai-engine-row" id="ai-model-row">
-              <label for="ai-model">Upscayl 模型</label>
+              <label for="ai-model">超分模型</label>
               <select id="ai-model">
+                <option value="ultrasharp-4x">Ultrasharp 4x · 锐利（线条推荐）</option>
                 <option value="upscayl-standard-4x">Standard 4x · 通用</option>
-                <option value="ultrasharp-4x">Ultrasharp 4x · 锐利</option>
                 <option value="ultramix-balanced-4x">Ultramix Balanced 4x · 均衡</option>
                 <option value="remacri-4x">Remacri 4x · 照片</option>
               </select>
@@ -474,11 +492,18 @@ export class TextureView {
               </div>
             </div>
             <div class="ai-group">
-              <div class="ai-group-title" id="ai-engine-label">AI 超分（Upscayl Standard 4x）</div>
+              <div class="ai-group-title" id="ai-engine-label">AI 超分（Upscayl Ultrasharp 4x）</div>
               <div class="ai-buttons">
                 <button data-ai-scale="2">2×</button>
                 <button data-ai-scale="3">3×</button>
                 <button data-ai-scale="4">4×</button>
+              </div>
+            </div>
+            <div class="ai-group">
+              <div class="ai-group-title">特效贴图预设</div>
+              <div class="ai-buttons">
+                <button data-ai-preset="vfx" title="Real-ESRGAN Anime：线条干净、边缘清晰，适合遮罩和特效贴图；纹理会被适度平滑">线条 / 特效 4×</button>
+                <button data-ai-preset="texture" title="Upscayl Ultrasharp：强化纹理和边缘细节，可能放大噪点">纹理细节 4×</button>
               </div>
             </div>
             <div class="ai-actions">
@@ -540,11 +565,16 @@ export class TextureView {
     this.composeChildOpacityValue = this.element.querySelector('#compose-child-opacity-value') as HTMLElement;
     this.composeTarget = this.element.querySelector('#compose-target') as HTMLSelectElement;
     this.composeAlphaMode = this.element.querySelector('#compose-alpha-mode') as HTMLSelectElement;
+    this.composeChildGroup = this.element.querySelector('[data-compose-group="child"]') as HTMLElement;
+    this.composeAddChild = this.element.querySelector('[data-compose-add-child]') as HTMLButtonElement;
     this.composeColorRow = this.element.querySelector('#compose-color-row') as HTMLElement;
     this.composeChannelRow = this.element.querySelector('#compose-channel-row') as HTMLElement;
+    this.composeFeatherRow = this.element.querySelector('#compose-feather-row') as HTMLElement;
     this.composeKey = this.element.querySelector('#compose-key') as HTMLInputElement;
     this.composeTolerance = this.element.querySelector('#compose-tolerance') as HTMLInputElement;
     this.composeToleranceValue = this.element.querySelector('#compose-tolerance-value') as HTMLElement;
+    this.composeFeather = this.element.querySelector('#compose-feather') as HTMLInputElement;
+    this.composeFeatherValue = this.element.querySelector('#compose-feather-value') as HTMLElement;
     this.composeChannel = this.element.querySelector('#compose-channel') as HTMLSelectElement;
     this.composeInvert = this.element.querySelector('#compose-invert') as HTMLInputElement;
     this.composePickButton = this.element.querySelector('[data-compose-pick]') as HTMLButtonElement;
@@ -600,9 +630,11 @@ export class TextureView {
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
     this.camera.position.set(0, 0, 1);
 
+    this.setupComposeGroups();
     this.bindEvents();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.body);
+    this.resizeObserver.observe(this.canvas);
     this.resize();
   }
 
@@ -619,15 +651,23 @@ export class TextureView {
     this.element.querySelector('[data-ai-cancel]')?.addEventListener('click', () => void this.cancelAi());
     this.aiEngineSelect.addEventListener('change', () => {
       this.aiEngine = (this.aiEngineSelect.value as AiEngine) || 'upscayl';
+      this.syncAiModelOptions();
       this.aiAvailable = false;
       this.updateAiButtons();
       void this.refreshAiStatus();
     });
     this.aiModelSelect.addEventListener('change', () => {
-      this.aiUpscaylModel = this.aiModelSelect.value || 'upscayl-standard-4x';
+      const value = this.aiModelSelect.value;
+      if (this.aiEngine === 'upscayl') this.aiUpscaylModel = value || 'ultrasharp-4x';
+      else this.aiRealesrganModel = value || 'realesrgan-x4plus-anime';
       this.aiAvailable = false;
       this.updateAiButtons();
       void this.refreshAiStatus();
+    });
+    this.element.querySelectorAll('[data-ai-preset]').forEach((button) => {
+      button.addEventListener('click', () => {
+        void this.applyAiPreset((button as HTMLElement).dataset.aiPreset === 'texture' ? 'texture' : 'vfx');
+      });
     });
     this.element.querySelectorAll('[data-quick-scale]').forEach((button) => {
       button.addEventListener('click', () => {
@@ -684,6 +724,7 @@ export class TextureView {
 
     this.element.querySelector('[data-compose-load]')?.addEventListener('click', () => void this.loadComposeSource());
     this.element.querySelector('[data-compose-clear]')?.addEventListener('click', () => this.clearComposeSource());
+    this.composeAddChild.addEventListener('click', () => void this.loadComposeSource());
     this.element.querySelector('[data-compose-apply]')?.addEventListener('click', () => void this.applyCompose());
     this.element.querySelector('[data-compose-export]')?.addEventListener('click', () => void this.exportCompose());
     this.composeParentBlend.addEventListener('change', () => this.scheduleComposePreview());
@@ -706,11 +747,15 @@ export class TextureView {
       this.composeToleranceValue.textContent = this.composeTolerance.value;
       this.scheduleComposePreview();
     });
+    this.composeFeather.addEventListener('input', () => {
+      this.composeFeatherValue.textContent = this.composeFeather.value;
+      this.scheduleComposePreview();
+    });
     this.composeChannel.addEventListener('change', () => this.scheduleComposePreview());
     this.composeInvert.addEventListener('change', () => this.scheduleComposePreview());
     this.composePickButton.addEventListener('click', () => {
       this.composePicking = !this.composePicking;
-      this.composePickButton.textContent = this.composePicking ? '点击预览拾取…' : '从预览拾取';
+      this.composePickButton.textContent = this.composePicking ? '拾取中…' : '拾取';
       this.composePreview.classList.toggle('picking', this.composePicking);
     });
     this.composePreview.addEventListener('click', (event) => this.pickComposeColor(event));
@@ -851,8 +896,8 @@ export class TextureView {
       this.spaceZoom = this.zoom;
       this.zoom = Math.max(
         1,
-        this.imageWidth / Math.max(1, this.body.clientWidth),
-        this.imageHeight / Math.max(1, this.body.clientHeight)
+        this.imageWidth / Math.max(1, this.canvas.clientWidth),
+        this.imageHeight / Math.max(1, this.canvas.clientHeight)
       );
       this.updateCamera();
     });
@@ -1393,8 +1438,143 @@ export class TextureView {
   private updateComposeRows(): void {
     const mode = this.composeAlphaMode.value;
     this.composeColorRow.classList.toggle('hidden', mode !== 'color');
+    this.composeFeatherRow.classList.toggle('hidden', mode !== 'color');
     this.composeChannelRow.classList.toggle('hidden', mode !== 'channel');
     this.scheduleComposePreview();
+  }
+
+  private setupComposeGroups(): void {
+    const body = this.element.querySelector('.compose-panel-body');
+    if (!body) return;
+    const groups = [...body.querySelectorAll<HTMLElement>(':scope > .compose-group[data-compose-group]')];
+    for (const group of groups) {
+      const key = group.dataset.composeGroup;
+      const title = group.querySelector<HTMLElement>('.compose-group-title');
+      if (!key || !title) continue;
+      const head = document.createElement('div');
+      head.className = 'compose-group-head';
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'compose-group-toggle';
+      toggle.dataset.composeGroupToggle = key;
+      toggle.setAttribute('aria-expanded', 'true');
+      toggle.innerHTML = `
+        <span class="compose-group-head-left">
+          <span class="compose-group-grip" data-compose-group-grip title="拖动排序">≡</span>
+          <span class="compose-group-title"></span>
+        </span>
+        <span class="compose-group-caret">▾</span>
+      `;
+      const titleText = toggle.querySelector('.compose-group-title');
+      if (titleText) titleText.textContent = title.textContent ?? '';
+      title.replaceWith(head);
+      head.append(toggle);
+      const content = document.createElement('div');
+      content.className = 'compose-group-body';
+      while (head.nextSibling) content.append(head.nextSibling);
+      group.append(content);
+
+      const apply = (collapsed: boolean): void => {
+        group.classList.toggle('collapsed', collapsed);
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+      };
+      const defaultCollapsed = key === 'view' || key === 'adjust' || key === 'transparency' || key === 'preview';
+      try {
+        const stored = localStorage.getItem(`texturemap.texture.compose.collapsed.${key}`);
+        apply(stored === null ? defaultCollapsed : stored === '1');
+      } catch {
+        apply(defaultCollapsed);
+      }
+      toggle.addEventListener('click', () => {
+        const collapsed = !group.classList.contains('collapsed');
+        apply(collapsed);
+        try {
+          localStorage.setItem(`texturemap.texture.compose.collapsed.${key}`, collapsed ? '1' : '0');
+        } catch {
+          // storage unavailable
+        }
+      });
+      const grip = toggle.querySelector<HTMLElement>('[data-compose-group-grip]');
+      grip?.addEventListener('pointerdown', (event) => this.startComposeGroupDrag(event, grip));
+      grip?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+    }
+
+    try {
+      const raw = localStorage.getItem('texturemap.texture.compose.order');
+      const order = raw ? JSON.parse(raw) as string[] : [];
+      if (Array.isArray(order)) {
+        for (const key of order) {
+          const group = body.querySelector<HTMLElement>(`:scope > .compose-group[data-compose-group="${key}"]`);
+          if (group) body.append(group);
+        }
+      }
+    } catch {
+      // keep current order
+    }
+
+    window.addEventListener('pointermove', (event) => this.moveComposeGroupDrag(event));
+    window.addEventListener('pointerup', (event) => this.endComposeGroupDrag(event));
+    window.addEventListener('pointercancel', (event) => this.endComposeGroupDrag(event));
+  }
+
+  private startComposeGroupDrag(event: PointerEvent, grip: HTMLElement): void {
+    if (event.button !== 0) return;
+    const group = grip.closest<HTMLElement>('.compose-group');
+    if (!group) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.composeGroupDrag = { group, pointerId: event.pointerId, grip };
+    group.classList.add('is-group-dragging');
+    try {
+      grip.setPointerCapture(event.pointerId);
+    } catch {
+      // synthetic pointer events in automation have no active pointer
+    }
+  }
+
+  private moveComposeGroupDrag(event: PointerEvent): void {
+    const drag = this.composeGroupDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    event.preventDefault();
+    const body = this.element.querySelector('.compose-panel-body');
+    if (!body) return;
+    const groups = [...body.querySelectorAll<HTMLElement>(':scope > .compose-group')];
+    let placed = false;
+    for (const group of groups) {
+      if (group === drag.group) continue;
+      const rect = group.getBoundingClientRect();
+      if (event.clientY < rect.top + rect.height / 2) {
+        body.insertBefore(drag.group, group);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) body.append(drag.group);
+  }
+
+  private endComposeGroupDrag(event: PointerEvent): void {
+    const drag = this.composeGroupDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    this.composeGroupDrag = null;
+    drag.group.classList.remove('is-group-dragging');
+    try {
+      drag.grip.releasePointerCapture(event.pointerId);
+    } catch {
+      // released
+    }
+    try {
+      const body = this.element.querySelector('.compose-panel-body');
+      if (!body) return;
+      const order = [...body.querySelectorAll<HTMLElement>(':scope > .compose-group')]
+        .map((group) => group.dataset.composeGroup)
+        .filter(Boolean);
+      localStorage.setItem('texturemap.texture.compose.order', JSON.stringify(order));
+    } catch {
+      // storage unavailable
+    }
   }
 
   private scheduleComposePreview(): void {
@@ -1484,13 +1664,19 @@ export class TextureView {
       const keyG = Number.parseInt(color.slice(2, 4), 16) || 0;
       const keyB = Number.parseInt(color.slice(4, 6), 16) || 0;
       const tolerance = Math.max(0, Math.min(255, Number(this.composeTolerance.value) || 0));
+      const feather = Math.max(0, Math.min(32, Number(this.composeFeather.value) || 0));
+      const softRange = feather * 4;
       for (let index = 0; index < data.length; index += 4) {
-        if (
-          Math.abs(data[index] - keyR) <= tolerance &&
-          Math.abs(data[index + 1] - keyG) <= tolerance &&
-          Math.abs(data[index + 2] - keyB) <= tolerance
-        ) {
+        const distance = Math.max(
+          Math.abs(data[index] - keyR),
+          Math.abs(data[index + 1] - keyG),
+          Math.abs(data[index + 2] - keyB)
+        );
+        if (distance <= tolerance) {
           data[index + 3] = 0;
+        } else if (softRange > 0 && distance < tolerance + softRange) {
+          const t = (distance - tolerance) / softRange;
+          data[index + 3] = Math.round(data[index + 3] * t);
         }
       }
     } else if (this.composeAlphaMode.value === 'channel') {
@@ -1602,6 +1788,8 @@ export class TextureView {
       this.composeChildEmpty.classList.remove('hidden');
       this.composeSourceName.textContent = '未载入';
     }
+    this.composeChildGroup.classList.toggle('hidden', !this.composeSource);
+    this.composeAddChild.classList.toggle('hidden', Boolean(this.composeSource));
   }
 
   private composeOutputName(): string {
@@ -1668,7 +1856,7 @@ export class TextureView {
     this.composeAlphaMode.value = 'color';
     this.updateComposeRows();
     this.composePicking = false;
-    this.composePickButton.textContent = '从预览拾取';
+    this.composePickButton.textContent = '拾取';
     this.composePreview.classList.remove('picking');
     this.scheduleComposePreview();
   }
@@ -1677,12 +1865,33 @@ export class TextureView {
     return this.fileName.replace(/\.[^.]+$/, '') || 'texture';
   }
 
+  private currentAiModel(): string {
+    return this.aiEngine === 'upscayl' ? this.aiUpscaylModel : this.aiRealesrganModel;
+  }
+
   private aiModelLabel(): string {
-    return UPSCAYL_MODEL_LABELS[this.aiUpscaylModel] ?? this.aiUpscaylModel;
+    const labels = this.aiEngine === 'upscayl' ? UPSCAYL_MODEL_LABELS : REALESRGAN_MODEL_LABELS;
+    const model = this.currentAiModel();
+    return labels[model] ?? model;
   }
 
   private aiEngineLabel(): string {
-    return this.aiEngine === 'upscayl' ? `Upscayl · ${this.aiModelLabel()}` : 'Real-ESRGAN x4plus';
+    return this.aiEngine === 'upscayl'
+      ? `Upscayl · ${this.aiModelLabel()}`
+      : `Real-ESRGAN · ${this.aiModelLabel()}`;
+  }
+
+  private syncAiModelOptions(): void {
+    const labels = this.aiEngine === 'upscayl' ? UPSCAYL_MODEL_LABELS : REALESRGAN_MODEL_LABELS;
+    const models = Object.keys(labels);
+    const current = this.currentAiModel();
+    const selected = models.includes(current) ? current : models[0];
+    this.aiModelSelect.innerHTML = models
+      .map((model) => `<option value="${model}">${labels[model]}</option>`)
+      .join('');
+    this.aiModelSelect.value = selected;
+    if (this.aiEngine === 'upscayl') this.aiUpscaylModel = selected;
+    else this.aiRealesrganModel = selected;
   }
 
   private async exportCurrent(): Promise<void> {
@@ -1730,6 +1939,7 @@ export class TextureView {
     this.aiProgress.classList.add('hidden');
     this.aiProgressBar.style.width = '0%';
     this.aiProgressText.textContent = '';
+    this.syncAiModelOptions();
     this.updateAiButtons();
     await this.refreshAiStatus();
   }
@@ -1739,7 +1949,7 @@ export class TextureView {
   }
 
   private async refreshAiStatus(): Promise<void> {
-    const status = await window.nyxel.ai.status(this.aiEngine, this.aiUpscaylModel);
+    const status = await window.nyxel.ai.status(this.aiEngine, this.currentAiModel());
     this.aiAvailable = status.available;
     const label = this.aiEngineLabel();
     const size = this.aiEngine === 'upscayl' ? '约 33 MB' : '约 45 MB';
@@ -1753,13 +1963,16 @@ export class TextureView {
     const labelElement = this.element.querySelector('#ai-engine-label') as HTMLElement | null;
     if (labelElement) labelElement.textContent = `AI 超分（${label}）`;
     this.aiEngineSelect.value = this.aiEngine;
-    this.aiModelSelect.value = this.aiUpscaylModel;
+    this.aiModelSelect.value = this.currentAiModel();
     this.updateAiButtons();
   }
 
   private updateAiButtons(): void {
     this.element.querySelectorAll<HTMLButtonElement>('[data-ai-scale]').forEach((button) => {
       button.disabled = !this.aiAvailable || this.aiBusy;
+    });
+    this.element.querySelectorAll<HTMLButtonElement>('[data-ai-preset]').forEach((button) => {
+      button.disabled = this.aiBusy;
     });
     this.element.querySelectorAll<HTMLButtonElement>('[data-quick-scale]').forEach((button) => {
       button.disabled = this.aiBusy;
@@ -1774,7 +1987,7 @@ export class TextureView {
     if (cancel) cancel.disabled = !this.aiBusy;
     this.aiEngineSelect.disabled = this.aiBusy;
     this.aiModelSelect.disabled = this.aiBusy;
-    this.aiModelRow.style.display = this.aiEngine === 'upscayl' ? 'flex' : 'none';
+    this.aiModelRow.style.display = 'flex';
   }
 
   private updateAiProgress(progress: AiProgress): void {
@@ -1793,7 +2006,7 @@ export class TextureView {
   private async downloadAiRuntime(): Promise<void> {
     if (this.aiBusy) return;
     const engine = this.aiEngine;
-    const model = this.aiUpscaylModel;
+    const model = this.currentAiModel();
     this.aiBusy = true;
     this.updateAiButtons();
     try {
@@ -1845,6 +2058,27 @@ export class TextureView {
     this.callbacks.toast(`已生成 ${scale}× 结果，拖动中间线对比`, 'success');
   }
 
+  private async applyAiPreset(preset: 'vfx' | 'texture'): Promise<void> {
+    if (this.aiBusy) return;
+    if (preset === 'vfx') {
+      this.aiEngine = 'realesrgan';
+      this.aiRealesrganModel = 'realesrgan-x4plus-anime';
+    } else {
+      this.aiEngine = 'upscayl';
+      this.aiUpscaylModel = 'ultrasharp-4x';
+    }
+    this.aiEngineSelect.value = this.aiEngine;
+    this.syncAiModelOptions();
+    this.aiAvailable = false;
+    this.updateAiButtons();
+    await this.refreshAiStatus();
+    if (!this.aiAvailable) {
+      this.callbacks.toast(`请先下载 ${this.aiEngineLabel()} 运行时`, 'info');
+      return;
+    }
+    await this.aiScale(4);
+  }
+
   private async aiScale(scale: number): Promise<void> {
     if (!this.bitmap || this.aiBusy) return;
     if (!this.aiAvailable) {
@@ -1871,7 +2105,8 @@ export class TextureView {
       if (!blob) throw new Error('源图编码失败');
       const data = new Uint8Array(await blob.arrayBuffer());
 
-      const result = await window.nyxel.ai.upscale(data, scale, this.aiEngine, this.aiUpscaylModel);
+      const model = this.currentAiModel();
+      const result = await window.nyxel.ai.upscale(data, scale, this.aiEngine, model);
       if (!result.ok || !result.data || !result.width || !result.height) {
         if (result.error !== '已取消') {
           this.callbacks.toast(`AI 超分失败：${result.error ?? '未知错误'}`, 'error');
@@ -1880,6 +2115,9 @@ export class TextureView {
       }
       const output = new Blob([new Uint8Array(result.data)], { type: 'image/png' });
       const bitmap = await createImageBitmap(output);
+      const modelSuffix = this.aiEngine === 'upscayl'
+        ? model.replace(/-4x$/, '')
+        : model.replace(/^realesrgan-/, '').replace(/-4x$/, '');
       this.showCompare(
         this.bitmap,
         this.imageWidth,
@@ -1887,7 +2125,7 @@ export class TextureView {
         bitmap,
         result.width,
         result.height,
-        `${this.currentBaseName()}_${this.aiEngine === 'upscayl' ? this.aiUpscaylModel.replace(/-4x$/, '') : 'realesrgan'}_${scale}x.png`,
+        `${this.currentBaseName()}_${modelSuffix}_${scale}x.png`,
         result.data.length
       );
       this.closeAiPanel();
@@ -2014,7 +2252,7 @@ export class TextureView {
 
   private fit(): void {
     if (!this.imageWidth || !this.imageHeight) return;
-    const viewAspect = Math.max(0.001, this.body.clientWidth / Math.max(1, this.body.clientHeight));
+    const viewAspect = Math.max(0.001, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight));
     const imageAspect = this.imageWidth / this.imageHeight;
     const displayAspect = this.rotation % 180 === 0 ? imageAspect : 1 / imageAspect;
     if (displayAspect >= viewAspect) {
@@ -2047,8 +2285,11 @@ export class TextureView {
   }
 
   private resize(): void {
-    const width = Math.max(1, this.body.clientWidth);
-    const height = Math.max(1, this.body.clientHeight);
+    // The docked compose panel changes the canvas width through padding, while
+    // the body size stays the same. Size the renderer from the canvas itself so
+    // the preview keeps its aspect ratio instead of being squeezed sideways.
+    const width = Math.max(1, this.canvas.clientWidth);
+    const height = Math.max(1, this.canvas.clientHeight);
     this.renderer.setSize(width, height, false);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     if (this.mesh) this.fit();

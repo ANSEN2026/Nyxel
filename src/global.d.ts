@@ -8,6 +8,7 @@ declare global {
       openModelPath: (path: string) => Promise<void>;
       openColorPath: (path: string) => Promise<void>;
       openVideoPath: (path: string) => Promise<void>;
+      openMotionPath: (path: string) => Promise<void>;
       applyModelTexturePath: (path: string) => Promise<void>;
     };
   }
