@@ -194,6 +194,7 @@ export class TextureView {
   private composeBody: HTMLElement;
   private aiPanelBody: HTMLElement;
   private aiEntryButton: HTMLButtonElement;
+  private detailTabButton: HTMLButtonElement;
   private aiMode = false;
   private aiPanelStatus: HTMLElement;
   private aiCutTolerance: HTMLInputElement;
@@ -316,13 +317,16 @@ export class TextureView {
         </div>
         <div class="compose-panel hidden">
           <div class="compose-panel-head">
-            <div class="compose-panel-title">
-              <strong id="compose-panel-title">细节调节</strong>
-              <span id="compose-panel-subtitle">父级 / 子级 · 去底 / 叠加</span>
-            </div>
+            <button type="button" class="compose-tab detail-tab active" data-compose-tab="detail" role="tab" aria-selected="true">
+              <strong>细节调节</strong>
+              <span>父级 / 子级 · 去底 / 叠加</span>
+            </button>
             <div class="compose-head-actions">
+              <button type="button" class="compose-tab ai-tab" data-ai-panel-toggle role="tab" aria-selected="false" title="打开 AI 调节">
+                <strong>AI 调节</strong>
+                <span>超分 / 抠图 / 序列贴图</span>
+              </button>
               <button type="button" class="compose-add-child" data-compose-add-child title="载入附件图 2">＋ 附件图</button>
-              <button type="button" class="ai-entry" data-ai-panel-toggle title="打开 AI 调节">AI 调节</button>
             </div>
           </div>
           <div class="ai-panel-body hidden">
@@ -668,6 +672,7 @@ export class TextureView {
     this.composeBody = this.element.querySelector('.compose-panel-body') as HTMLElement;
     this.aiPanelBody = this.element.querySelector('.ai-panel-body') as HTMLElement;
     this.aiEntryButton = this.element.querySelector('[data-ai-panel-toggle]') as HTMLButtonElement;
+    this.detailTabButton = this.element.querySelector('[data-compose-tab="detail"]') as HTMLButtonElement;
     this.aiPanelStatus = this.element.querySelector('#ai-panel-status') as HTMLElement;
     this.aiCutTolerance = this.element.querySelector('#ai-cut-tolerance') as HTMLInputElement;
     this.aiCutToleranceValue = this.element.querySelector('#ai-cut-tolerance-value') as HTMLElement;
@@ -863,7 +868,8 @@ export class TextureView {
     this.element.querySelector('[data-compose-clear]')?.addEventListener('click', () => this.clearComposeSource());
     this.composeAddChild.addEventListener('click', () => void this.loadComposeSource());
 
-    this.aiEntryButton.addEventListener('click', () => this.setAiMode(!this.aiMode));
+    this.aiEntryButton.addEventListener('click', () => this.setAiMode(true));
+    this.detailTabButton.addEventListener('click', () => this.setAiMode(false));
     this.element.querySelector('[data-ai-panel-back]')?.addEventListener('click', () => this.setAiMode(false));
     this.element.querySelector('[data-ai-panel-settings]')?.addEventListener('click', () => void this.openAiPanel());
     this.element.querySelectorAll<HTMLButtonElement>('[data-ai-panel-scale]').forEach((button) => {
@@ -2126,12 +2132,10 @@ export class TextureView {
     this.composePanel.classList.toggle('ai-mode', active);
     this.composeBody.classList.toggle('hidden', active);
     this.aiPanelBody.classList.toggle('hidden', !active);
-    this.aiEntryButton.textContent = active ? '返回贴图' : 'AI 调节';
     this.aiEntryButton.classList.toggle('active', active);
-    const title = this.element.querySelector('#compose-panel-title') as HTMLElement | null;
-    const subtitle = this.element.querySelector('#compose-panel-subtitle') as HTMLElement | null;
-    if (title) title.textContent = active ? 'AI 调节' : '细节调节';
-    if (subtitle) subtitle.textContent = active ? '超分 / 抠图 / 序列贴图' : '父级 / 子级 · 去底 / 叠加';
+    this.detailTabButton.classList.toggle('active', !active);
+    this.aiEntryButton.setAttribute('aria-selected', String(active));
+    this.detailTabButton.setAttribute('aria-selected', String(!active));
     if (active) {
       if (!this.composeSource && this.aiSeqSource.value === 'child') this.aiSeqSource.value = 'parent';
       this.updateAiCutButtons();
