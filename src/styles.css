@@ -2198,6 +2198,19 @@ label {
   background: var(--panel-2);
 }
 
+.gradient-edit-row input.gradient-color-input {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 13px;
+  height: 13px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0.01;
+  pointer-events: none;
+}
+
 .gradient-edit-row input[type="number"] {
   width: 46px;
   padding: 4px;
