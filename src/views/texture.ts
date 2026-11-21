@@ -193,8 +193,11 @@ export class TextureView {
   private composePanel: HTMLElement;
   private composeBody: HTMLElement;
   private aiPanelBody: HTMLElement;
+  private toolsPanelBody: HTMLElement;
   private aiEntryButton: HTMLButtonElement;
+  private toolsEntryButton: HTMLButtonElement;
   private detailTabButton: HTMLButtonElement;
+  private panelMode: 'detail' | 'ai' | 'tools' = 'detail';
   private aiMode = false;
   private aiPanelStatus: HTMLElement;
   private aiCutTolerance: HTMLInputElement;
@@ -242,6 +245,43 @@ export class TextureView {
   private dispersionBlack = false;
   private dispersionOutput: HTMLCanvasElement | null = null;
   private dispersionTimer = 0;
+
+  private gradientPreview: HTMLCanvasElement;
+  private gradientCtx: CanvasRenderingContext2D;
+  private gradientBarFill: HTMLElement;
+  private gradientBarMarkers: HTMLElement;
+  private gradientColor: HTMLInputElement;
+  private gradientPosition: HTMLInputElement;
+  private gradientAlpha: HTMLInputElement;
+  private gradientAlphaValue: HTMLElement;
+  private gradientStatus: HTMLElement;
+  private gradientStops: Array<{ position: number; color: string; alpha: number }> = [
+    { position: 0, color: '#ff7878', alpha: 100 },
+    { position: 100, color: '#ff3b3b', alpha: 100 }
+  ];
+  private gradientSelected = 1;
+  private gradientUndo: Array<Array<{ position: number; color: string; alpha: number }>> = [];
+  private gradientTimer = 0;
+
+  private pathPreview: HTMLCanvasElement;
+  private pathCtx: CanvasRenderingContext2D;
+  private pathColor: HTMLInputElement;
+  private pathWidth: HTMLInputElement;
+  private pathWidthValue: HTMLInputElement;
+  private pathThickness: HTMLInputElement;
+  private pathThicknessValue: HTMLInputElement;
+  private pathOpacity: HTMLInputElement;
+  private pathOpacityValue: HTMLInputElement;
+  private pathCustomSize: HTMLInputElement;
+  private pathEqual: HTMLInputElement;
+  private pathSizeW: HTMLInputElement;
+  private pathSizeH: HTMLInputElement;
+  private pathStatus: HTMLElement;
+  private pathCenterX = 0.5;
+  private pathCenterY = 0.5;
+  private pathPicking = false;
+  private pathOutput: HTMLCanvasElement | null = null;
+  private pathTimer = 0;
 
   private aiSeqSource: HTMLSelectElement;
   private aiSeqCols: HTMLInputElement;
@@ -351,15 +391,17 @@ export class TextureView {
           <div class="compose-panel-head">
             <button type="button" class="compose-tab detail-tab active" data-compose-tab="detail" role="tab" aria-selected="true">
               <strong>细节调节</strong>
-              <span>父级 / 子级 · 去底 / 叠加</span>
+              <span>父级 / 子级</span>
             </button>
-            <div class="compose-head-actions">
-              <button type="button" class="compose-tab ai-tab" data-ai-panel-toggle role="tab" aria-selected="false" title="打开 AI 调节">
-                <strong>AI 调节</strong>
-                <span>超分 / 抠图 / 序列贴图</span>
-              </button>
-              <button type="button" class="compose-add-child" data-compose-add-child title="载入附件图 2">＋ 附件图</button>
-            </div>
+            <button type="button" class="compose-tab ai-tab" data-ai-panel-toggle role="tab" aria-selected="false" title="打开 AI 调节">
+              <strong>AI 调节</strong>
+              <span>超分 / 抠图 / 序列</span>
+            </button>
+            <button type="button" class="compose-tab tools-tab" data-tools-panel-toggle role="tab" aria-selected="false" title="打开工具">
+              <strong>工具</strong>
+              <span>平铺 / 色散 / 渐变</span>
+            </button>
+            <button type="button" class="compose-add-child" data-compose-add-child title="载入附件图 2">＋ 附件</button>
           </div>
           <div class="ai-panel-body hidden">
             <div class="ai-panel-tools">
@@ -537,6 +579,83 @@ export class TextureView {
                 <button type="button" class="primary" data-ai-seq-apply>应用当前帧</button>
                 <button type="button" data-ai-panel-back>返回贴图调节</button>
               </div>
+            </section>
+          </div>
+          <div class="tools-panel-body hidden">
+            <div class="ai-panel-tools">
+              <span>工具模块</span>
+              <span class="spacer"></span>
+              <button type="button" data-tools-expand-all>展开全部</button>
+              <button type="button" data-tools-collapse-all>收起全部</button>
+            </div>
+            <section class="ai-section gradient-section" data-ai-section="gradient">
+              <div class="ai-section-head"><span>渐变图</span><span class="ai-pill">渐变编辑</span></div>
+              <p class="ai-copy">添加色标、调整位置与透明度，生成线性渐变贴图。</p>
+              <div class="gradient-preview-wrap"><canvas id="gradient-preview" width="320" height="220"></canvas></div>
+              <div class="gradient-bar" id="gradient-bar">
+                <div class="gradient-bar-fill" id="gradient-bar-fill"></div>
+                <div class="gradient-bar-markers" id="gradient-bar-markers"></div>
+              </div>
+              <div class="gradient-edit-row">
+                <label>颜色 <input id="gradient-color" type="color" value="#ff7878"></label>
+                <label>位置 <input id="gradient-position" type="number" min="0" max="100" step="1" value="100"><span>%</span></label>
+                <label>Alpha <input id="gradient-alpha" type="range" min="0" max="100" step="1" value="100"><span id="gradient-alpha-value">100%</span></label>
+              </div>
+              <div class="ai-button-row">
+                <button type="button" data-gradient-add>添加中色标</button>
+                <button type="button" data-gradient-remove>删除色标</button>
+                <button type="button" data-gradient-undo>撤销</button>
+                <button type="button" data-gradient-reset>恢复默认</button>
+              </div>
+              <div class="ai-button-row">
+                <button type="button" class="primary" data-gradient-apply>创建文档</button>
+                <button type="button" data-gradient-export>导出</button>
+              </div>
+              <div class="gradient-status" id="gradient-status">拖动色标或输入位置进行编辑</div>
+            </section>
+
+            <section class="ai-section path-gradient-section" data-ai-section="path">
+              <div class="ai-section-head"><span>路径渐变</span><span class="ai-pill">环形</span></div>
+              <p class="ai-copy">环形路径渐变，调节路径宽度、粗细和透明度。</p>
+              <div class="dispersion-preview-wrap path-preview-wrap">
+                <canvas id="path-preview" width="320" height="220"></canvas>
+              </div>
+              <div class="ai-button-row">
+                <button type="button" data-path-pick>拾取路径</button>
+                <label class="path-color-label">颜色 <input id="path-color" type="color" value="#ff7878"></label>
+                <button type="button" data-path-reset>恢复默认</button>
+              </div>
+              <div class="tile-slider-row">
+                <span>路径宽度</span>
+                <input id="path-width" type="range" min="1" max="100" step="1" value="59">
+                <input id="path-width-value" class="tile-number" type="number" min="1" max="100" value="59">
+              </div>
+              <div class="tile-slider-row">
+                <span>粗细</span>
+                <input id="path-thickness" type="range" min="0" max="100" step="1" value="100">
+                <input id="path-thickness-value" class="tile-number" type="number" min="0" max="100" value="100">
+              </div>
+              <div class="tile-slider-row">
+                <span>透明度</span>
+                <input id="path-opacity" type="range" min="0" max="100" step="1" value="100">
+                <input id="path-opacity-value" class="tile-number" type="number" min="0" max="100" value="100">
+              </div>
+              <div class="tile-checks">
+                <label><input id="path-custom-size" type="checkbox"> 启用自定义尺寸</label>
+                <label><input id="path-equal" type="checkbox" checked> 等比</label>
+              </div>
+              <div class="tile-row path-size-row">
+                <span>尺寸</span>
+                <input id="path-size-w" type="number" min="1" max="4096" value="687" disabled>
+                <span>×</span>
+                <input id="path-size-h" type="number" min="1" max="4096" value="794" disabled>
+              </div>
+              <div class="ai-button-row">
+                <button type="button" class="primary" data-path-apply>应用</button>
+                <button type="button" data-path-export>导出</button>
+                <button type="button" data-path-clear>清除</button>
+              </div>
+              <div class="gradient-status" id="path-status">点击预览可设置路径中心</div>
             </section>
           </div>
           <div class="compose-panel-body">
@@ -844,6 +963,31 @@ export class TextureView {
     this.dispersionOffsetXValue = this.element.querySelector('#dispersion-offset-x-value') as HTMLInputElement;
     this.dispersionOffsetY = this.element.querySelector('#dispersion-offset-y') as HTMLInputElement;
     this.dispersionOffsetYValue = this.element.querySelector('#dispersion-offset-y-value') as HTMLInputElement;
+    this.toolsPanelBody = this.element.querySelector('.tools-panel-body') as HTMLElement;
+    this.toolsEntryButton = this.element.querySelector('[data-tools-panel-toggle]') as HTMLButtonElement;
+    this.gradientPreview = this.element.querySelector('#gradient-preview') as HTMLCanvasElement;
+    this.gradientCtx = this.gradientPreview.getContext('2d') as CanvasRenderingContext2D;
+    this.gradientBarFill = this.element.querySelector('#gradient-bar-fill') as HTMLElement;
+    this.gradientBarMarkers = this.element.querySelector('#gradient-bar-markers') as HTMLElement;
+    this.gradientColor = this.element.querySelector('#gradient-color') as HTMLInputElement;
+    this.gradientPosition = this.element.querySelector('#gradient-position') as HTMLInputElement;
+    this.gradientAlpha = this.element.querySelector('#gradient-alpha') as HTMLInputElement;
+    this.gradientAlphaValue = this.element.querySelector('#gradient-alpha-value') as HTMLElement;
+    this.gradientStatus = this.element.querySelector('#gradient-status') as HTMLElement;
+    this.pathPreview = this.element.querySelector('#path-preview') as HTMLCanvasElement;
+    this.pathCtx = this.pathPreview.getContext('2d') as CanvasRenderingContext2D;
+    this.pathColor = this.element.querySelector('#path-color') as HTMLInputElement;
+    this.pathWidth = this.element.querySelector('#path-width') as HTMLInputElement;
+    this.pathWidthValue = this.element.querySelector('#path-width-value') as HTMLInputElement;
+    this.pathThickness = this.element.querySelector('#path-thickness') as HTMLInputElement;
+    this.pathThicknessValue = this.element.querySelector('#path-thickness-value') as HTMLInputElement;
+    this.pathOpacity = this.element.querySelector('#path-opacity') as HTMLInputElement;
+    this.pathOpacityValue = this.element.querySelector('#path-opacity-value') as HTMLInputElement;
+    this.pathCustomSize = this.element.querySelector('#path-custom-size') as HTMLInputElement;
+    this.pathEqual = this.element.querySelector('#path-equal') as HTMLInputElement;
+    this.pathSizeW = this.element.querySelector('#path-size-w') as HTMLInputElement;
+    this.pathSizeH = this.element.querySelector('#path-size-h') as HTMLInputElement;
+    this.pathStatus = this.element.querySelector('#path-status') as HTMLElement;
     this.aiSeqSource = this.element.querySelector('#ai-seq-source') as HTMLSelectElement;
     this.aiSeqCols = this.element.querySelector('#ai-seq-cols') as HTMLInputElement;
     this.aiSeqRows = this.element.querySelector('#ai-seq-rows') as HTMLInputElement;
@@ -937,8 +1081,15 @@ export class TextureView {
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
     this.camera.position.set(0, 0, 1);
 
+    const firstToolSection = this.toolsPanelBody.querySelector('[data-ai-section="gradient"]');
+    for (const key of ['tile', 'dispersion']) {
+      const section = this.aiPanelBody.querySelector(`[data-ai-section="${key}"]`);
+      if (section) this.toolsPanelBody.insertBefore(section, firstToolSection);
+    }
+
     this.setupComposeGroups();
-    this.setupAiSections();
+    this.setupAiSections(this.aiPanelBody, 'upscale');
+    this.setupAiSections(this.toolsPanelBody, 'tile');
     this.bindEvents();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.body);
@@ -1034,8 +1185,9 @@ export class TextureView {
     this.element.querySelector('[data-compose-clear]')?.addEventListener('click', () => this.clearComposeSource());
     this.composeAddChild.addEventListener('click', () => void this.loadComposeSource());
 
-    this.aiEntryButton.addEventListener('click', () => this.setAiMode(true));
-    this.detailTabButton.addEventListener('click', () => this.setAiMode(false));
+    this.aiEntryButton.addEventListener('click', () => this.setPanelMode('ai'));
+    this.toolsEntryButton.addEventListener('click', () => this.setPanelMode('tools'));
+    this.detailTabButton.addEventListener('click', () => this.setPanelMode('detail'));
     this.element.querySelector('[data-ai-panel-back]')?.addEventListener('click', () => this.setAiMode(false));
     this.element.querySelector('[data-ai-panel-settings]')?.addEventListener('click', () => void this.openAiPanel());
     this.element.querySelectorAll<HTMLButtonElement>('[data-ai-panel-scale]').forEach((button) => {
@@ -1148,6 +1300,127 @@ export class TextureView {
     this.element.querySelector('[data-dispersion-apply]')?.addEventListener('click', () => this.applyDispersionOutput());
     this.element.querySelector('[data-dispersion-export]')?.addEventListener('click', () => void this.exportDispersionOutput());
     this.element.querySelector('[data-dispersion-reset]')?.addEventListener('click', () => this.resetDispersionControls());
+
+    const scheduleGradient = (): void => {
+      window.clearTimeout(this.gradientTimer);
+      this.gradientTimer = window.setTimeout(() => this.renderGradientEditor(), 40);
+    };
+    this.gradientColor.addEventListener('input', () => {
+      const stop = this.gradientStops[this.gradientSelected];
+      if (!stop) return;
+      stop.color = this.gradientColor.value;
+      scheduleGradient();
+    });
+    this.gradientPosition.addEventListener('change', () => {
+      const stop = this.gradientStops[this.gradientSelected];
+      if (!stop) return;
+      stop.position = Math.max(0, Math.min(100, Number(this.gradientPosition.value) || 0));
+      scheduleGradient();
+    });
+    this.gradientAlpha.addEventListener('input', () => {
+      const stop = this.gradientStops[this.gradientSelected];
+      if (!stop) return;
+      stop.alpha = Math.max(0, Math.min(100, Number(this.gradientAlpha.value) || 0));
+      this.gradientAlphaValue.textContent = `${Math.round(stop.alpha)}%`;
+      scheduleGradient();
+    });
+    this.gradientBarMarkers.addEventListener('click', (event) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-gradient-stop]');
+      if (!target) return;
+      this.gradientSelected = Number(target.dataset.gradientStop) || 0;
+      this.syncGradientInputs();
+      this.renderGradientEditor();
+    });
+    this.gradientBarMarkers.addEventListener('pointerdown', (event) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-gradient-stop]');
+      if (!target) return;
+      const index = Number(target.dataset.gradientStop) || 0;
+      const stop = this.gradientStops[index];
+      const bar = this.gradientBarMarkers.getBoundingClientRect();
+      if (!stop || bar.width <= 0) return;
+      event.preventDefault();
+      this.gradientSelected = index;
+      this.pushGradientHistory();
+      target.classList.add('dragging');
+      const move = (moveEvent: PointerEvent): void => {
+        const current = this.gradientStops[index];
+        if (!current) return;
+        current.position = Math.max(0, Math.min(100, ((moveEvent.clientX - bar.left) / bar.width) * 100));
+        this.gradientPosition.value = String(Math.round(current.position));
+        this.renderGradientEditor();
+        this.gradientBarMarkers.querySelector<HTMLElement>(`[data-gradient-stop="${index}"]`)?.classList.add('dragging');
+      };
+      const finish = (): void => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', finish);
+        window.removeEventListener('pointercancel', finish);
+        this.renderGradientEditor();
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', finish);
+      window.addEventListener('pointercancel', finish);
+    });
+    this.element.querySelector('[data-gradient-add]')?.addEventListener('click', () => this.addGradientStop());
+    this.element.querySelector('[data-gradient-remove]')?.addEventListener('click', () => this.removeGradientStop());
+    this.element.querySelector('[data-gradient-undo]')?.addEventListener('click', () => this.undoGradientChange());
+    this.element.querySelector('[data-gradient-reset]')?.addEventListener('click', () => this.resetGradient());
+    this.element.querySelector('[data-gradient-apply]')?.addEventListener('click', () => this.applyGradientOutput());
+    this.element.querySelector('[data-gradient-export]')?.addEventListener('click', () => void this.exportGradientOutput());
+
+    const schedulePath = (): void => {
+      window.clearTimeout(this.pathTimer);
+      this.pathTimer = window.setTimeout(() => this.renderPathGradient(), 50);
+    };
+    const syncPathNumber = (range: HTMLInputElement, number: HTMLInputElement): void => {
+      range.addEventListener('input', () => {
+        number.value = range.value;
+        schedulePath();
+      });
+      number.addEventListener('change', () => {
+        const value = Math.max(Number(range.min) || 0, Math.min(Number(range.max) || 100, Math.round(Number(number.value) || 0)));
+        range.value = String(value);
+        number.value = String(value);
+        schedulePath();
+      });
+    };
+    syncPathNumber(this.pathWidth, this.pathWidthValue);
+    syncPathNumber(this.pathThickness, this.pathThicknessValue);
+    syncPathNumber(this.pathOpacity, this.pathOpacityValue);
+    this.pathColor.addEventListener('input', schedulePath);
+    this.pathCustomSize.addEventListener('change', () => {
+      this.pathSizeW.disabled = !this.pathCustomSize.checked;
+      this.pathSizeH.disabled = !this.pathCustomSize.checked;
+      schedulePath();
+    });
+    this.pathEqual.addEventListener('change', schedulePath);
+    this.pathSizeW.addEventListener('change', () => {
+      if (this.pathEqual.checked) this.pathSizeH.value = this.pathSizeW.value;
+      schedulePath();
+    });
+    this.pathSizeH.addEventListener('change', () => {
+      if (this.pathEqual.checked) this.pathSizeW.value = this.pathSizeH.value;
+      schedulePath();
+    });
+    this.element.querySelector('[data-path-pick]')?.addEventListener('click', () => {
+      this.pathPicking = !this.pathPicking;
+      this.pathStatus.textContent = this.pathPicking ? '点击预览设置路径中心' : '路径中心已固定';
+      this.element.querySelector('[data-path-pick]')?.classList.toggle('active', this.pathPicking);
+    });
+    this.pathPreview.addEventListener('pointerdown', (event) => {
+      if (!this.pathPicking) return;
+      const rect = this.pathPreview.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      this.pathCenterX = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+      this.pathCenterY = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+      this.pathPicking = false;
+      this.element.querySelector('[data-path-pick]')?.classList.remove('active');
+      this.pathStatus.textContent = `路径中心 ${Math.round(this.pathCenterX * 100)}% / ${Math.round(this.pathCenterY * 100)}%`;
+      this.renderPathGradient();
+    });
+    this.element.querySelector('[data-path-apply]')?.addEventListener('click', () => this.applyPathGradient());
+    this.element.querySelector('[data-path-export]')?.addEventListener('click', () => void this.exportPathGradient());
+    this.element.querySelector('[data-path-clear]')?.addEventListener('click', () => this.clearPathGradient());
+    this.element.querySelector('[data-path-reset]')?.addEventListener('click', () => this.resetPathGradient());
     this.aiSeqSource.addEventListener('change', () => {
       this.resetAiSequenceSelection();
       this.renderAiSequenceGrid();
@@ -1979,8 +2252,8 @@ export class TextureView {
     window.addEventListener('pointercancel', (event) => this.endComposeGroupDrag(event));
   }
 
-  private setupAiSections(): void {
-    const sections = [...this.aiPanelBody.querySelectorAll<HTMLElement>(':scope > .ai-section[data-ai-section]')];
+  private setupAiSections(container: HTMLElement, defaultExpanded: string): void {
+    const sections = [...container.querySelectorAll<HTMLElement>(':scope > .ai-section[data-ai-section]')];
     const entries: Array<{
       key: string;
       apply: (collapsed: boolean) => void;
@@ -2002,11 +2275,18 @@ export class TextureView {
         if (collapsed && key === 'sequence') this.stopAiSequence();
         if (!collapsed && key === 'tile') this.renderTilePreview();
         if (!collapsed && key === 'dispersion') this.renderDispersionPreview();
+        if (!collapsed && key === 'gradient') this.renderGradientEditor();
+        if (!collapsed && key === 'path') {
+          this.pathSizeW.disabled = !this.pathCustomSize.checked;
+          this.pathSizeH.disabled = !this.pathCustomSize.checked;
+          this.syncPathDefaults();
+          this.renderPathGradient();
+        }
       };
       const toggle = (): void => {
         apply(!section.classList.contains('collapsed'));
       };
-      apply(key !== 'upscale');
+      apply(key !== defaultExpanded);
       head.addEventListener('click', toggle);
       head.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -2016,10 +2296,10 @@ export class TextureView {
       });
       entries.push({ key, apply, toggle });
     }
-    this.aiPanelBody.querySelector('[data-ai-expand-all]')?.addEventListener('click', () => {
+    container.querySelector('[data-ai-expand-all], [data-tools-expand-all]')?.addEventListener('click', () => {
       for (const entry of entries) entry.apply(false);
     });
-    this.aiPanelBody.querySelector('[data-ai-collapse-all]')?.addEventListener('click', () => {
+    container.querySelector('[data-ai-collapse-all], [data-tools-collapse-all]')?.addEventListener('click', () => {
       for (const entry of entries) entry.apply(true);
     });
   }
@@ -2433,30 +2713,53 @@ export class TextureView {
   }
 
   private setAiMode(active: boolean): void {
-    if (active && !this.bitmap) {
+    this.setPanelMode(active ? 'ai' : 'detail');
+  }
+
+  private setPanelMode(mode: 'detail' | 'ai' | 'tools'): void {
+    if (mode !== 'detail' && !this.bitmap) {
       this.callbacks.toast('请先打开一张贴图', 'info');
       return;
     }
-    this.aiMode = active;
-    this.element.classList.toggle('ai-theme', active);
-    this.composePanel.classList.toggle('ai-mode', active);
-    this.composeBody.classList.toggle('hidden', active);
-    this.aiPanelBody.classList.toggle('hidden', !active);
-    this.aiEntryButton.classList.toggle('active', active);
-    this.detailTabButton.classList.toggle('active', !active);
-    this.aiEntryButton.setAttribute('aria-selected', String(active));
-    this.detailTabButton.setAttribute('aria-selected', String(!active));
-    if (active) {
+    this.panelMode = mode;
+    this.aiMode = mode === 'ai';
+    this.element.classList.toggle('ai-theme', mode === 'ai');
+    this.element.classList.toggle('tools-theme', mode === 'tools');
+    this.composePanel.classList.toggle('ai-mode', mode === 'ai');
+    this.composePanel.classList.toggle('tools-mode', mode === 'tools');
+    this.composeBody.classList.toggle('hidden', mode !== 'detail');
+    this.aiPanelBody.classList.toggle('hidden', mode !== 'ai');
+    this.toolsPanelBody.classList.toggle('hidden', mode !== 'tools');
+    this.detailTabButton.classList.toggle('active', mode === 'detail');
+    this.aiEntryButton.classList.toggle('active', mode === 'ai');
+    this.toolsEntryButton.classList.toggle('active', mode === 'tools');
+    this.detailTabButton.setAttribute('aria-selected', String(mode === 'detail'));
+    this.aiEntryButton.setAttribute('aria-selected', String(mode === 'ai'));
+    this.toolsEntryButton.setAttribute('aria-selected', String(mode === 'tools'));
+    if (mode === 'ai') {
       if (!this.composeSource && this.aiSeqSource.value === 'child') this.aiSeqSource.value = 'parent';
       this.updateAiCutButtons();
-      this.syncTileDefaults();
-      const tileSection = this.aiPanelBody.querySelector('[data-ai-section="tile"]');
-      if (!tileSection?.classList.contains('collapsed')) this.renderTilePreview();
-      const dispersionSection = this.aiPanelBody.querySelector('[data-ai-section="dispersion"]');
-      if (!dispersionSection?.classList.contains('collapsed')) this.renderDispersionPreview();
       this.resetAiSequenceSelection();
       this.renderAiSequenceGrid();
       void this.refreshAiStatus();
+    } else if (mode === 'tools') {
+      this.stopAiSequence();
+      this.syncTileDefaults();
+      this.pathSizeW.disabled = !this.pathCustomSize.checked;
+      this.pathSizeH.disabled = !this.pathCustomSize.checked;
+      this.syncPathDefaults();
+      if (!this.toolsPanelBody.querySelector('[data-ai-section="tile"]')?.classList.contains('collapsed')) {
+        this.renderTilePreview();
+      }
+      if (!this.toolsPanelBody.querySelector('[data-ai-section="dispersion"]')?.classList.contains('collapsed')) {
+        this.renderDispersionPreview();
+      }
+      if (!this.toolsPanelBody.querySelector('[data-ai-section="gradient"]')?.classList.contains('collapsed')) {
+        this.renderGradientEditor();
+      }
+      if (!this.toolsPanelBody.querySelector('[data-ai-section="path"]')?.classList.contains('collapsed')) {
+        this.renderPathGradient();
+      }
     } else {
       this.stopAiSequence();
     }
@@ -2816,7 +3119,7 @@ export class TextureView {
       output.width * output.height * 4,
       { preserveTransform: true, preserveHistory: false }
     );
-    this.setAiMode(true);
+    this.setPanelMode('tools');
     this.callbacks.toast('已应用无缝平铺贴图', 'success');
   }
 
@@ -2943,7 +3246,7 @@ export class TextureView {
       output.width * output.height * 4,
       { preserveTransform: true, preserveHistory: false }
     );
-    this.setAiMode(true);
+    this.setPanelMode('tools');
     this.callbacks.toast('已应用色散分离', 'success');
   }
 
@@ -2973,6 +3276,282 @@ export class TextureView {
     const button = this.element.querySelector('[data-dispersion-black]') as HTMLButtonElement | null;
     if (button) button.textContent = '黑底';
     this.renderDispersionPreview();
+  }
+
+  private gradientRgba(color: string, alpha: number): string {
+    const value = color.replace('#', '');
+    const red = parseInt(value.slice(0, 2), 16) || 0;
+    const green = parseInt(value.slice(2, 4), 16) || 0;
+    const blue = parseInt(value.slice(4, 6), 16) || 0;
+    return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha / 100))})`;
+  }
+
+  private syncGradientInputs(): void {
+    this.gradientSelected = Math.max(0, Math.min(this.gradientStops.length - 1, this.gradientSelected));
+    const stop = this.gradientStops[this.gradientSelected];
+    if (!stop) return;
+    this.gradientColor.value = stop.color;
+    this.gradientPosition.value = String(Math.round(stop.position));
+    this.gradientAlpha.value = String(Math.round(stop.alpha));
+    this.gradientAlphaValue.textContent = `${Math.round(stop.alpha)}%`;
+  }
+
+  private renderGradientEditor(): void {
+    const sorted = this.gradientStops.slice().sort((a, b) => a.position - b.position);
+    this.gradientBarFill.style.background = `linear-gradient(90deg, ${sorted
+      .map((stop) => `${this.gradientRgba(stop.color, stop.alpha)} ${stop.position}%`)
+      .join(', ')})`;
+    this.gradientBarMarkers.innerHTML = '';
+    this.gradientStops.forEach((stop, index) => {
+      const marker = document.createElement('button');
+      marker.type = 'button';
+      marker.className = `gradient-marker${index === this.gradientSelected ? ' active' : ''}`;
+      marker.dataset.gradientStop = String(index);
+      marker.style.left = `${stop.position}%`;
+      marker.style.background = stop.color;
+      marker.title = `色标 ${index + 1} · ${Math.round(stop.position)}%`;
+      this.gradientBarMarkers.append(marker);
+    });
+    const canvas = this.gradientPreview;
+    const context = this.gradientCtx;
+    const width = canvas.width;
+    const height = canvas.height;
+    context.clearRect(0, 0, width, height);
+    const checker = 10;
+    for (let y = 0; y < height; y += checker) {
+      for (let x = 0; x < width; x += checker) {
+        context.fillStyle = (x / checker + y / checker) % 2 === 0 ? '#242424' : '#191919';
+        context.fillRect(x, y, checker, checker);
+      }
+    }
+    const gradient = context.createLinearGradient(0, 0, width, 0);
+    for (const stop of sorted) {
+      gradient.addColorStop(Math.max(0, Math.min(1, stop.position / 100)), this.gradientRgba(stop.color, stop.alpha));
+    }
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, width, height);
+    this.syncGradientInputs();
+    this.gradientStatus.textContent = `${this.gradientStops.length} 个色标 · 当前色标 ${this.gradientSelected + 1}`;
+  }
+
+  private pushGradientHistory(): void {
+    this.gradientUndo.push(this.gradientStops.map((stop) => ({ ...stop })));
+    if (this.gradientUndo.length > 20) this.gradientUndo.shift();
+  }
+
+  private addGradientStop(): void {
+    this.pushGradientHistory();
+    const current = this.gradientStops[this.gradientSelected];
+    const next = this.gradientStops[this.gradientSelected + 1];
+    const position = next
+      ? (current.position + next.position) / 2
+      : current.position < 100 ? (current.position + 100) / 2 : 50;
+    this.gradientStops.push({
+      position: Math.round(position),
+      color: current.color,
+      alpha: current.alpha
+    });
+    this.gradientSelected = this.gradientStops.length - 1;
+    this.renderGradientEditor();
+  }
+
+  private removeGradientStop(): void {
+    if (this.gradientStops.length <= 2) {
+      this.callbacks.toast('至少需要保留两个色标', 'info');
+      return;
+    }
+    this.pushGradientHistory();
+    this.gradientStops.splice(this.gradientSelected, 1);
+    this.gradientSelected = Math.min(this.gradientSelected, this.gradientStops.length - 1);
+    this.renderGradientEditor();
+  }
+
+  private undoGradientChange(): void {
+    const previous = this.gradientUndo.pop();
+    if (!previous) {
+      this.callbacks.toast('没有可撤销的渐变操作', 'info');
+      return;
+    }
+    this.gradientStops = previous;
+    this.gradientSelected = Math.min(this.gradientSelected, this.gradientStops.length - 1);
+    this.renderGradientEditor();
+  }
+
+  private resetGradient(): void {
+    this.pushGradientHistory();
+    this.gradientStops = [
+      { position: 0, color: '#ff7878', alpha: 100 },
+      { position: 100, color: '#ff3b3b', alpha: 100 }
+    ];
+    this.gradientSelected = 1;
+    this.renderGradientEditor();
+  }
+
+  private buildGradientOutput(): HTMLCanvasElement {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const context = canvas.getContext('2d');
+    if (!context) return canvas;
+    const sorted = this.gradientStops.slice().sort((a, b) => a.position - b.position);
+    const gradient = context.createLinearGradient(0, 0, canvas.width, 0);
+    for (const stop of sorted) {
+      gradient.addColorStop(Math.max(0, Math.min(1, stop.position / 100)), this.gradientRgba(stop.color, stop.alpha));
+    }
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+
+  private applyGradientOutput(): void {
+    const output = this.buildGradientOutput();
+    this.setImage(
+      output,
+      output.width,
+      output.height,
+      `${this.currentBaseName()}_gradient.png`,
+      '',
+      output.width * output.height * 4,
+      { preserveTransform: true, preserveHistory: false }
+    );
+    this.setPanelMode('tools');
+    this.callbacks.toast('已创建渐变文档', 'success');
+  }
+
+  private async exportGradientOutput(): Promise<void> {
+    const output = this.buildGradientOutput();
+    try {
+      const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('PNG 编码失败');
+      const data = new Uint8Array(await blob.arrayBuffer());
+      const saved = await window.nyxel.file.savePng(data, `${this.currentBaseName()}_gradient.png`);
+      if (saved) this.callbacks.toast(`已导出：${saved}`, 'success');
+    } catch (error) {
+      this.callbacks.toast(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private syncPathDefaults(): void {
+    if (!this.bitmap) return;
+    const width = this.imageWidth || 512;
+    const height = this.imageHeight || 512;
+    if (!this.pathCustomSize.checked) {
+      this.pathSizeW.value = String(width);
+      this.pathSizeH.value = String(height);
+    }
+  }
+
+  private renderPathGradient(): void {
+    const canvas = this.pathPreview;
+    const context = this.pathCtx;
+    const previewWidth = canvas.width;
+    const previewHeight = canvas.height;
+    context.clearRect(0, 0, previewWidth, previewHeight);
+    const custom = this.pathCustomSize.checked;
+    const width = Math.max(1, Math.min(4096, custom ? Number(this.pathSizeW.value) || 512 : this.imageWidth || 512));
+    const height = Math.max(1, Math.min(4096, custom ? Number(this.pathSizeH.value) || 512 : this.imageHeight || 512));
+    const output = document.createElement('canvas');
+    output.width = width;
+    output.height = height;
+    const ctx = output.getContext('2d');
+    if (!ctx) return;
+    const centerX = this.pathCenterX * width;
+    const centerY = this.pathCenterY * height;
+    const maxRadius = Math.min(width, height) / 2;
+    const radius = Math.max(1, (Math.max(1, Number(this.pathWidth.value) || 59) / 100) * maxRadius);
+    const band = Math.max(1, (Math.max(0, Number(this.pathThickness.value) || 0) / 100) * maxRadius * 0.32 + 1);
+    const opacity = Math.max(0, Math.min(100, Number(this.pathOpacity.value) || 0)) / 100;
+    const inner = Math.max(0, radius - band / 2);
+    const outer = radius + band / 2;
+    const gradient = ctx.createRadialGradient(centerX, centerY, inner, centerX, centerY, outer);
+    gradient.addColorStop(0, this.gradientRgba(this.pathColor.value, 0));
+    gradient.addColorStop(0.3, this.gradientRgba(this.pathColor.value, opacity * 55));
+    gradient.addColorStop(0.5, this.gradientRgba(this.pathColor.value, opacity * 100));
+    gradient.addColorStop(0.7, this.gradientRgba(this.pathColor.value, opacity * 55));
+    gradient.addColorStop(1, this.gradientRgba(this.pathColor.value, 0));
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+    this.pathOutput = output;
+
+    const scale = Math.min(previewWidth / width, previewHeight / height);
+    const drawWidth = width * scale;
+    const drawHeight = height * scale;
+    const offsetX = (previewWidth - drawWidth) / 2;
+    const offsetY = (previewHeight - drawHeight) / 2;
+    context.imageSmoothingEnabled = true;
+    context.drawImage(output, offsetX, offsetY, drawWidth, drawHeight);
+    context.strokeStyle = 'rgba(245, 177, 61, 0.9)';
+    context.lineWidth = 1;
+    const markerX = offsetX + this.pathCenterX * drawWidth;
+    const markerY = offsetY + this.pathCenterY * drawHeight;
+    context.beginPath();
+    context.moveTo(markerX - 6, markerY);
+    context.lineTo(markerX + 6, markerY);
+    context.moveTo(markerX, markerY - 6);
+    context.lineTo(markerX, markerY + 6);
+    context.stroke();
+    this.pathStatus.textContent = this.pathPicking
+      ? '点击预览设置路径中心'
+      : `路径 ${Math.round(radius)}px · 中心 ${Math.round(this.pathCenterX * 100)}% / ${Math.round(this.pathCenterY * 100)}%`;
+  }
+
+  private applyPathGradient(): void {
+    this.renderPathGradient();
+    const output = this.pathOutput;
+    if (!output) return;
+    this.setImage(
+      output,
+      output.width,
+      output.height,
+      `${this.currentBaseName()}_path_gradient.png`,
+      '',
+      output.width * output.height * 4,
+      { preserveTransform: true, preserveHistory: false }
+    );
+    this.setPanelMode('tools');
+    this.callbacks.toast('已应用路径渐变', 'success');
+  }
+
+  private async exportPathGradient(): Promise<void> {
+    this.renderPathGradient();
+    const output = this.pathOutput;
+    if (!output) return;
+    try {
+      const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('PNG 编码失败');
+      const data = new Uint8Array(await blob.arrayBuffer());
+      const saved = await window.nyxel.file.savePng(data, `${this.currentBaseName()}_path_gradient.png`);
+      if (saved) this.callbacks.toast(`已导出：${saved}`, 'success');
+    } catch (error) {
+      this.callbacks.toast(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private clearPathGradient(): void {
+    this.pathOpacity.value = '0';
+    this.pathOpacityValue.value = '0';
+    this.renderPathGradient();
+    this.callbacks.toast('已清除路径渐变内容', 'info');
+  }
+
+  private resetPathGradient(): void {
+    this.pathWidth.value = '59';
+    this.pathWidthValue.value = '59';
+    this.pathThickness.value = '100';
+    this.pathThicknessValue.value = '100';
+    this.pathOpacity.value = '100';
+    this.pathOpacityValue.value = '100';
+    this.pathColor.value = '#ff7878';
+    this.pathCenterX = 0.5;
+    this.pathCenterY = 0.5;
+    this.pathPicking = false;
+    this.pathCustomSize.checked = false;
+    this.pathEqual.checked = true;
+    this.pathSizeW.disabled = true;
+    this.pathSizeH.disabled = true;
+    this.element.querySelector('[data-path-pick]')?.classList.remove('active');
+    this.syncPathDefaults();
+    this.renderPathGradient();
   }
 
   private clampSequenceGrid(value: string): number {
