@@ -708,7 +708,7 @@ async function seedOfficialTextures(): Promise<void> {
   }
 }
 
-const OFFICIAL_MODEL_PACK_VERSION = 1;
+const OFFICIAL_MODEL_PACK_VERSION = 2;
 
 function officialModelPackSource(): string {
   const packaged = path.join(process.resourcesPath, 'official-models', '官方模型');
@@ -728,7 +728,9 @@ async function seedOfficialModels(): Promise<void> {
   }
   try {
     await ensureLibraryDirs();
-    await copyDirectoryMissing(source, path.join(modelsDir(), '官方模型'));
+    const officialDir = path.join(modelsDir(), '官方模型');
+    await copyDirectoryMissing(source, officialDir);
+    await fs.promises.rm(path.join(officialDir, 'DaoGuangPIAN_bowen.fbx'), { force: true });
     await fs.promises.writeFile(
       marker,
       JSON.stringify({ version: OFFICIAL_MODEL_PACK_VERSION, seededAt: new Date().toISOString() }, null, 2),
@@ -4146,6 +4148,22 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePath) return null;
     await fs.promises.writeFile(result.filePath, String(text), 'utf8');
+    return result.filePath;
+  });
+
+  ipcMain.handle('file:saveBinary', async (_event, data: Uint8Array, suggestedName: string) => {
+    if (!mainWindow) return null;
+    const settings = loadSettings();
+    await fs.promises.mkdir(settings.exportDir, { recursive: true });
+    const requested = path.basename(String(suggestedName || 'texturemap.bin'));
+    const extension = path.extname(requested).replace('.', '') || 'bin';
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: path.join(settings.exportDir, requested),
+      filters: [{ name: `${extension.toUpperCase()} File`, extensions: [extension] }],
+      properties: ['createDirectory', 'showOverwriteConfirmation']
+    });
+    if (result.canceled || !result.filePath) return null;
+    await fs.promises.writeFile(result.filePath, Buffer.from(data));
     return result.filePath;
   });
 

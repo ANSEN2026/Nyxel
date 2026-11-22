@@ -3,11 +3,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
+import { FBXExporter } from '@comfyorg/fbx-exporter-three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { ViewCallbacks } from '../types';
+import { getUndoHistoryLimit } from '../lib/undo-history';
 import { basename } from '../utils';
 
 type UpAxis = 'y' | 'z';
@@ -88,6 +90,67 @@ const MATERIAL_ALPHA_CHANNEL_INDEX: Record<MaterialAlphaChannel, number> = {
 
 const MATERIAL_SETTINGS_KEY = 'texturemap.model.material.settings';
 const MATERIAL_PRESET_KEY = 'texturemap.model.material.preset';
+const RADIAL_UV_CHANNELS = ['uv', 'uv1', 'uv2', 'uv3'] as const;
+
+type ReferenceAdjustMode = 'ring' | 'wave';
+
+interface RadialParams {
+  mode: ReferenceAdjustMode;
+  inner: number;
+  outer: number;
+  waveSize: number;
+  waveSpacing: number;
+  ringCount: number;
+  normalizeUv: boolean;
+}
+
+interface RadialMeshBaseline {
+  mesh: THREE.Mesh;
+  toRoot: THREE.Matrix4;
+  toMesh: THREE.Matrix4;
+  positions: Float32Array;
+  uvs: Map<string, Float32Array>;
+}
+
+interface RadialBaseline {
+  axis: 0 | 1 | 2;
+  center: THREE.Vector3;
+  inner: number;
+  outer: number;
+  meshes: RadialMeshBaseline[];
+}
+
+interface ModelGeometrySnapshot {
+  uuid: string;
+  position: Float32Array;
+  uvs: Map<string, Float32Array>;
+}
+
+interface ModelEntryState {
+  id: number;
+  name: string;
+  filePath: string;
+  size: number;
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: [number, number, number];
+  radial: RadialParams | null;
+  uvNormalized: boolean;
+  geometry: ModelGeometrySnapshot[];
+}
+
+interface ModelSnapshot {
+  upAxis: UpAxis;
+  activeModelId: number;
+  selectedModelId: number;
+  entries: ModelEntryState[];
+  material: MaterialSettings;
+  materialPresetKey: string;
+  lightingEnabled: boolean;
+  wrapRepeat: boolean;
+  signature: string;
+  geometryRevision: number;
+}
 
 const MATERIAL_PRESETS: Record<string, MaterialSettings> = {
   default: {
@@ -102,8 +165,8 @@ const MATERIAL_PRESETS: Record<string, MaterialSettings> = {
     bloomStrength: 0.18,
     brightness: 1,
     contrast: 1,
-    doubleSided: false,
-    ueBackground: false
+    doubleSided: true,
+    ueBackground: true
   }
 };
 
@@ -159,6 +222,7 @@ export class ModelView {
   private materialDoubleSided: HTMLInputElement;
   private materialBackgroundToggle: HTMLInputElement;
   private modelList: HTMLElement;
+  private modelNameInput: HTMLInputElement;
   private modelPosX: HTMLInputElement;
   private modelPosY: HTMLInputElement;
   private modelPosZ: HTMLInputElement;
@@ -181,6 +245,9 @@ export class ModelView {
   private referenceWaveSpacingValue: HTMLInputElement;
   private referenceRingCount: HTMLInputElement;
   private referenceRingCountValue: HTMLInputElement;
+  private referenceUvNormalize: HTMLInputElement;
+  private referenceExportFormat: HTMLSelectElement;
+  private referenceTarget: HTMLElement;
   private referenceGroup: THREE.Group | null = null;
   private studioBackgroundTexture: THREE.CanvasTexture | null = null;
   private materialSettings: MaterialSettings = { ...MATERIAL_PRESETS.default };
@@ -213,7 +280,16 @@ export class ModelView {
   private model: THREE.Object3D | null = null;
   private modelEntries: ModelEntry[] = [];
   private activeModelId = -1;
+  private selectedModelId = -1;
   private modelEntrySeq = 0;
+  private radialBaselines = new Map<number, RadialBaseline>();
+  private radialParams = new Map<number, RadialParams>();
+  private uvNormalizedModels = new Set<number>();
+  private geometryRevision = 0;
+  private modelUndoStack: ModelSnapshot[] = [];
+  private modelRedoStack: ModelSnapshot[] = [];
+  private pendingModelUndo: ModelSnapshot | null = null;
+  private suppressModelUndo = false;
   private originalMaterials = new WeakMap<THREE.Mesh, THREE.Material | THREE.Material[]>();
   private generatedMaterials: THREE.Material[] = [];
   private externalTexture: THREE.Texture | null = null;
@@ -355,6 +431,10 @@ export class ModelView {
             <section class="material-group model-scene-group">
               <div class="material-group-title">场景模型</div>
               <div class="model-list" id="model-list"></div>
+              <div class="model-name-row">
+                <input id="model-name-input" type="text" placeholder="模型名称">
+                <button type="button" data-model-rename>改名</button>
+              </div>
               <div class="model-transform-row">
                 <span>位置</span>
                 <input id="model-pos-x" type="number" step="0.1" value="0" title="X">
@@ -379,21 +459,24 @@ export class ModelView {
                 <button type="button" data-model-remove>移除</button>
               </div>
               <div class="model-scene-actions">
+                <button type="button" data-model-locate>定位</button>
+                <button type="button" data-model-uv-normalize>UV 归一化</button>
                 <button type="button" data-model-save>保存组合</button>
                 <button type="button" data-model-load>载入组合</button>
               </div>
             </section>
             <section class="material-group reference-group">
-              <div class="material-group-title">官方参考模型</div>
+              <div class="material-group-title">模型内外环调整</div>
+              <div class="reference-target" id="reference-target">作用于：未选择模型</div>
               <label class="material-control-row">
-                <span>模型</span>
+                <span>官方模型</span>
                 <select id="official-model-select"><option value="">载入中…</option></select>
                 <button type="button" data-official-load>载入</button>
               </label>
-              <label class="material-control-row">
+              <label class="material-control-row hidden">
                 <span>模式</span>
                 <select id="reference-mode">
-                  <option value="ring" selected>圆盘通道</option>
+                  <option value="ring" selected>内外环</option>
                   <option value="wave">波浪</option>
                 </select>
               </label>
@@ -407,27 +490,35 @@ export class ModelView {
                 <input id="reference-outer" type="range" min="0.1" max="2" step="0.01" value="1">
                 <input id="reference-outer-value" class="material-number" type="number" min="0.1" max="2" step="0.01" value="1">
               </label>
-              <label class="material-control-row">
+              <label class="material-control-row hidden">
                 <span>波浪大小</span>
                 <input id="reference-wave-size" type="range" min="0" max="0.6" step="0.005" value="0.12">
                 <input id="reference-wave-size-value" class="material-number" type="number" min="0" max="0.6" step="0.005" value="0.12">
               </label>
-              <label class="material-control-row">
+              <label class="material-control-row hidden">
                 <span>波浪间隔</span>
                 <input id="reference-wave-spacing" type="range" min="0.03" max="0.8" step="0.01" value="0.16">
                 <input id="reference-wave-spacing-value" class="material-number" type="number" min="0.03" max="0.8" step="0.01" value="0.16">
               </label>
-              <label class="material-control-row">
+              <label class="material-control-row hidden">
                 <span>圈数</span>
                 <input id="reference-ring-count" type="range" min="1" max="24" step="1" value="6">
                 <input id="reference-ring-count-value" class="material-number" type="number" min="1" max="24" step="1" value="6">
               </label>
-              <div class="model-scene-actions">
-                <button type="button" data-reference-generate>生成</button>
-                <button type="button" data-reference-export>导出 OBJ</button>
+              <label class="reference-check">
+                <input id="reference-uv-normalize" type="checkbox" checked>
+                应用后 UV 归一化
+              </label>
+              <div class="model-scene-actions reference-export-row">
+                <button type="button" data-reference-apply>应用</button>
+                <select id="reference-export-format" title="导出格式">
+                  <option value="fbx" selected>FBX</option>
+                  <option value="obj">OBJ</option>
+                </select>
+                <button type="button" data-reference-export>导出</button>
               </div>
             </section>
-            <div class="model-shortcut-hint">左键点击模型选择 · W 移动 / E 旋转 / R 缩放 · 拖动坐标轴调整</div>
+            <div class="model-shortcut-hint">左键点击模型选择 · W 移动 / E 旋转 / R 缩放 · 拖动坐标轴调整 · Ctrl+Z 撤回</div>
           </div>
         </aside>
         <aside class="material-panel">
@@ -525,7 +616,7 @@ export class ModelView {
                 <input id="material-double-sided" class="toggle" type="checkbox">
               </label>
               <label class="material-control-row">
-                <span>UE 材质背景</span>
+                <span>背景</span>
                 <input id="material-ue-bg" class="toggle" type="checkbox">
               </label>
             </section>
@@ -562,7 +653,7 @@ export class ModelView {
             </div>
           </div>
         </div>
-        <div class="light-panel hidden">
+        <div class="light-panel hidden" data-3d-only>
           <div class="muted" style="margin-bottom:6px">方向光角度</div>
           <label>方位 <span id="light-az-value">45°</span></label>
           <input id="light-az" type="range" min="0" max="360" value="45">
@@ -603,6 +694,7 @@ export class ModelView {
     this.materialDoubleSided = this.element.querySelector('#material-double-sided') as HTMLInputElement;
     this.materialBackgroundToggle = this.element.querySelector('#material-ue-bg') as HTMLInputElement;
     this.modelList = this.element.querySelector('#model-list') as HTMLElement;
+    this.modelNameInput = this.element.querySelector('#model-name-input') as HTMLInputElement;
     this.modelPosX = this.element.querySelector('#model-pos-x') as HTMLInputElement;
     this.modelPosY = this.element.querySelector('#model-pos-y') as HTMLInputElement;
     this.modelPosZ = this.element.querySelector('#model-pos-z') as HTMLInputElement;
@@ -625,6 +717,9 @@ export class ModelView {
     this.referenceWaveSpacingValue = this.element.querySelector('#reference-wave-spacing-value') as HTMLInputElement;
     this.referenceRingCount = this.element.querySelector('#reference-ring-count') as HTMLInputElement;
     this.referenceRingCountValue = this.element.querySelector('#reference-ring-count-value') as HTMLInputElement;
+    this.referenceUvNormalize = this.element.querySelector('#reference-uv-normalize') as HTMLInputElement;
+    this.referenceExportFormat = this.element.querySelector('#reference-export-format') as HTMLSelectElement;
+    this.referenceTarget = this.element.querySelector('#reference-target') as HTMLElement;
     this.uvChannelSelect = this.element.querySelector('#uv-channel') as HTMLSelectElement;
     this.uvBgSelect = this.element.querySelector('#uv-bg') as HTMLSelectElement;
     this.uvHud = this.element.querySelector('.uv-hud') as HTMLElement;
@@ -857,6 +952,47 @@ export class ModelView {
     });
     this.element.querySelector('[data-action="fit"]')?.addEventListener('click', () => this.fitCurrent());
     this.bindModelSceneControls();
+    this.element.addEventListener('pointerdown', () => this.beginModelUndoGesture(), true);
+    this.element.addEventListener('pointerup', () => {
+      window.setTimeout(() => this.commitModelUndoGesture(), 0);
+    }, true);
+    this.element.addEventListener('keydown', (event) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
+        this.beginModelUndoGesture();
+      }
+    }, true);
+    this.element.addEventListener('change', () => {
+      if (!this.pendingModelUndo) this.beginModelUndoGesture();
+      window.setTimeout(() => this.commitModelUndoGesture(), 0);
+    }, true);
+    this.element.addEventListener('click', () => {
+      if (!this.pendingModelUndo) this.beginModelUndoGesture();
+      window.setTimeout(() => this.commitModelUndoGesture(), 0);
+    }, true);
+    window.addEventListener('keydown', (event) => {
+      if (!this.active) return;
+      const target = event.target as HTMLElement | null;
+      const inputType = target instanceof HTMLInputElement ? target.type : '';
+      const textEditing = Boolean(
+        target && (
+          target.isContentEditable ||
+          target.tagName === 'TEXTAREA' ||
+          (target.tagName === 'INPUT' && ['text', 'search', 'email', 'url', 'tel', 'password'].includes(inputType))
+        )
+      );
+      if (textEditing) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) this.redoModel();
+        else this.undoModel();
+      } else if (key === 'y') {
+        event.preventDefault();
+        this.redoModel();
+      }
+    });
     this.element.querySelector('[data-action="texture"]')?.addEventListener('click', () => void this.pickTexture());
     this.element.querySelector('[data-action="light-panel"]')?.addEventListener('click', () => {
       this.lightPanel.classList.toggle('hidden');
@@ -1325,6 +1461,7 @@ export class ModelView {
 
     this.modelEntries.push(entry);
     this.activeModelId = entry.id;
+    this.selectedModelId = entry.id;
     this.model = object;
     this.fileName = name;
     this.filePath = filePath;
@@ -1352,6 +1489,8 @@ export class ModelView {
     this.statsBadge.classList.remove('hidden');
     this.fileLabel.textContent = name;
     this.callbacks.status.set(name, this.statsText());
+    this.clearModelUndoHistory();
+    this.syncReferenceControls();
     if (filePath) this.callbacks.pushRecent('model', filePath, name);
 
     if (missingTextures.length) {
@@ -1363,16 +1502,20 @@ export class ModelView {
   }
 
   private setUpAxis(axis: UpAxis, doFit = true): void {
+    this.ensureModelUndoCheckpoint();
     this.upAxis = axis;
     for (const entry of this.modelEntries) {
       entry.upAxis = axis;
       entry.object.rotation.x = axis === 'z' ? -Math.PI / 2 : 0;
       entry.object.updateMatrixWorld(true);
     }
+    this.radialBaselines.clear();
+    this.radialParams.clear();
     this.clearSelection();
     this.element.querySelectorAll('[data-up]').forEach((button) => {
       button.classList.toggle('active', (button as HTMLElement).dataset.up === axis);
     });
+    this.syncReferenceControls();
     if (doFit) this.fit();
     this.updateStats();
   }
@@ -1389,10 +1532,14 @@ export class ModelView {
     for (const entry of this.modelEntries) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = `model-list-item${entry.id === this.activeModelId ? ' active' : ''}`;
+      button.className = `model-list-item${entry.id === this.selectedModelId ? ' active' : ''}`;
       button.textContent = entry.name;
       button.title = entry.filePath || entry.name;
       button.addEventListener('click', () => this.selectModelEntry(entry.id));
+      button.addEventListener('dblclick', () => {
+        this.selectModelEntry(entry.id);
+        this.locateSelectedModel();
+      });
       this.modelList.append(button);
     }
   }
@@ -1401,10 +1548,15 @@ export class ModelView {
     return this.modelEntries.find((entry) => entry.id === this.activeModelId) ?? null;
   }
 
+  private selectedModelEntry(): ModelEntry | null {
+    return this.modelEntries.find((entry) => entry.id === this.selectedModelId) ?? null;
+  }
+
   private selectModelEntry(id: number): void {
     const entry = this.modelEntries.find((item) => item.id === id);
     if (!entry) return;
     this.activeModelId = entry.id;
+    this.selectedModelId = entry.id;
     this.model = entry.object;
     this.fileName = entry.name;
     this.filePath = entry.filePath;
@@ -1416,6 +1568,7 @@ export class ModelView {
     this.renderModelList();
     this.syncModelTransformControls();
     this.syncTransformGizmo();
+    this.syncReferenceControls();
     this.fileLabel.textContent = entry.name;
     this.callbacks.status.set(entry.name, this.statsText());
     this.updateStats();
@@ -1437,7 +1590,7 @@ export class ModelView {
   }
 
   private syncTransformGizmo(): void {
-    const entry = this.activeModelEntry();
+    const entry = this.selectedModelEntry();
     const visible = this.mode === '3d' && Boolean(entry);
     this.transformControls.enabled = visible && !this.altHeld;
     if (visible && entry) {
@@ -1456,8 +1609,10 @@ export class ModelView {
   }
 
   private syncModelTransformControls(): void {
-    const entry = this.activeModelEntry();
+    const entry = this.selectedModelEntry();
     const disabled = !entry;
+    this.modelNameInput.disabled = disabled;
+    this.modelNameInput.value = entry?.name ?? '';
     const fields = [
       this.modelPosX,
       this.modelPosY,
@@ -1496,8 +1651,9 @@ export class ModelView {
 
   private bindModelSceneControls(): void {
     const apply = (): void => {
-      const entry = this.activeModelEntry();
+      const entry = this.selectedModelEntry();
       if (!entry) return;
+      this.ensureModelUndoCheckpoint();
       const snap = this.modelGridSnap.checked ? 0.1 : 0;
       const snapValue = (value: number): number => snap > 0 ? Math.round(value / snap) * snap : value;
       const position = new THREE.Vector3(
@@ -1572,36 +1728,21 @@ export class ModelView {
   }
 
   private bindReferenceControls(): void {
-    const syncPair = (range: HTMLInputElement, number: HTMLInputElement, onChange?: () => void): void => {
+    const syncPair = (range: HTMLInputElement, number: HTMLInputElement): void => {
       range.addEventListener('input', () => {
         number.value = range.value;
-        onChange?.();
       });
       number.addEventListener('change', () => {
         const value = Math.max(Number(range.min) || 0, Math.min(Number(range.max) || 1, Number(number.value) || 0));
         range.value = String(value);
         number.value = String(value);
-        onChange?.();
       });
     };
-    const syncWave = (): void => {
-      const outer = Math.max(0.1, Number(this.referenceOuter.value) || 1);
-      const spacing = Math.max(0.03, Number(this.referenceWaveSpacing.value) || 0.16);
-      const count = Math.max(1, Math.min(24, Math.round(outer / spacing)));
-      this.referenceRingCount.value = String(count);
-      this.referenceRingCountValue.value = String(count);
-    };
     syncPair(this.referenceInner, this.referenceInnerValue);
-    syncPair(this.referenceOuter, this.referenceOuterValue, syncWave);
+    syncPair(this.referenceOuter, this.referenceOuterValue);
     syncPair(this.referenceWaveSize, this.referenceWaveSizeValue);
-    syncPair(this.referenceWaveSpacing, this.referenceWaveSpacingValue, syncWave);
-    syncPair(this.referenceRingCount, this.referenceRingCountValue, () => {
-      const outer = Math.max(0.1, Number(this.referenceOuter.value) || 1);
-      const count = Math.max(1, Number(this.referenceRingCount.value) || 1);
-      const spacing = Math.max(0.03, outer / count);
-      this.referenceWaveSpacing.value = spacing.toFixed(2);
-      this.referenceWaveSpacingValue.value = spacing.toFixed(2);
-    });
+    syncPair(this.referenceWaveSpacing, this.referenceWaveSpacingValue);
+    syncPair(this.referenceRingCount, this.referenceRingCountValue);
     this.officialModelSelect.addEventListener('change', () => {
       this.element.querySelector('[data-official-load]')?.classList.remove('active');
     });
@@ -1614,9 +1755,19 @@ export class ModelView {
       void this.loadPath(target);
     });
     this.referenceMode.addEventListener('change', () => this.updateReferenceMode());
-    this.element.querySelector('[data-reference-generate]')?.addEventListener('click', () => this.generateReferenceModel());
-    this.element.querySelector('[data-reference-export]')?.addEventListener('click', () => void this.exportReferenceModel());
+    this.element.querySelector('[data-reference-apply]')?.addEventListener('click', () => this.applySelectedModelAdjustment());
+    this.element.querySelector('[data-reference-export]')?.addEventListener('click', () => void this.exportSelectedModel());
+    this.element.querySelector('[data-model-rename]')?.addEventListener('click', () => this.renameSelectedModel());
+    this.modelNameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        this.renameSelectedModel();
+      }
+    });
+    this.element.querySelector('[data-model-locate]')?.addEventListener('click', () => this.locateSelectedModel());
+    this.element.querySelector('[data-model-uv-normalize]')?.addEventListener('click', () => this.normalizeSelectedModelUvs());
     this.updateReferenceMode();
+    this.syncReferenceControls();
   }
 
   private updateReferenceMode(): void {
@@ -1627,6 +1778,576 @@ export class ModelView {
     this.referenceWaveSpacingValue.disabled = !wave;
     this.referenceRingCount.disabled = !wave;
     this.referenceRingCountValue.disabled = !wave;
+  }
+
+  private syncReferenceControls(): void {
+    const entry = this.selectedModelEntry();
+    this.referenceTarget.textContent = entry ? `作用于：${entry.name}` : '作用于：未选择模型';
+    if (!entry) return;
+    const baseline = this.ensureRadialBaseline(entry);
+    const saved = this.radialParams.get(entry.id);
+    const inner = saved?.inner ?? (baseline.outer > 1e-6 ? baseline.inner / baseline.outer : 0.55);
+    const outer = saved?.outer ?? 1;
+    this.referenceMode.value = 'ring';
+    this.referenceInner.value = inner.toFixed(2);
+    this.referenceInnerValue.value = inner.toFixed(2);
+    this.referenceOuter.value = outer.toFixed(2);
+    this.referenceOuterValue.value = outer.toFixed(2);
+    this.referenceWaveSize.value = String(saved?.waveSize ?? 0.12);
+    this.referenceWaveSizeValue.value = String(saved?.waveSize ?? 0.12);
+    this.referenceWaveSpacing.value = String(saved?.waveSpacing ?? 0.16);
+    this.referenceWaveSpacingValue.value = String(saved?.waveSpacing ?? 0.16);
+    this.referenceRingCount.value = String(saved?.ringCount ?? 6);
+    this.referenceRingCountValue.value = String(saved?.ringCount ?? 6);
+    this.referenceUvNormalize.checked = saved?.normalizeUv ?? true;
+    this.updateReferenceMode();
+  }
+
+  private readReferenceParams(): RadialParams {
+    const inner = Math.max(0, Math.min(1.4, Number(this.referenceInner.value) || 0));
+    const outer = Math.max(0.1, Math.min(2, Number(this.referenceOuter.value) || 1));
+    return {
+      mode: 'ring',
+      inner: Math.min(inner, outer * 0.98),
+      outer,
+      waveSize: 0,
+      waveSpacing: 0.16,
+      ringCount: 6,
+      normalizeUv: this.referenceUvNormalize.checked
+    };
+  }
+
+  private applySelectedModelAdjustment(): void {
+    const entry = this.selectedModelEntry();
+    if (!entry) {
+      this.callbacks.toast('请先用左键选择一个模型', 'info');
+      return;
+    }
+    this.ensureModelGeometryCheckpoint();
+    const params = this.readReferenceParams();
+    this.radialParams.set(entry.id, params);
+    this.applyRadialAdjustment(entry, params, false);
+    this.syncReferenceControls();
+    this.callbacks.toast(`内外环调整已应用${params.normalizeUv ? '（UV 已归一化）' : ''}`, 'success');
+  }
+
+  private normalizeSelectedModelUvs(): void {
+    const entry = this.selectedModelEntry();
+    if (!entry) {
+      this.callbacks.toast('请先用左键选择一个模型', 'info');
+      return;
+    }
+    this.ensureModelGeometryCheckpoint();
+    this.normalizeModelUvs(entry);
+    this.uvNormalizedModels.add(entry.id);
+    this.callbacks.toast('UV 已归一化到 0–1', 'success');
+  }
+
+  private renameSelectedModel(): void {
+    const entry = this.selectedModelEntry();
+    if (!entry) {
+      this.callbacks.toast('请先选择模型', 'info');
+      return;
+    }
+    const name = this.modelNameInput.value.trim();
+    if (!name || name === entry.name) return;
+    this.ensureModelUndoCheckpoint();
+    entry.name = name;
+    entry.root.name = name;
+    if (entry.id === this.activeModelId) {
+      this.fileName = name;
+      this.fileLabel.textContent = name;
+    }
+    this.renderModelList();
+    this.syncModelTransformControls();
+    this.syncReferenceControls();
+    this.callbacks.status.set(name, this.statsText());
+    this.callbacks.renameModelTitle(name);
+    this.callbacks.toast(`模型已改名为：${name}`, 'success');
+  }
+
+  private locateSelectedModel(): void {
+    const entry = this.selectedModelEntry();
+    if (!entry) {
+      this.callbacks.toast('请先选择模型', 'info');
+      return;
+    }
+    this.fitBox(new THREE.Box3().setFromObject(entry.root));
+    this.callbacks.toast(`已定位到：${entry.name}`, 'info');
+  }
+
+  private async exportSelectedModel(): Promise<void> {
+    const entry = this.selectedModelEntry() ?? this.activeModelEntry();
+    if (!entry) {
+      this.callbacks.toast('请先选择要导出的模型', 'info');
+      return;
+    }
+    const format = this.referenceExportFormat.value === 'obj' ? 'obj' : 'fbx';
+    const safeName = entry.name.replace(/[\\/:*?"<>|]+/g, '_') || '模型';
+    try {
+      if (format === 'obj') {
+        const text = new OBJExporter().parse(entry.root);
+        const saved = await window.nyxel.file.saveText(text, `${safeName}.obj`);
+        if (saved) this.callbacks.toast(`模型已导出：${saved}`, 'success');
+        return;
+      }
+      const exporter = new FBXExporter();
+      const bytes = await exporter.parseAsync(entry.root, {
+        preset: 'threejs',
+        includeAnimations: false,
+        embedTextures: true
+      });
+      const saved = await window.nyxel.file.saveBinary(bytes, `${safeName}.fbx`);
+      if (saved) this.callbacks.toast(`模型已导出：${saved}`, 'success');
+    } catch (error) {
+      this.callbacks.toast(`导出模型失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private ensureRadialBaseline(entry: ModelEntry): RadialBaseline {
+    const cached = this.radialBaselines.get(entry.id);
+    if (cached) return cached;
+    entry.root.updateMatrixWorld(true);
+    entry.object.updateMatrixWorld(true);
+    const rootInverse = entry.root.matrixWorld.clone().invert();
+    const meshes: RadialMeshBaseline[] = [];
+    const rootPoints: THREE.Vector3[] = [];
+    entry.object.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!position) return;
+      const toRoot = new THREE.Matrix4().multiplyMatrices(rootInverse, mesh.matrixWorld);
+      const toMesh = toRoot.clone().invert();
+      const positions = new Float32Array(position.array as ArrayLike<number>);
+      const uvs = new Map<string, Float32Array>();
+      for (const channel of RADIAL_UV_CHANNELS) {
+        const uv = mesh.geometry.getAttribute(channel) as THREE.BufferAttribute | undefined;
+        if (uv) uvs.set(channel, new Float32Array(uv.array as ArrayLike<number>));
+      }
+      meshes.push({ mesh, toRoot, toMesh, positions, uvs });
+      const point = new THREE.Vector3();
+      for (let index = 0; index < position.count; index += 1) {
+        point.fromBufferAttribute(position, index).applyMatrix4(toRoot);
+        rootPoints.push(point.clone());
+      }
+    });
+    if (!rootPoints.length) {
+      const empty: RadialBaseline = {
+        axis: 1,
+        center: new THREE.Vector3(),
+        inner: 0,
+        outer: 1,
+        meshes
+      };
+      this.radialBaselines.set(entry.id, empty);
+      return empty;
+    }
+    const box = new THREE.Box3();
+    for (const point of rootPoints) box.expandByPoint(point);
+    const size = box.getSize(new THREE.Vector3());
+    const axis: 0 | 1 | 2 = size.x <= size.y && size.x <= size.z ? 0 : size.y <= size.z ? 1 : 2;
+    const center = box.getCenter(new THREE.Vector3());
+    const axisA = axis === 0 ? 1 : 0;
+    const axisB = axis === 2 ? 1 : 2;
+    const distances: number[] = [];
+    for (const point of rootPoints) {
+      const a = point.getComponent(axisA) - center.getComponent(axisA);
+      const b = point.getComponent(axisB) - center.getComponent(axisB);
+      distances.push(Math.hypot(a, b));
+    }
+    distances.sort((left, right) => left - right);
+    const quantile = (value: number): number => {
+      if (!distances.length) return 0;
+      const index = Math.min(distances.length - 1, Math.max(0, Math.floor(value * (distances.length - 1))));
+      return distances[index];
+    };
+    let inner = quantile(0.02);
+    const outer = Math.max(quantile(0.995), 1e-4);
+    if (inner < outer * 0.02) inner = 0;
+    const baseline: RadialBaseline = { axis, center, inner, outer, meshes };
+    this.radialBaselines.set(entry.id, baseline);
+    return baseline;
+  }
+
+  private applyRadialAdjustment(entry: ModelEntry, params: RadialParams, recordUndo = true): void {
+    if (recordUndo) this.ensureModelGeometryCheckpoint();
+    const baseline = this.ensureRadialBaseline(entry);
+    const baseOuter = Math.max(1e-6, baseline.outer);
+    const targetOuter = Math.max(0.001, params.outer * baseOuter);
+    const targetInner = Math.max(0, Math.min(targetOuter * 0.98, params.inner * baseOuter));
+    const waveAmplitude = params.mode === 'wave' ? params.waveSize * baseOuter : 0;
+    const waveSpacing = Math.max(0.001, params.waveSpacing * baseOuter);
+    const rings = Math.max(1, Math.round(params.ringCount));
+    const axis = baseline.axis;
+    const axisA = axis === 0 ? 1 : 0;
+    const axisB = axis === 2 ? 1 : 2;
+    const radialSpan = Math.max(1e-6, baseline.outer - baseline.inner);
+    const point = new THREE.Vector3();
+    for (const meshBaseline of baseline.meshes) {
+      const position = meshBaseline.mesh.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!position || position.count !== meshBaseline.positions.length / 3) continue;
+      const array = position.array as Float32Array;
+      for (let index = 0; index < position.count; index += 1) {
+        point.fromArray(meshBaseline.positions, index * 3).applyMatrix4(meshBaseline.toRoot);
+        const a = point.getComponent(axisA) - baseline.center.getComponent(axisA);
+        const b = point.getComponent(axisB) - baseline.center.getComponent(axisB);
+        const radius = Math.hypot(a, b);
+        if (radius > 1e-6) {
+          const t = THREE.MathUtils.clamp((radius - baseline.inner) / radialSpan, 0, 1);
+          const nextRadius = targetInner + t * (targetOuter - targetInner);
+          const factor = nextRadius / radius;
+          point.setComponent(axisA, baseline.center.getComponent(axisA) + a * factor);
+          point.setComponent(axisB, baseline.center.getComponent(axisB) + b * factor);
+        }
+        if (waveAmplitude > 0 && radius > 1e-6) {
+          const theta = Math.atan2(b, a);
+          const t = THREE.MathUtils.clamp((radius - baseline.inner) / radialSpan, 0, 1);
+          const currentRadius = targetInner + t * (targetOuter - targetInner);
+          const phase = theta * rings + (currentRadius / waveSpacing) * Math.PI * 2;
+          point.setComponent(axis, point.getComponent(axis) + Math.sin(phase) * waveAmplitude);
+        }
+        point.applyMatrix4(meshBaseline.toMesh);
+        array[index * 3] = point.x;
+        array[index * 3 + 1] = point.y;
+        array[index * 3 + 2] = point.z;
+      }
+      position.needsUpdate = true;
+      for (const [channel, values] of meshBaseline.uvs) {
+        const uv = meshBaseline.mesh.geometry.getAttribute(channel) as THREE.BufferAttribute | undefined;
+        if (uv && uv.array.length === values.length) {
+          (uv.array as Float32Array).set(values);
+          uv.needsUpdate = true;
+        }
+      }
+      meshBaseline.mesh.geometry.computeVertexNormals();
+      meshBaseline.mesh.geometry.computeBoundingBox();
+      meshBaseline.mesh.geometry.computeBoundingSphere();
+    }
+    if (params.normalizeUv) {
+      this.normalizeModelUvs(entry, false);
+      this.uvNormalizedModels.add(entry.id);
+    } else {
+      this.uvNormalizedModels.delete(entry.id);
+    }
+    this.geometryRevision += 1;
+    this.refreshAfterGeometryChange(entry);
+  }
+
+  private normalizeModelUvs(entry: ModelEntry, refresh = true): boolean {
+    const meshes: THREE.Mesh[] = [];
+    entry.object.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh && mesh.geometry) meshes.push(mesh);
+    });
+    let changed = false;
+    for (const channel of RADIAL_UV_CHANNELS) {
+      const attributes: THREE.BufferAttribute[] = [];
+      let minU = Infinity;
+      let minV = Infinity;
+      let maxU = -Infinity;
+      let maxV = -Infinity;
+      for (const mesh of meshes) {
+        const uv = mesh.geometry.getAttribute(channel) as THREE.BufferAttribute | undefined;
+        if (!uv) continue;
+        attributes.push(uv);
+        for (let index = 0; index < uv.count; index += 1) {
+          const u = uv.getX(index);
+          const v = uv.getY(index);
+          minU = Math.min(minU, u);
+          minV = Math.min(minV, v);
+          maxU = Math.max(maxU, u);
+          maxV = Math.max(maxV, v);
+        }
+      }
+      if (!attributes.length || !Number.isFinite(minU) || !Number.isFinite(minV)) continue;
+      const rangeU = maxU - minU;
+      const rangeV = maxV - minV;
+      const span = Math.max(rangeU, rangeV);
+      if (span <= 1e-9) continue;
+      const scale = 1 / span;
+      const offsetU = 0.5 - (minU + rangeU / 2) * scale;
+      const offsetV = 0.5 - (minV + rangeV / 2) * scale;
+      for (const uv of attributes) {
+        const array = uv.array as Float32Array;
+        for (let index = 0; index < uv.count; index += 1) {
+          array[index * 2] = array[index * 2] * scale + offsetU;
+          array[index * 2 + 1] = array[index * 2 + 1] * scale + offsetV;
+        }
+        uv.needsUpdate = true;
+      }
+      changed = true;
+    }
+    if (changed) {
+      this.geometryRevision += 1;
+      if (refresh) this.refreshAfterGeometryChange(entry);
+    }
+    return changed;
+  }
+
+  private refreshAfterGeometryChange(entry: ModelEntry): void {
+    this.uvDataBuilt = false;
+    this.clearSelection();
+    if (this.model === entry.object) {
+      this.refreshUvChannels();
+      if (this.mode === 'uv') {
+        this.clearUvData();
+        this.ensureUvData();
+        this.fitUv();
+        this.updateUvBackground();
+        this.updateUvHud();
+      }
+      this.updateStats();
+      this.callbacks.status.set(entry.name, this.statsText());
+    }
+  }
+
+  private clearModelUndoHistory(): void {
+    this.modelUndoStack = [];
+    this.modelRedoStack = [];
+    this.pendingModelUndo = null;
+  }
+
+  private captureEntryGeometry(entry: ModelEntry): ModelGeometrySnapshot[] {
+    const snapshots: ModelGeometrySnapshot[] = [];
+    entry.object.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!position) return;
+      const uvs = new Map<string, Float32Array>();
+      for (const channel of RADIAL_UV_CHANNELS) {
+        const uv = mesh.geometry.getAttribute(channel) as THREE.BufferAttribute | undefined;
+        if (uv) uvs.set(channel, new Float32Array(uv.array as ArrayLike<number>));
+      }
+      snapshots.push({
+        uuid: mesh.uuid,
+        position: new Float32Array(position.array as ArrayLike<number>),
+        uvs
+      });
+    });
+    return snapshots;
+  }
+
+  private captureModelSnapshot(includeGeometry = false): ModelSnapshot {
+    return {
+      upAxis: this.upAxis,
+      activeModelId: this.activeModelId,
+      selectedModelId: this.selectedModelId,
+      entries: this.modelEntries.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        filePath: entry.filePath,
+        size: entry.size,
+        position: [entry.root.position.x, entry.root.position.y, entry.root.position.z],
+        rotation: [
+          THREE.MathUtils.radToDeg(entry.root.rotation.x),
+          THREE.MathUtils.radToDeg(entry.root.rotation.y),
+          THREE.MathUtils.radToDeg(entry.root.rotation.z)
+        ],
+        scale: [entry.root.scale.x, entry.root.scale.y, entry.root.scale.z],
+        radial: this.radialParams.get(entry.id) ? { ...this.radialParams.get(entry.id)! } : null,
+        uvNormalized: this.uvNormalizedModels.has(entry.id),
+        geometry: includeGeometry ? this.captureEntryGeometry(entry) : []
+      })),
+      material: { ...this.materialSettings },
+      materialPresetKey: this.materialPresetKey,
+      lightingEnabled: this.lightingEnabled,
+      wrapRepeat: this.wrapRepeat,
+      signature: this.modelStateSignature(),
+      geometryRevision: this.geometryRevision
+    };
+  }
+
+  private modelStateSignature(): string {
+    return JSON.stringify({
+      upAxis: this.upAxis,
+      entries: this.modelEntries.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        filePath: entry.filePath,
+        position: [entry.root.position.x, entry.root.position.y, entry.root.position.z],
+        rotation: [entry.root.rotation.x, entry.root.rotation.y, entry.root.rotation.z],
+        scale: [entry.root.scale.x, entry.root.scale.y, entry.root.scale.z],
+        radial: this.radialParams.get(entry.id) ?? null,
+        uvNormalized: this.uvNormalizedModels.has(entry.id)
+      })),
+      material: this.materialSettings,
+      materialPresetKey: this.materialPresetKey,
+      lightingEnabled: this.lightingEnabled,
+      wrapRepeat: this.wrapRepeat
+    });
+  }
+
+  private trimModelUndoStack(stack: ModelSnapshot[]): void {
+    const limit = getUndoHistoryLimit();
+    while (stack.length > limit) stack.shift();
+  }
+
+  private pushModelUndoSnapshot(snapshot: ModelSnapshot): void {
+    this.modelUndoStack.push(snapshot);
+    this.trimModelUndoStack(this.modelUndoStack);
+    this.modelRedoStack = [];
+  }
+
+  private ensureModelUndoCheckpoint(): void {
+    if (this.suppressModelUndo || !this.active) return;
+    if (this.pendingModelUndo) return;
+    this.pushModelUndoSnapshot(this.captureModelSnapshot());
+  }
+
+  private ensureModelGeometryCheckpoint(): void {
+    if (this.suppressModelUndo || !this.active) return;
+    if (!this.pendingModelUndo) {
+      this.pushModelUndoSnapshot(this.captureModelSnapshot(true));
+      return;
+    }
+    if (!this.pendingModelUndo.entries.some((entry) => entry.geometry.length)) {
+      this.pendingModelUndo = this.captureModelSnapshot(true);
+    }
+  }
+
+  private beginModelUndoGesture(): void {
+    if (this.suppressModelUndo || !this.active || this.pendingModelUndo) return;
+    this.pendingModelUndo = this.captureModelSnapshot();
+  }
+
+  private commitModelUndoGesture(): void {
+    const pending = this.pendingModelUndo;
+    this.pendingModelUndo = null;
+    if (!pending || this.suppressModelUndo) return;
+    if (pending.signature === this.modelStateSignature() && pending.geometryRevision === this.geometryRevision) return;
+    this.pushModelUndoSnapshot(pending);
+  }
+
+  private undoModel(): void {
+    this.commitModelUndoGesture();
+    if (!this.modelUndoStack.length) {
+      this.callbacks.toast('没有可撤回的模型操作', 'info');
+      return;
+    }
+    const current = this.captureModelSnapshot(true);
+    const snapshot = this.modelUndoStack.pop();
+    if (!snapshot) return;
+    this.modelRedoStack.push(current);
+    this.trimModelUndoStack(this.modelRedoStack);
+    this.applyModelSnapshot(snapshot);
+    this.callbacks.toast('已撤回模型操作', 'info');
+  }
+
+  private redoModel(): void {
+    this.commitModelUndoGesture();
+    if (!this.modelRedoStack.length) {
+      this.callbacks.toast('没有可重做的模型操作', 'info');
+      return;
+    }
+    const current = this.captureModelSnapshot(true);
+    const snapshot = this.modelRedoStack.pop();
+    if (!snapshot) return;
+    this.modelUndoStack.push(current);
+    this.trimModelUndoStack(this.modelUndoStack);
+    this.applyModelSnapshot(snapshot);
+    this.callbacks.toast('已重做模型操作', 'info');
+  }
+
+  private restoreEntryGeometry(entry: ModelEntry, snapshots: ModelGeometrySnapshot[]): void {
+    const byUuid = new Map(snapshots.map((snapshot) => [snapshot.uuid, snapshot]));
+    entry.object.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      const snapshot = byUuid.get(mesh.uuid);
+      if (!snapshot) return;
+      const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (position && position.array.length === snapshot.position.length) {
+        (position.array as Float32Array).set(snapshot.position);
+        position.needsUpdate = true;
+      }
+      for (const [channel, values] of snapshot.uvs) {
+        const uv = mesh.geometry.getAttribute(channel) as THREE.BufferAttribute | undefined;
+        if (uv && uv.array.length === values.length) {
+          (uv.array as Float32Array).set(values);
+          uv.needsUpdate = true;
+        }
+      }
+      mesh.geometry.computeVertexNormals();
+      mesh.geometry.computeBoundingBox();
+      mesh.geometry.computeBoundingSphere();
+    });
+  }
+
+  private applyModelSnapshot(snapshot: ModelSnapshot): void {
+    this.suppressModelUndo = true;
+    try {
+      const previousAxis = this.upAxis;
+      this.upAxis = snapshot.upAxis;
+      if (previousAxis !== snapshot.upAxis) this.radialBaselines.clear();
+      this.element.querySelectorAll('[data-up]').forEach((button) => {
+        button.classList.toggle('active', (button as HTMLElement).dataset.up === snapshot.upAxis);
+      });
+      for (const state of snapshot.entries) {
+        const entry = this.modelEntries.find((item) => item.id === state.id);
+        if (!entry) continue;
+        entry.name = state.name;
+        entry.filePath = state.filePath;
+        entry.size = state.size;
+        entry.root.name = state.name;
+        entry.root.position.fromArray(state.position);
+        entry.root.rotation.set(
+          THREE.MathUtils.degToRad(state.rotation[0]),
+          THREE.MathUtils.degToRad(state.rotation[1]),
+          THREE.MathUtils.degToRad(state.rotation[2])
+        );
+        entry.root.scale.fromArray(state.scale);
+        entry.root.updateMatrixWorld(true);
+        this.restoreEntryGeometry(entry, state.geometry);
+        if (state.radial) this.radialParams.set(entry.id, { ...state.radial });
+        else this.radialParams.delete(entry.id);
+        if (state.uvNormalized) this.uvNormalizedModels.add(entry.id);
+        else this.uvNormalizedModels.delete(entry.id);
+      }
+      this.activeModelId = snapshot.activeModelId;
+      this.selectedModelId = snapshot.selectedModelId;
+      this.model = this.activeModelEntry()?.object ?? null;
+      this.materialSettings = { ...snapshot.material };
+      this.materialPresetKey = snapshot.materialPresetKey;
+      this.lightingEnabled = snapshot.lightingEnabled;
+      this.wrapRepeat = snapshot.wrapRepeat;
+      const lightingInput = this.element.querySelector('#lighting') as HTMLInputElement | null;
+      if (lightingInput) lightingInput.checked = this.lightingEnabled;
+      const wrapInput = this.element.querySelector('#wrap') as HTMLInputElement | null;
+      if (wrapInput) wrapInput.checked = this.wrapRepeat;
+      this.syncMaterialControls();
+      this.applyBloomStrength();
+      this.rebuildMaterials();
+      this.updateMaterialBall(true);
+      this.applyWrapMode();
+      this.refreshUvChannels();
+      this.uvDataBuilt = false;
+      this.renderModelList();
+      this.syncModelTransformControls();
+      this.syncTransformGizmo();
+      this.syncReferenceControls();
+      const active = this.activeModelEntry();
+      this.fileName = active?.name ?? '';
+      this.filePath = active?.filePath ?? '';
+      this.fileSize = active?.size ?? 0;
+      this.fileLabel.textContent = active?.name ?? '未加载';
+      if (active) this.callbacks.renameModelTitle(active.name);
+      if (this.mode === 'uv' && active) {
+        this.clearUvData();
+        this.ensureUvData();
+        this.fitUv();
+        this.updateUvBackground();
+        this.updateUvHud();
+      }
+      if (snapshot.entries.some((entry) => entry.geometry.length)) {
+        this.geometryRevision = snapshot.geometryRevision;
+      }
+      this.updateStats();
+      this.callbacks.status.set(active?.name ?? '模型', active ? this.statsText() : '未加载');
+    } finally {
+      this.suppressModelUndo = false;
+    }
   }
 
   private clearReferenceModel(): void {
@@ -1751,8 +2472,12 @@ export class ModelView {
   }
 
   private centerModelPivot(): void {
-    const entry = this.activeModelEntry();
-    if (!entry) return;
+    const entry = this.selectedModelEntry();
+    if (!entry) {
+      this.callbacks.toast('请先选择模型', 'info');
+      return;
+    }
+    this.ensureModelUndoCheckpoint();
     entry.root.updateMatrixWorld(true);
     entry.object.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(entry.object);
@@ -1772,8 +2497,9 @@ export class ModelView {
   }
 
   private removeActiveModel(): void {
-    const entry = this.activeModelEntry();
+    const entry = this.selectedModelEntry();
     if (!entry) return;
+    this.clearModelUndoHistory();
     if (this.gizmoTarget === entry.root) {
       this.transformControls.detach();
       this.gizmoTarget = null;
@@ -1784,12 +2510,16 @@ export class ModelView {
       if (mesh.geometry) mesh.geometry.dispose();
     });
     this.modelEntries = this.modelEntries.filter((item) => item.id !== entry.id);
+    this.radialBaselines.delete(entry.id);
+    this.radialParams.delete(entry.id);
+    this.uvNormalizedModels.delete(entry.id);
     const next = this.modelEntries[this.modelEntries.length - 1];
     if (next) {
       this.selectModelEntry(next.id);
     } else {
       this.model = null;
       this.activeModelId = -1;
+      this.selectedModelId = -1;
       this.fileName = '';
       this.filePath = '';
       this.fileSize = 0;
@@ -1799,6 +2529,7 @@ export class ModelView {
       this.renderModelList();
       this.syncModelTransformControls();
       this.syncTransformGizmo();
+      this.syncReferenceControls();
       this.updateMaterialBall(true);
       this.callbacks.status.set('模型', '未加载');
     }
@@ -1817,6 +2548,8 @@ export class ModelView {
       position: number[];
       rotation: number[];
       scale: number[];
+      radial: RadialParams | null;
+      uvNormalized: boolean;
     }> = [];
     for (const entry of this.modelEntries) {
       const model = {
@@ -1829,7 +2562,9 @@ export class ModelView {
           THREE.MathUtils.radToDeg(entry.root.rotation.y),
           THREE.MathUtils.radToDeg(entry.root.rotation.z)
         ],
-        scale: [entry.root.scale.x, entry.root.scale.y, entry.root.scale.z]
+        scale: [entry.root.scale.x, entry.root.scale.y, entry.root.scale.z],
+        radial: this.radialParams.get(entry.id) ?? null,
+        uvNormalized: this.uvNormalizedModels.has(entry.id)
       };
       if (entry.filePath) {
         try {
@@ -1872,6 +2607,8 @@ export class ModelView {
           position?: number[];
           rotation?: number[];
           scale?: number[];
+          radial?: RadialParams | null;
+          uvNormalized?: boolean;
         }>;
       };
       if (payload.format !== 'texturemap-model-scene' || !Array.isArray(payload.models)) {
@@ -1916,10 +2653,25 @@ export class ModelView {
           Math.max(0.001, scale[2] ?? 1)
         );
         entry.root.updateMatrixWorld(true);
+        if (model.radial) {
+          const radial: RadialParams = {
+            ...model.radial,
+            mode: 'ring',
+            waveSize: 0,
+            waveSpacing: 0.16,
+            ringCount: 6
+          };
+          this.radialParams.set(entry.id, radial);
+          this.applyRadialAdjustment(entry, radial, false);
+        } else if (model.uvNormalized) {
+          this.normalizeModelUvs(entry);
+          this.uvNormalizedModels.add(entry.id);
+        }
       }
       this.fit();
       this.renderModelList();
       this.syncModelTransformControls();
+      this.syncReferenceControls();
       this.callbacks.toast(`已载入模型组合：${this.modelEntries.length} 个模型`, 'success');
     } catch (error) {
       this.callbacks.toast(`载入模型组合失败：${error instanceof Error ? error.message : String(error)}`, 'error');
@@ -2141,8 +2893,8 @@ export class ModelView {
         ? number(1 + number(data.brightness, 0, -1, 1), base.brightness, -8, 8)
         : number(data.brightness, base.brightness, -8, 8),
       contrast: number(data.contrast, base.contrast, -8, 8),
-      doubleSided: data.doubleSided === true,
-      ueBackground: data.ueBackground === true
+      doubleSided: data.doubleSided !== false,
+      ueBackground: data.ueBackground !== false
     };
   }
 
@@ -2623,6 +3375,10 @@ export class ModelView {
     } else if (this.model) {
       box.setFromObject(this.model);
     }
+    this.fitBox(box);
+  }
+
+  private fitBox(box: THREE.Box3): void {
     if (box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
@@ -2696,6 +3452,11 @@ export class ModelView {
     }
     this.modelEntries = [];
     this.activeModelId = -1;
+    this.selectedModelId = -1;
+    this.radialBaselines.clear();
+    this.radialParams.clear();
+    this.uvNormalizedModels.clear();
+    this.clearModelUndoHistory();
     this.originalMaterials = new WeakMap();
     if (this.externalTexture) {
       this.externalTexture.dispose();
@@ -2710,6 +3471,8 @@ export class ModelView {
     this.materialBallTexture = null;
     this.renderModelList();
     this.syncModelTransformControls();
+    this.syncTransformGizmo();
+    this.syncReferenceControls();
     this.updateMaterialBall(true);
   }
 
@@ -3463,9 +4226,12 @@ export class ModelView {
     );
     this.raycaster.setFromCamera(ndc, this.camera);
     const hits = this.raycaster.intersectObjects(this.modelEntries.map((entry) => entry.root), true);
-    const hit = hits.find((entry) => (entry.object as THREE.Mesh).isMesh && entry.faceIndex !== undefined);
+    const hit = hits.find((entry) => (entry.object as THREE.Mesh).isMesh);
     if (!hit) {
-      if (!additive && !subtractive) this.clearSelection();
+      if (!additive && !subtractive) {
+        this.clearSelection();
+        this.deselectModel();
+      }
       return;
     }
     const hitEntry = this.modelEntries.find((entry) => {
@@ -3476,18 +4242,20 @@ export class ModelView {
       }
       return false;
     });
-    if (hitEntry && hitEntry.id !== this.activeModelId) this.selectModelEntry(hitEntry.id);
-    const model = this.model;
-    if (!model) return;
-    if (!this.uvDataBuilt) this.ensureUvData();
-    const mesh = hit.object as THREE.Mesh;
-    const faceIndex = hit.faceIndex ?? -1;
-    const triangle = this.uvTriangles.find((entry) => entry.mesh === mesh && entry.faceIndex === faceIndex);
-    if (!triangle) {
-      this.callbacks.toast(`该面没有 ${this.uvChannelLabel(this.uvChannel)} 数据`, 'info');
-      return;
+    if (hitEntry && (hitEntry.id !== this.selectedModelId || hitEntry.id !== this.activeModelId)) {
+      this.clearSelection();
+      this.selectModelEntry(hitEntry.id);
     }
-    this.selectUvTriangle(triangle, additive, subtractive);
+  }
+
+  private deselectModel(): void {
+    if (this.selectedModelId === -1) return;
+    this.selectedModelId = -1;
+    this.transformControls.detach();
+    this.gizmoTarget = null;
+    this.renderModelList();
+    this.syncModelTransformControls();
+    this.syncReferenceControls();
   }
 
   private selectUvTriangle(triangle: UvTriangle, additive = false, subtractive = false): void {

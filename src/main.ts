@@ -417,6 +417,7 @@ const callbacks = {
   openModelPath: async (path: string) => {
     await openModelPath(path);
   },
+  renameModelTitle: (name: string) => updateTitle('模型', name),
   pushRecent: addRecent,
   toast,
   status
