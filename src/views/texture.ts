@@ -216,7 +216,7 @@ export class TextureView {
   private history: TransformState[] = [];
   private redoStack: TransformState[] = [];
   private textureUndoStack: TextureUndoSnapshot[] = [];
-  private textureRedoStack: TextureUndoSnapshot[] = [];
+  private initialImage: TextureUndoImage | null = null;
   private undoGestureSnapshot: TextureUndoSnapshot | null = null;
   private undoGesturePushed = false;
   private restoringUndo = false;
@@ -516,7 +516,7 @@ export class TextureView {
         <button data-action="export" title="导出 PNG">导出</button>
         <span class="toolbar-sep"></span>
         <button data-action="undo">撤销</button>
-        <button data-action="redo">重做</button>
+        <button data-action="initial" title="回到导入时的初始图">回到原图</button>
       </div>
       <div class="view-body texture-body bg-checker">
         <canvas class="view-canvas"></canvas>
@@ -2028,7 +2028,7 @@ export class TextureView {
       this.normalBanner.classList.add('hidden');
     });
     this.element.querySelector('[data-action="undo"]')?.addEventListener('click', () => this.undo());
-    this.element.querySelector('[data-action="redo"]')?.addEventListener('click', () => this.redo());
+    this.element.querySelector('[data-action="initial"]')?.addEventListener('click', () => this.resetToInitialImage());
     this.canvas.addEventListener('contextmenu', (event) => {
       if (!this.bitmap) return;
       event.preventDefault();
@@ -2258,6 +2258,31 @@ export class TextureView {
     const width = source.width;
     const height = source.height;
     this.setImage(source, width, height, name, filePath, size);
+    this.captureInitialImage(name, filePath, size);
+  }
+
+  private captureInitialImage(name: string, filePath: string, size: number): void {
+    if (!this.textureCanvas || !this.imageWidth || !this.imageHeight) {
+      this.initialImage = null;
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = this.imageWidth;
+    canvas.height = this.imageHeight;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      this.initialImage = null;
+      return;
+    }
+    context.drawImage(this.textureCanvas, 0, 0);
+    this.initialImage = {
+      canvas,
+      width: this.imageWidth,
+      height: this.imageHeight,
+      name,
+      path: filePath,
+      size
+    };
   }
 
   private decodeTga(buffer: Uint8Array): HTMLCanvasElement {
@@ -2408,7 +2433,6 @@ export class TextureView {
     if (!options.skipNormalDetect) this.detectNormalMap();
     if (!options.skipUndoReset) {
       if (options.undoSnapshot) {
-        this.textureRedoStack = [];
         this.textureUndoStack.push(options.undoSnapshot);
         const limit = Math.max(1, getUndoHistoryLimit());
         while (this.textureUndoStack.length > limit) this.textureUndoStack.shift();
@@ -6393,13 +6417,9 @@ export class TextureView {
       if (settingsOverlay && !settingsOverlay.classList.contains('hidden')) return;
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       const key = event.key.toLowerCase();
-      if (key === 'z') {
+      if (key === 'z' && !event.shiftKey) {
         event.preventDefault();
-        if (event.shiftKey) this.redo();
-        else this.undo();
-      } else if (key === 'y') {
-        event.preventDefault();
-        this.redo();
+        this.undo();
       }
     });
   }
@@ -6477,13 +6497,11 @@ export class TextureView {
     this.textureUndoStack.push(this.undoGestureSnapshot);
     const limit = Math.max(1, getUndoHistoryLimit());
     while (this.textureUndoStack.length > limit) this.textureUndoStack.shift();
-    this.textureRedoStack = [];
     this.undoGesturePushed = true;
   }
 
   private resetUndoHistory(): void {
     this.textureUndoStack = [];
-    this.textureRedoStack = [];
     this.pixelPatches.clear();
     this.imageRevision = 0;
     this.undoGestureSnapshot = this.captureUndoSnapshot();
@@ -6593,30 +6611,31 @@ export class TextureView {
 
   private undo(): void {
     if (!this.textureUndoStack.length) return;
-    const current = this.captureUndoSnapshot(true);
     const previous = this.textureUndoStack.pop();
     if (!previous) return;
-    this.textureRedoStack.push(current);
-    const limit = Math.max(1, getUndoHistoryLimit());
-    while (this.textureRedoStack.length > limit) this.textureRedoStack.shift();
     this.restoreUndoSnapshot(previous);
     this.clearAllLivePreviews();
     this.undoGestureSnapshot = this.captureUndoSnapshot();
     this.undoGesturePushed = true;
   }
 
-  private redo(): void {
-    if (!this.textureRedoStack.length) return;
-    const current = this.captureUndoSnapshot(true);
-    const next = this.textureRedoStack.pop();
-    if (!next) return;
-    this.textureUndoStack.push(current);
-    const limit = Math.max(1, getUndoHistoryLimit());
-    while (this.textureUndoStack.length > limit) this.textureUndoStack.shift();
-    this.restoreUndoSnapshot(next);
+  private resetToInitialImage(): void {
+    const initial = this.initialImage;
+    if (!initial) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    const snapshot = this.captureUndoSnapshot(true);
     this.clearAllLivePreviews();
-    this.undoGestureSnapshot = this.captureUndoSnapshot();
-    this.undoGesturePushed = true;
+    this.discardCompare();
+    this.aiCutoutBackup = null;
+    this.updateAiCutButtons();
+    this.setImage(initial.canvas, initial.width, initial.height, initial.name, initial.path, initial.size, {
+      preserveTransform: true,
+      preservePath: true,
+      undoSnapshot: snapshot
+    });
+    this.callbacks.toast('已回到导入时的初始图，可 Ctrl+Z 撤销', 'success');
   }
 
   private setChannel(value: number): void {

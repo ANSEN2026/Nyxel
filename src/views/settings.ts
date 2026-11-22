@@ -97,7 +97,7 @@ export class SettingsView {
                 <span class="settings-hint">默认 10 步</span>
               </div>
             </div>
-            <div class="settings-hint">贴图调节、颜色、选择按钮和绘画操作支持 Ctrl+Z 撤回，Ctrl+Shift+Z / Ctrl+Y 重做；超出数量的旧记录会自动丢弃。</div>
+            <div class="settings-hint">贴图调节、颜色、选择按钮和绘画操作支持 Ctrl+Z 撤回；需要回到导入时的初始图时，使用贴图工具栏的「回到原图」。</div>
             <div class="settings-row">
               <div class="settings-label">默认保存与导出目录</div>
               <div class="settings-control">
