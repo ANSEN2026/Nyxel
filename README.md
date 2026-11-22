@@ -12,7 +12,6 @@
 - **材质预览**：模型右侧新增材质球，支持通道、独立透明通道、U/V 偏移和 U/V 大小、自发光、泛光强度、负值亮度/对比度，自定义参数自动记住
 - **更新提醒**：右上角新增圆环向上箭头图标，检测到新版本时亮起绿色提示点；点击后查看更新说明和下载入口
 - **官方贴图**：新增径向渐变遮罩 `GL_06.png`
-- **从视频生成动作**（当前入口暂时隐藏；恢复时设置 `src/feature-flags.ts` 的 `MOTION_CAPTURE_ENABLED = true`）：新增动作捕捉工作区，选择视频后按「读取视频 → 检测人体 → 跟踪 → 二维关节点 → 三维骨架 → 清理与补帧 → 导出」显示进度，完成后用 Three.js 预览 24 关节三维骨架，可播放、拖动时间轴并导出 BVH 或 FBX。FBX 支持 UE5 Mannequin 兼容重定向骨架（25 个 UE5 核心骨骼）、UE 通用 Z-up 和通用 Y-up；默认 Mock 预设骨架可离线跑通；设置页切换为 MediaPipe Sidecar 后，使用独立 Python 进程和 MediaPipe Pose 做真实视频推理，支持运行时检测、Python 路径选择、Sidecar 预览、任务日志、取消、超时和错误提示。本轮不接 SMPL / SMPL-X，不包含 root motion
 - **细节调节 / 去底**：贴图工作区右侧常驻贴边停靠的「细节调节」面板，打开贴图后自动显示，画布自动让出宽度；面板按父级图片、子级图片、视图、调整、透明处理、预览分组；父级和子级图片分别设置混合模式与不透明度；子级可载入或拖入第二张图叠加；可按颜色容差删除底色，或用 R / G / B / A / 亮度通道生成透明遮罩，并导出透明 PNG
 - **色阶与曲线**：「色阶」和「曲线」放在「调整」组，默认收起，点击后才显示；色阶支持黑场、白场、伽马；曲线支持拖动控制点、双击添加 / 删除控制点、重置，并与 PNG 导出同步应用
 - **贴图顶部动作栏**：「打开贴图 / AI 超分 / 导出 PNG / 撤销 / 回到原图」移到独立上框栏；「回到原图」可随时恢复到导入时的初始贴图；贴图工具栏移除「配色分析」入口，避免重复
@@ -71,7 +70,7 @@
 - 设置新增「配色」分类；`settings.json` 升级到 `schemaVersion: 2`，兼容旧配置
 - 左侧导航新增配色图标与 `Ctrl+3`
 - 左侧导航新增「图库 / 贴图资源」与 `Ctrl+4` / `Ctrl+5`
-- 左侧导航新增「视频压缩」与 `Ctrl+6`、「视频作品」与 `Ctrl+7`、「绘画」与 `Ctrl+8`、「动作捕捉」与 `Ctrl+Shift+M`、「下载」与 `Ctrl+9`、「备忘录」与 `Ctrl+Shift+N`
+- 左侧导航新增「视频压缩」与 `Ctrl+6`、「视频作品」与 `Ctrl+7`、「绘画」与 `Ctrl+8`、「下载」与 `Ctrl+9`、「备忘录」与 `Ctrl+Shift+N`
 - **截图改为可拖拽框选区域**：多显示器各自覆盖，双击 / Enter 进入预览，Esc 取消
 - 设置新增「截图保存位置」，可单独更改截图目录
 - **模型工作区新增 UV 检视**（3D / UV 切换）：UV 标尺与 U/V 轴标记、多 UV 通道、材质分组、棋盘 / 纯色 / 当前贴图背景、2×2 象限平铺对比、越界标红、重叠检测、Texel Density、3D ↔ UV 双向选中
@@ -114,8 +113,6 @@ npm install
 npm run dev     # Vite + Electron 开发模式
 npm run build   # 构建 renderer + electron
 npm run start   # 构建后启动
-npm run test:motion  # 动作捕捉 Mock / Sidecar / BVH 测试
-npm run test:motion:real  # 可选：真实 MediaPipe 推理，需要 NYXEL_PYTHON 和 NYXEL_MOTION_REAL_VIDEO
 npm run dist    # 生成 NSIS 安装包
 ```
 
@@ -156,19 +153,13 @@ npm run dist    # 生成 NSIS 安装包
 - Apple 备忘录的内部数据库不能直接读取；请先在 iPad 上通过分享 / 导出生成 PDF、文本或 HTML，再导入备忘录区
 - 备忘录跨设备传递使用导出的 `.tmnote` 文件，不包含云同步服务器
 - 安装包未签名，Windows SmartScreen 会提示
-- 动作捕捉的 Mock 后端不分析视频内容；真实推理需要设置页选择 Python 3.12 + `mediapipe==0.10.21`，运行时不随安装包分发；Sidecar 当前只使用 CPU，不包含 root motion
-- 动作捕捉 FBX 只包含骨骼和动画曲线，不包含角色网格、蒙皮或材质；UE 导入后需要把动画绑定到角色骨骼
-- UE5 Mannequin 兼容导出不包含 Epic 官方模型资产；本机未安装 Unreal Engine，25 骨骼骨架只完成 FBXLoader 结构验证，UE 内的 IK Retargeter 流程需在 UE 工程中确认
-- 动作捕捉新增了 MIT 许可的 `@comfyorg/fbx-exporter-three`；未引入 torch / onnxruntime / SMPL / SMPL-X 权重，MediaPipe Pose 模型随 Python wheel 安装，不随 Electron 安装包分发
 
 ## 目录
 
 ```
 electron/       主进程与 preload
-  motion_capture/  动作捕捉 Provider、Sidecar、BVH 和测试说明
 src/            渲染进程
   views/        home / texture / model / settings
-  motion_capture/ 动作捕捉工作区与 Three.js 骨骼预览
   styles.css
 resources/      应用图标
 release/        打包产物

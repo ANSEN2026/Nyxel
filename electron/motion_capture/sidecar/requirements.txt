@@ -1,4 +1,0 @@
-# MediaPipe's legacy Pose solution is used because it ships the pose model
-# inside the wheel and exposes pose_world_landmarks without a separate model
-# download. MediaPipe 0.10.31+ removes mediapipe.solutions.
-mediapipe==0.10.21

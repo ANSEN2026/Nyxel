@@ -27,7 +27,6 @@ import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { unzipSync } from 'fflate';
 import { extractText } from 'unpdf';
-import { MotionCaptureService } from './motion_capture/service';
 
 // Keep the existing AppData folder name after the Texture map rename so
 // downloaded ffmpeg / AI runtimes and Chromium caches survive upgrades.
@@ -153,7 +152,6 @@ let aiDownloading = false;
 let aiProgress: AiProgress | null = null;
 let aiProcess: ChildProcess | null = null;
 let aiCancelled = false;
-const motionCapture = new MotionCaptureService(() => mainWindow);
 
 function settingsFile(): string {
   return path.join(app.getPath('appData'), 'Nyxel', 'settings.json');
@@ -466,22 +464,7 @@ async function runAutomation(): Promise<void> {
   const texturePath = process.env.NYXEL_TEST_TEXTURE;
   const modelPath = process.env.NYXEL_TEST_MODEL;
   const videoPath = process.env.NYXEL_TEST_VIDEO;
-  const motionPath = process.env.NYXEL_TEST_MOTION;
 
-  if (motionPath) {
-    setTimeout(() => {
-      void mainWindow?.webContents.executeJavaScript(
-        `window.__nyxel?.openMotionPath(${JSON.stringify(motionPath)})`
-      ).catch((error) => console.error(error));
-    }, 700);
-    if (process.env.NYXEL_TEST_MOTION_START !== '0') {
-      setTimeout(() => {
-        void mainWindow?.webContents.executeJavaScript(
-          `document.querySelector('.motion-view [data-action="start"]')?.click()`
-        ).catch((error) => console.error(error));
-      }, 1500);
-    }
-  }
   if (videoPath) {
     setTimeout(() => {
       void mainWindow?.webContents.executeJavaScript(
@@ -4289,31 +4272,6 @@ function registerIpc(): void {
     return true;
   });
 
-  ipcMain.handle('motion-capture:config', () => motionCapture.getConfig());
-  ipcMain.handle('motion-capture:config-save', (_event, partial: Record<string, unknown>) => {
-    return motionCapture.saveConfig(partial ?? {});
-  });
-  ipcMain.handle('motion-capture:runtime', () => motionCapture.checkRuntime());
-  ipcMain.handle('motion-capture:start', (event, options: { inputPath?: string; fps?: number; targetRig?: string }) => {
-    const inputPath = String(options?.inputPath ?? '');
-    return motionCapture.start(inputPath, {
-      inputPath,
-      fps: options?.fps,
-      targetRig: options?.targetRig
-    }, event.sender);
-  });
-  ipcMain.handle('motion-capture:cancel', (_event, jobId?: string) => motionCapture.cancel(jobId));
-  ipcMain.handle('motion-capture:preview', (_event, jobId: string) => motionCapture.getPreview(jobId));
-  ipcMain.handle('motion-capture:export', (_event, jobId: string) => motionCapture.exportResult(jobId));
-  ipcMain.handle('motion-capture:export-fbx', (_event, jobId: string, preset: string, profile: string) => {
-    return motionCapture.exportFbx(
-      jobId,
-      preset === 'threejs' ? 'threejs' : 'unreal',
-      profile === 'ue5' ? 'ue5' : 'generic'
-    );
-  });
-  ipcMain.handle('motion-capture:log', (_event, jobId: string) => motionCapture.getLog(jobId));
-
   ipcMain.handle('app:openPath', async (_event, target: string) => {
     const error = await shell.openPath(target);
     return error;
@@ -4597,7 +4555,6 @@ if (!gotLock) {
   });
 
   app.on('will-quit', () => {
-    motionCapture.dispose();
     globalShortcut.unregisterAll();
   });
 }

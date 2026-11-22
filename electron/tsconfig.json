@@ -11,5 +11,5 @@
     "types": ["node"],
     "sourceMap": false
   },
-  "include": ["*.ts", "motion_capture/**/*.ts"]
+  "include": ["*.ts"]
 }

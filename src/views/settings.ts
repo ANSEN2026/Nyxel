@@ -1,13 +1,11 @@
-import { MOTION_CAPTURE_ENABLED } from '../feature-flags';
 import { audioMonitor } from '../lib/audio-monitor';
 import { normalizeUndoHistoryLimit } from '../lib/undo-history';
-import type { AppInfo, MotionCaptureConfig, MotionCaptureRuntime, Settings, Theme, ToastApi } from '../types';
+import type { AppInfo, Settings, Theme, ToastApi } from '../types';
 
 export class SettingsView {
   readonly element: HTMLElement;
 
   private current: Settings | null = null;
-  private motionConfig: MotionCaptureConfig | null = null;
   private appInfo: AppInfo | null = null;
   private saveHandler: (settings: Settings) => Promise<void>;
   private toast: ToastApi;
@@ -160,86 +158,6 @@ export class SettingsView {
             <div class="settings-hint">记事本默认关闭；只有在视频播放器里点击「开始复盘」才会在这里新建文档。</div>
           </section>
 
-          <section class="settings-section${MOTION_CAPTURE_ENABLED ? '' : ' hidden'}">
-            <h3>动作捕捉</h3>
-            <div class="settings-row">
-              <div class="settings-label">推理后端</div>
-              <div class="settings-control">
-                <select id="set-mocap-provider">
-                  <option value="mock">Mock 预设骨架</option>
-                  <option value="sidecar">Python Sidecar</option>
-                </select>
-              </div>
-            </div>
-            <div class="settings-row">
-              <div class="settings-label">Python 路径</div>
-              <div class="settings-control">
-                <input id="set-mocap-python" type="text" spellcheck="false" placeholder="python.exe">
-                <button data-action="mocap-browse-python">浏览…</button>
-                <button data-action="mocap-check-runtime">检测</button>
-              </div>
-            </div>
-            <div class="settings-row">
-              <div class="settings-label">运行时</div>
-              <div class="settings-control">
-                <span class="value" id="set-mocap-runtime">—</span>
-              </div>
-            </div>
-            <div class="settings-hint" id="set-mocap-runtime-hint">Sidecar 需要 Python 3.12、mediapipe==0.10.21 和 opencv；Mock 后端不需要。</div>
-            <div class="settings-row">
-              <div class="settings-label">模型目录</div>
-              <div class="settings-control">
-                <input id="set-mocap-model-dir" type="text" spellcheck="false" placeholder="当前使用 MediaPipe 内置模型">
-                <button data-action="mocap-browse-model">浏览…</button>
-              </div>
-            </div>
-            <div class="settings-row">
-              <div class="settings-label">计算设备</div>
-              <div class="settings-control">
-                <select id="set-mocap-device">
-                  <option value="cpu">CPU</option>
-                  <option value="cuda">CUDA</option>
-                  <option value="mps">MPS</option>
-                </select>
-              </div>
-            </div>
-            <div class="settings-row">
-              <div class="settings-label">默认导出格式</div>
-              <div class="settings-control">
-                <select id="set-mocap-format">
-                  <option value="bvh">BVH</option>
-                  <option value="fbx">FBX（默认 UE Z-up）</option>
-                </select>
-              </div>
-            </div>
-            <div class="settings-row">
-              <div class="settings-label">帧率</div>
-              <div class="settings-control">
-                <select id="set-mocap-fps">
-                  <option value="24">24 fps</option>
-                  <option value="25">25 fps</option>
-                  <option value="30">30 fps</option>
-                  <option value="60">60 fps</option>
-                </select>
-              </div>
-            </div>
-            <div class="settings-row">
-              <div class="settings-label">保留 root motion</div>
-              <div class="settings-control">
-                <input id="set-mocap-root" class="toggle" type="checkbox">
-              </div>
-            </div>
-            <div class="settings-row">
-              <div class="settings-label">输出目录</div>
-              <div class="settings-control">
-                <input id="set-mocap-output-dir" type="text" spellcheck="false">
-                <button data-action="mocap-browse-output">浏览…</button>
-                <button data-action="mocap-open-output">打开</button>
-              </div>
-            </div>
-            <div class="settings-hint">配置保存在独立文件 motion-capture.json。Mock 可完整跑通；Sidecar 需要本机安装 Python 3.12 + MediaPipe。任务内部先生成 BVH 供预览；导出可选 BVH、UE5 Mannequin 兼容 FBX、UE 通用 Z-up 或通用 Y-up。</div>
-          </section>
-
           <section class="settings-section">
             <h3>快捷键</h3>
             <div class="settings-row">
@@ -309,14 +227,6 @@ export class SettingsView {
     const colorRatio = this.element.querySelector('#set-color-ratio') as HTMLSelectElement;
     const colorIgnore = this.element.querySelector('#set-color-ignore') as HTMLInputElement;
     const colorAlpha = this.element.querySelector('#set-color-alpha') as HTMLInputElement;
-    const mocapProvider = this.element.querySelector('#set-mocap-provider') as HTMLSelectElement;
-    const mocapPython = this.element.querySelector('#set-mocap-python') as HTMLInputElement;
-    const mocapModelDir = this.element.querySelector('#set-mocap-model-dir') as HTMLInputElement;
-    const mocapDevice = this.element.querySelector('#set-mocap-device') as HTMLSelectElement;
-    const mocapFormat = this.element.querySelector('#set-mocap-format') as HTMLSelectElement;
-    const mocapFps = this.element.querySelector('#set-mocap-fps') as HTMLSelectElement;
-    const mocapRoot = this.element.querySelector('#set-mocap-root') as HTMLInputElement;
-    const mocapOutputDir = this.element.querySelector('#set-mocap-output-dir') as HTMLInputElement;
 
     theme.addEventListener('change', () => {
       this.patch({ theme: theme.value as Theme });
@@ -353,62 +263,6 @@ export class SettingsView {
     colorAlpha.addEventListener('change', () => {
       const value = Number(colorAlpha.value);
       this.patch({ colorAlphaThreshold: Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.05 });
-    });
-
-    mocapProvider.addEventListener('change', () => {
-      this.patchMotionCapture({ provider: mocapProvider.value as MotionCaptureConfig['provider'] });
-      void this.checkMotionRuntime(false);
-    });
-    mocapPython.addEventListener('change', () => {
-      this.patchMotionCapture({ pythonPath: mocapPython.value.trim() });
-      const status = this.element.querySelector('#set-mocap-runtime') as HTMLElement | null;
-      if (status) status.textContent = '路径已修改，等待检测';
-    });
-    mocapModelDir.addEventListener('change', () => {
-      this.patchMotionCapture({ modelDir: mocapModelDir.value.trim() });
-    });
-    mocapDevice.addEventListener('change', () => {
-      this.patchMotionCapture({ device: mocapDevice.value as MotionCaptureConfig['device'] });
-    });
-    mocapFormat.addEventListener('change', () => {
-      this.patchMotionCapture({ outputFormat: mocapFormat.value as MotionCaptureConfig['outputFormat'] });
-    });
-    mocapFps.addEventListener('change', () => {
-      this.patchMotionCapture({ fps: Number(mocapFps.value) || 30 });
-    });
-    mocapRoot.addEventListener('change', () => {
-      this.patchMotionCapture({ keepRootMotion: mocapRoot.checked });
-    });
-    mocapOutputDir.addEventListener('change', () => {
-      this.patchMotionCapture({ outputDir: mocapOutputDir.value.trim() });
-    });
-    this.element.querySelector('[data-action="mocap-browse-python"]')?.addEventListener('click', async () => {
-      const selected = await window.nyxel.dialog.openExecutable();
-      if (!selected) return;
-      mocapPython.value = selected;
-      this.patchMotionCapture({ pythonPath: selected });
-      void this.checkMotionRuntime(false);
-    });
-    this.element.querySelector('[data-action="mocap-check-runtime"]')?.addEventListener('click', () => {
-      void this.checkMotionRuntime(true);
-    });
-    this.element.querySelector('[data-action="mocap-browse-model"]')?.addEventListener('click', async () => {
-      const selected = await window.nyxel.dialog.openDirectory();
-      if (!selected) return;
-      mocapModelDir.value = selected;
-      this.patchMotionCapture({ modelDir: selected });
-    });
-    this.element.querySelector('[data-action="mocap-browse-output"]')?.addEventListener('click', async () => {
-      const selected = await window.nyxel.dialog.openDirectory();
-      if (!selected) return;
-      mocapOutputDir.value = selected;
-      this.patchMotionCapture({ outputDir: selected });
-    });
-    this.element.querySelector('[data-action="mocap-open-output"]')?.addEventListener('click', async () => {
-      const target = mocapOutputDir.value.trim();
-      if (!target) return;
-      const error = await window.nyxel.app.openPath(target);
-      if (error) this.toast(`打开动作捕捉目录失败：${error}`, 'error');
     });
 
     this.element.querySelector('[data-action="browse-export"]')?.addEventListener('click', async () => {
@@ -507,7 +361,7 @@ export class SettingsView {
       window.open(this.updateUrl, '_blank');
     });
     this.element.querySelector('[data-action="licenses"]')?.addEventListener('click', () => {
-      this.toast('许可清单：Electron、Three.js、@comfyorg/fbx-exporter-three（MIT）、Vite、TypeScript；MediaPipe 由本机 Python 运行时单独安装', 'info');
+      this.toast('许可清单：Electron、Three.js、@comfyorg/fbx-exporter-three（MIT）、Vite、TypeScript', 'info');
     });
     this.element.querySelector('[data-action="privacy"]')?.addEventListener('click', () => {
       this.toast('Texture map 默认不联网；截图与文件只保存在本机。', 'info');
@@ -517,15 +371,6 @@ export class SettingsView {
   async open(settings: Settings, appInfo: AppInfo): Promise<void> {
     this.current = { ...settings };
     this.appInfo = appInfo;
-    if (MOTION_CAPTURE_ENABLED) {
-      try {
-        this.motionConfig = await window.nyxel.motionCapture.config();
-        this.fillMotionConfig();
-        void this.checkMotionRuntime(false);
-      } catch (error) {
-        this.toast(`读取动作捕捉配置失败：${error instanceof Error ? error.message : String(error)}`, 'error');
-      }
-    }
     (this.element.querySelector('#set-theme') as HTMLSelectElement).value = settings.theme;
     (this.element.querySelector('#set-language') as HTMLSelectElement).value = settings.language;
     (this.element.querySelector('#set-undo-limit') as HTMLInputElement).value = String(normalizeUndoHistoryLimit(settings.undoHistoryLimit));
@@ -598,79 +443,6 @@ export class SettingsView {
     this.audioStatus.textContent =
       `${state.info?.label ?? '系统音频'} · ${state.info?.sampleRate ?? 0} Hz · ` +
       `${state.info?.channels ?? 0} ch · RMS ${db(metrics.db)} dBFS · Peak ${db(metrics.peakDb)} dBFS`;
-  }
-
-  private fillMotionConfig(): void {
-    if (!this.motionConfig) return;
-    (this.element.querySelector('#set-mocap-provider') as HTMLSelectElement).value = this.motionConfig.provider;
-    (this.element.querySelector('#set-mocap-python') as HTMLInputElement).value = this.motionConfig.pythonPath;
-    (this.element.querySelector('#set-mocap-model-dir') as HTMLInputElement).value = this.motionConfig.modelDir;
-    (this.element.querySelector('#set-mocap-device') as HTMLSelectElement).value = this.motionConfig.device;
-    (this.element.querySelector('#set-mocap-format') as HTMLSelectElement).value = this.motionConfig.outputFormat;
-    (this.element.querySelector('#set-mocap-fps') as HTMLSelectElement).value = String(this.motionConfig.fps);
-    (this.element.querySelector('#set-mocap-root') as HTMLInputElement).checked = this.motionConfig.keepRootMotion;
-    (this.element.querySelector('#set-mocap-output-dir') as HTMLInputElement).value = this.motionConfig.outputDir;
-  }
-
-  private async checkMotionRuntime(notify: boolean): Promise<void> {
-    const button = this.element.querySelector('[data-action="mocap-check-runtime"]') as HTMLButtonElement | null;
-    const status = this.element.querySelector('#set-mocap-runtime') as HTMLElement | null;
-    const hint = this.element.querySelector('#set-mocap-runtime-hint') as HTMLElement | null;
-    if (button?.disabled) return;
-    if (button) {
-      button.disabled = true;
-      button.textContent = '检测中…';
-    }
-    if (status) status.textContent = '检测中…';
-    try {
-      const runtime = await window.nyxel.motionCapture.runtime();
-      this.fillMotionRuntime(runtime);
-      if (notify) {
-        this.toast(runtime.ok ? '动作捕捉运行时已就绪' : `运行时未就绪：${runtime.message ?? '未知错误'}`, runtime.ok ? 'success' : 'error');
-      }
-    } catch (error) {
-      if (status) status.textContent = '检测失败';
-      if (hint) hint.textContent = error instanceof Error ? error.message : String(error);
-      if (notify) this.toast('动作捕捉运行时检测失败', 'error');
-    } finally {
-      if (button) {
-        button.disabled = false;
-        button.textContent = '检测';
-      }
-    }
-  }
-
-  private fillMotionRuntime(runtime: MotionCaptureRuntime): void {
-    const status = this.element.querySelector('#set-mocap-runtime') as HTMLElement | null;
-    const hint = this.element.querySelector('#set-mocap-runtime-hint') as HTMLElement | null;
-    if (!status || !hint) return;
-    status.classList.toggle('mocap-runtime-ok', runtime.ok);
-    status.classList.toggle('mocap-runtime-error', !runtime.ok);
-    if (runtime.provider === 'mock') {
-      status.textContent = 'Mock 预设骨架 · 不需要 Python';
-      hint.textContent = '当前使用内置 Mock 骨架，不调用 MediaPipe。切换为 Python Sidecar 后才会检测 MediaPipe。';
-      return;
-    }
-    if (runtime.ok) {
-      status.textContent = `就绪 · MediaPipe ${runtime.mediapipeVersion ?? '?'} · OpenCV ${runtime.opencvVersion ?? '?'}`;
-      hint.textContent = `Python ${runtime.pythonVersion ?? '?'} · 使用 MediaPipe 内置 Pose 模型，不包含 SMPL / SMPL-X 权重。`;
-    } else {
-      status.textContent = `未就绪 · ${runtime.message ?? '未知错误'}`;
-      hint.textContent = '需要 Python 3.12 + mediapipe==0.10.21；在 Python 路径选择 python.exe 后点「检测」。安装命令：pip install mediapipe==0.10.21';
-    }
-  }
-
-  private patchMotionCapture(partial: Partial<MotionCaptureConfig>): void {
-    if (!this.motionConfig) return;
-    this.motionConfig = { ...this.motionConfig, ...partial };
-    void window.nyxel.motionCapture.saveConfig(this.motionConfig)
-      .then((config) => {
-        this.motionConfig = config;
-        this.fillMotionConfig();
-      })
-      .catch((error) => {
-        this.toast(`保存动作捕捉配置失败：${error instanceof Error ? error.message : String(error)}`, 'error');
-      });
   }
 
   private patch(partial: Partial<Settings>): void {

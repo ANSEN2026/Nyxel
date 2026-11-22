@@ -1,6 +1,5 @@
 import './styles.css';
 import logoUrl from './assets/app-icon-face.png';
-import { MOTION_CAPTURE_ENABLED } from './feature-flags';
 import { audioMonitor } from './lib/audio-monitor';
 import { startTitleWave } from './lib/title-wave';
 import type { AccountUser, AppInfo, RecentProject, Settings, StatusApi, ToastApi, ToastKind, UpdateCheckResult, ViewName } from './types';
@@ -12,7 +11,6 @@ import { DrawView } from './views/draw';
 import { FilesView } from './views/files';
 import { HomeView } from './views/home';
 import { ModelView } from './views/model';
-import { MotionCaptureView } from './motion_capture/view';
 import { NotesView } from './views/notes';
 import { SettingsView } from './views/settings';
 import { setUndoHistoryLimit } from './lib/undo-history';
@@ -75,10 +73,6 @@ appRoot.innerHTML = `
         <button class="nav-button" data-view="draw" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.2 19.8 4-1 11-11a2.1 2.1 0 0 0-3-3l-11 11z"/><path d="m13.7 6.3 3.9 3.9M4.2 19.8l1-4"/></svg>
           <span class="nav-tooltip">绘画 Ctrl+8</span>
-        </button>
-        <button class="nav-button${MOTION_CAPTURE_ENABLED ? '' : ' hidden'}" data-view="motion" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4.4" r="2"/><path d="M12 6.4v6.8M12 9.3 8.2 11.5M12 9.3l3.8 2.2M12 13.2l-3.1 6M12 13.2l3.1 6"/></svg>
-          <span class="nav-tooltip">从视频生成动作 Ctrl+Shift+M</span>
         </button>
         <button class="nav-button" data-view="download" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v11.8"/><path d="m7.4 10.7 4.6 4.6 4.6-4.6"/><path d="M4.5 20h15"/></svg>
@@ -321,7 +315,6 @@ let texturesView: FilesView;
 let videoView: VideoView;
 let videosView: FilesView;
 let drawView: DrawView;
-let motionView: MotionCaptureView;
 let downloadView: DownloadView;
 let notesView: NotesView;
 let settingsView: SettingsView;
@@ -478,7 +471,6 @@ function showView(view: ViewName): void {
   if (currentView === 'video') videoView.deactivate();
   if (currentView === 'videos') videosView.deactivate();
   if (currentView === 'draw') drawView.deactivate();
-  if (currentView === 'motion') motionView.deactivate();
   if (currentView === 'download') downloadView.deactivate();
   if (currentView === 'notes') notesView.deactivate();
 
@@ -492,7 +484,6 @@ function showView(view: ViewName): void {
   videoView.element.classList.toggle('hidden', view !== 'video');
   videosView.element.classList.toggle('hidden', view !== 'videos');
   drawView.element.classList.toggle('hidden', view !== 'draw');
-  motionView.element.classList.toggle('hidden', view !== 'motion');
   downloadView.element.classList.toggle('hidden', view !== 'download');
   notesView.element.classList.toggle('hidden', view !== 'notes');
 
@@ -510,7 +501,6 @@ function showView(view: ViewName): void {
     video: '视频压缩',
     videos: '视频作品',
     draw: '绘画',
-    motion: '从视频生成动作',
     download: '下载',
     notes: '备忘录'
   };
@@ -540,9 +530,6 @@ function showView(view: ViewName): void {
   } else if (view === 'draw') {
     drawView.activate();
     updateTitle('绘画');
-  } else if (view === 'motion') {
-    void motionView.activate();
-    updateTitle('从视频生成动作');
   } else if (view === 'download') {
     downloadView.activate();
     updateTitle('下载');
@@ -600,11 +587,6 @@ function bindKeyboard(): void {
     if (event.shiftKey && event.key.toLowerCase() === 'n') {
       event.preventDefault();
       showView('notes');
-      return;
-    }
-    if (MOTION_CAPTURE_ENABLED && event.shiftKey && event.key.toLowerCase() === 'm') {
-      event.preventDefault();
-      showView('motion');
       return;
     }
     if (event.key === '0') {
@@ -695,7 +677,6 @@ async function bootstrap(): Promise<void> {
   videoView = new VideoView(callbacks);
   videosView = new FilesView('videos', callbacks);
   drawView = new DrawView(callbacks);
-  motionView = new MotionCaptureView(callbacks, { autoRefresh: MOTION_CAPTURE_ENABLED });
   downloadView = new DownloadView(callbacks);
   notesView = new NotesView(callbacks);
   settingsView = new SettingsView(saveSettings, toast);
@@ -712,7 +693,6 @@ async function bootstrap(): Promise<void> {
     videoView.element,
     videosView.element,
     drawView.element,
-    motionView.element,
     downloadView.element,
     notesView.element
   );
@@ -724,7 +704,6 @@ async function bootstrap(): Promise<void> {
   videoView.element.classList.add('hidden');
   videosView.element.classList.add('hidden');
   drawView.element.classList.add('hidden');
-  motionView.element.classList.add('hidden');
   downloadView.element.classList.add('hidden');
   notesView.element.classList.add('hidden');
   document.body.append(settingsView.element, aboutView.element, accountView.element);
@@ -748,12 +727,6 @@ async function bootstrap(): Promise<void> {
     openModelPath,
     openColorPath,
     openVideoPath,
-    openMotionPath: async (path: string) => {
-      if (!MOTION_CAPTURE_ENABLED) return;
-      showView('motion');
-      updateTitle('从视频生成动作', basename(path));
-      motionView.loadPath(path);
-    },
     applyModelTexturePath: (path: string) => modelView.applyExternalTexturePath(path)
   };
 
