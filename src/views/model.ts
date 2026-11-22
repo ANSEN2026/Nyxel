@@ -134,6 +134,7 @@ interface ModelEntryState {
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];
+  visible: boolean;
   radial: RadialParams | null;
   uvNormalized: boolean;
   geometry: ModelGeometrySnapshot[];
@@ -199,6 +200,7 @@ export class ModelView {
   private fileLabel: HTMLElement;
   private axisDialog: HTMLElement;
   private lightPanel: HTMLElement;
+  private modelContextMenu: HTMLElement;
   private materialPanel: HTMLElement;
   private materialBallCanvas: HTMLCanvasElement;
   private materialPresetSelect: HTMLSelectElement;
@@ -421,6 +423,7 @@ export class ModelView {
               <strong>模型</strong>
               <span>SCENE</span>
             </div>
+            <button type="button" class="panel-wall-button" data-panel-wall="model" title="贴壁">贴壁</button>
           </div>
           <div class="model-transform-mode" role="group" aria-label="变换工具">
             <button type="button" data-model-transform="translate" class="active" title="W：移动">W<span>移动</span></button>
@@ -527,6 +530,7 @@ export class ModelView {
               <strong>材质预设</strong>
               <span>Material Preview</span>
             </div>
+            <button type="button" class="panel-wall-button" data-panel-wall="material" title="贴壁">贴壁</button>
             <button type="button" data-material-reset title="重置材质">重置</button>
           </div>
           <div class="material-ball-wrap">
@@ -653,6 +657,22 @@ export class ModelView {
             </div>
           </div>
         </div>
+        <div class="view-cube" data-3d-only aria-label="视图朝向">
+          <div class="view-cube-inner">
+            <button type="button" data-view-face="front" class="cube-front" title="前视图">前</button>
+            <button type="button" data-view-face="back" class="cube-back" title="后视图">后</button>
+            <button type="button" data-view-face="right" class="cube-right" title="右视图">右</button>
+            <button type="button" data-view-face="left" class="cube-left" title="左视图">左</button>
+            <button type="button" data-view-face="top" class="cube-top" title="顶视图">顶</button>
+            <button type="button" data-view-face="bottom" class="cube-bottom" title="底视图">底</button>
+          </div>
+          <button type="button" class="view-cube-home" data-view-face="iso" title="透视 / 重置视图">◇</button>
+        </div>
+        <div class="model-context-menu hidden">
+          <button type="button" data-model-ctx-visibility>隐藏 / 显示模型 <span>H</span></button>
+          <button type="button" data-model-ctx-locate>定位模型</button>
+          <button type="button" data-model-ctx-delete class="danger">删除模型</button>
+        </div>
         <div class="light-panel hidden" data-3d-only>
           <div class="muted" style="margin-bottom:6px">方向光角度</div>
           <label>方位 <span id="light-az-value">45°</span></label>
@@ -671,6 +691,7 @@ export class ModelView {
     this.fileLabel = this.element.querySelector('#model-file-label') as HTMLElement;
     this.axisDialog = this.element.querySelector('.axis-dialog') as HTMLElement;
     this.lightPanel = this.element.querySelector('.light-panel') as HTMLElement;
+    this.modelContextMenu = this.element.querySelector('.model-context-menu') as HTMLElement;
     this.materialPanel = this.element.querySelector('.material-panel') as HTMLElement;
     this.materialBallCanvas = this.element.querySelector('#material-ball') as HTMLCanvasElement;
     this.materialPresetSelect = this.element.querySelector('#material-preset') as HTMLSelectElement;
@@ -1103,6 +1124,11 @@ export class ModelView {
       const target = event.target as HTMLElement | null;
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
       const key = event.key.toLowerCase();
+      if (key === 'h') {
+        event.preventDefault();
+        this.toggleSelectedModelVisibility();
+        return;
+      }
       const mode: ModelTransformMode | null = key === 'w'
         ? 'translate'
         : key === 'e'
@@ -1532,13 +1558,18 @@ export class ModelView {
     for (const entry of this.modelEntries) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = `model-list-item${entry.id === this.selectedModelId ? ' active' : ''}`;
+      button.className = `model-list-item${entry.id === this.selectedModelId ? ' active' : ''}${entry.root.visible ? '' : ' is-hidden'}`;
       button.textContent = entry.name;
-      button.title = entry.filePath || entry.name;
+      button.title = `${entry.filePath || entry.name}${entry.root.visible ? '' : '（已隐藏）'}`;
       button.addEventListener('click', () => this.selectModelEntry(entry.id));
       button.addEventListener('dblclick', () => {
         this.selectModelEntry(entry.id);
         this.locateSelectedModel();
+      });
+      button.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        this.selectModelEntry(entry.id);
+        this.showModelContextMenu(event.clientX, event.clientY);
       });
       this.modelList.append(button);
     }
@@ -1591,7 +1622,7 @@ export class ModelView {
 
   private syncTransformGizmo(): void {
     const entry = this.selectedModelEntry();
-    const visible = this.mode === '3d' && Boolean(entry);
+    const visible = this.mode === '3d' && Boolean(entry) && Boolean(entry?.root.visible);
     this.transformControls.enabled = visible && !this.altHeld;
     if (visible && entry) {
       if (this.gizmoTarget !== entry.root) {
@@ -1703,6 +1734,58 @@ export class ModelView {
     this.element.querySelector('[data-model-save]')?.addEventListener('click', () => void this.saveModelScene());
     this.element.querySelector('[data-model-load]')?.addEventListener('click', () => void this.loadModelScene());
     this.updateTransformSnap();
+
+    this.canvas.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      const entry = this.modelEntryAt(event.clientX, event.clientY);
+      if (entry) {
+        this.selectModelEntry(entry.id);
+      } else if (!this.selectedModelEntry()) {
+        this.hideModelContextMenu();
+        return;
+      }
+      this.showModelContextMenu(event.clientX, event.clientY);
+    });
+    this.element.querySelector('[data-model-ctx-visibility]')?.addEventListener('click', () => {
+      this.hideModelContextMenu();
+      this.toggleSelectedModelVisibility();
+    });
+    this.element.querySelector('[data-model-ctx-locate]')?.addEventListener('click', () => {
+      this.hideModelContextMenu();
+      this.locateSelectedModel();
+    });
+    this.element.querySelector('[data-model-ctx-delete]')?.addEventListener('click', () => {
+      this.hideModelContextMenu();
+      this.removeActiveModel();
+    });
+    document.addEventListener('pointerdown', (event) => {
+      if (!this.modelContextMenu.contains(event.target as Node)) this.hideModelContextMenu();
+    });
+    window.addEventListener('blur', () => this.hideModelContextMenu());
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') this.hideModelContextMenu();
+    });
+
+    this.element.querySelectorAll<HTMLElement>('[data-panel-wall]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = button.dataset.panelWall;
+        const panel = target === 'model'
+          ? this.element.querySelector('.model-scene-panel')
+          : this.element.querySelector('.material-panel');
+        if (!panel) return;
+        const stuck = panel.classList.toggle('wall-stuck');
+        button.classList.toggle('active', stuck);
+        button.textContent = stuck ? '取消贴壁' : '贴壁';
+        button.title = stuck ? '取消贴壁' : '贴壁';
+      });
+    });
+
+    this.element.querySelectorAll<HTMLElement>('[data-view-face]').forEach((button) => {
+      button.addEventListener('click', () => {
+        this.setViewOrientation(button.dataset.viewFace ?? 'iso');
+      });
+    });
+    this.controls.addEventListener('change', () => this.updateViewCubeActive());
   }
 
   private async loadOfficialModelList(): Promise<void> {
@@ -1864,6 +1947,21 @@ export class ModelView {
     this.callbacks.status.set(name, this.statsText());
     this.callbacks.renameModelTitle(name);
     this.callbacks.toast(`模型已改名为：${name}`, 'success');
+  }
+
+  private toggleSelectedModelVisibility(): void {
+    const entry = this.selectedModelEntry();
+    if (!entry) {
+      this.callbacks.toast('请先选择模型', 'info');
+      return;
+    }
+    this.ensureModelUndoCheckpoint();
+    entry.root.visible = !entry.root.visible;
+    this.renderModelList();
+    this.syncTransformGizmo();
+    this.updateStats();
+    this.callbacks.status.set(entry.name, entry.root.visible ? this.statsText() : '已隐藏');
+    this.callbacks.toast(`${entry.name} ${entry.root.visible ? '已显示' : '已隐藏'}`, 'info');
   }
 
   private locateSelectedModel(): void {
@@ -2146,6 +2244,7 @@ export class ModelView {
           THREE.MathUtils.radToDeg(entry.root.rotation.z)
         ],
         scale: [entry.root.scale.x, entry.root.scale.y, entry.root.scale.z],
+        visible: entry.root.visible,
         radial: this.radialParams.get(entry.id) ? { ...this.radialParams.get(entry.id)! } : null,
         uvNormalized: this.uvNormalizedModels.has(entry.id),
         geometry: includeGeometry ? this.captureEntryGeometry(entry) : []
@@ -2169,6 +2268,7 @@ export class ModelView {
         position: [entry.root.position.x, entry.root.position.y, entry.root.position.z],
         rotation: [entry.root.rotation.x, entry.root.rotation.y, entry.root.rotation.z],
         scale: [entry.root.scale.x, entry.root.scale.y, entry.root.scale.z],
+        visible: entry.root.visible,
         radial: this.radialParams.get(entry.id) ?? null,
         uvNormalized: this.uvNormalizedModels.has(entry.id)
       })),
@@ -2298,6 +2398,7 @@ export class ModelView {
           THREE.MathUtils.degToRad(state.rotation[2])
         );
         entry.root.scale.fromArray(state.scale);
+        entry.root.visible = state.visible;
         entry.root.updateMatrixWorld(true);
         this.restoreEntryGeometry(entry, state.geometry);
         if (state.radial) this.radialParams.set(entry.id, { ...state.radial });
@@ -2548,6 +2649,7 @@ export class ModelView {
       position: number[];
       rotation: number[];
       scale: number[];
+      visible: boolean;
       radial: RadialParams | null;
       uvNormalized: boolean;
     }> = [];
@@ -2563,6 +2665,7 @@ export class ModelView {
           THREE.MathUtils.radToDeg(entry.root.rotation.z)
         ],
         scale: [entry.root.scale.x, entry.root.scale.y, entry.root.scale.z],
+        visible: entry.root.visible,
         radial: this.radialParams.get(entry.id) ?? null,
         uvNormalized: this.uvNormalizedModels.has(entry.id)
       };
@@ -2607,6 +2710,7 @@ export class ModelView {
           position?: number[];
           rotation?: number[];
           scale?: number[];
+          visible?: boolean;
           radial?: RadialParams | null;
           uvNormalized?: boolean;
         }>;
@@ -2652,6 +2756,7 @@ export class ModelView {
           Math.max(0.001, scale[1] ?? 1),
           Math.max(0.001, scale[2] ?? 1)
         );
+        entry.root.visible = model.visible !== false;
         entry.root.updateMatrixWorld(true);
         if (model.radial) {
           const radial: RadialParams = {
@@ -4246,6 +4351,85 @@ export class ModelView {
       this.clearSelection();
       this.selectModelEntry(hitEntry.id);
     }
+  }
+
+  private modelEntryAt(clientX: number, clientY: number): ModelEntry | null {
+    if (!this.modelEntries.length) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hits = this.raycaster.intersectObjects(
+      this.modelEntries.filter((entry) => entry.root.visible).map((entry) => entry.root),
+      true
+    );
+    const hit = hits.find((entry) => (entry.object as THREE.Mesh).isMesh);
+    if (!hit) return null;
+    return this.modelEntries.find((entry) => {
+      let cursor: THREE.Object3D | null = hit.object;
+      while (cursor) {
+        if (cursor === entry.root) return true;
+        cursor = cursor.parent;
+      }
+      return false;
+    }) ?? null;
+  }
+
+  private showModelContextMenu(x: number, y: number): void {
+    this.modelContextMenu.style.left = `${x}px`;
+    this.modelContextMenu.style.top = `${y}px`;
+    this.modelContextMenu.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      const rect = this.modelContextMenu.getBoundingClientRect();
+      this.modelContextMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+      this.modelContextMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    });
+  }
+
+  private hideModelContextMenu(): void {
+    this.modelContextMenu.classList.add('hidden');
+  }
+
+  private setViewOrientation(face: string): void {
+    const target = this.controls.target.clone();
+    let distance = this.camera.position.distanceTo(target);
+    if (!Number.isFinite(distance) || distance < 1e-4) distance = 5;
+    const directions: Record<string, THREE.Vector3> = {
+      front: new THREE.Vector3(0, 0, 1),
+      back: new THREE.Vector3(0, 0, -1),
+      left: new THREE.Vector3(-1, 0, 0),
+      right: new THREE.Vector3(1, 0, 0),
+      top: new THREE.Vector3(0, 1, 0),
+      bottom: new THREE.Vector3(0, -1, 0),
+      iso: new THREE.Vector3(0.72, 0.5, 0.86).normalize()
+    };
+    const direction = directions[face] ?? directions.iso;
+    this.camera.up.set(0, 1, 0);
+    if (face === 'top') this.camera.up.set(0, 0, -1);
+    if (face === 'bottom') this.camera.up.set(0, 0, 1);
+    this.camera.position.copy(target).add(direction.clone().multiplyScalar(distance));
+    this.camera.lookAt(target);
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.updateViewCubeActive();
+  }
+
+  private updateViewCubeActive(): void {
+    const direction = this.camera.position.clone().sub(this.controls.target);
+    if (direction.lengthSq() < 1e-9) return;
+    direction.normalize();
+    const ax = Math.abs(direction.x);
+    const ay = Math.abs(direction.y);
+    const az = Math.abs(direction.z);
+    let face = '';
+    if (ax >= ay && ax >= az && ax > 0.72) face = direction.x > 0 ? 'right' : 'left';
+    else if (ay >= ax && ay >= az && ay > 0.72) face = direction.y > 0 ? 'top' : 'bottom';
+    else if (az >= ax && az >= ay && az > 0.72) face = direction.z > 0 ? 'front' : 'back';
+    this.element.querySelectorAll<HTMLElement>('[data-view-face]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.viewFace === face);
+    });
   }
 
   private deselectModel(): void {

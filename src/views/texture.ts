@@ -42,6 +42,15 @@ interface PixelPatch {
 
 type TextureTool = 'move' | 'eraser' | 'brush' | 'blur' | 'smudge';
 
+interface TextureUndoImage {
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+  name: string;
+  path: string;
+  size: number;
+}
+
 interface TextureUndoSnapshot {
   controls: TextureUndoControl[];
   channel: number;
@@ -49,6 +58,7 @@ interface TextureUndoSnapshot {
   levelsEnabled: boolean;
   curvesEnabled: boolean;
   imageRevision: number;
+  image?: TextureUndoImage;
   curvePoints: Array<{ x: number; y: number }>;
   dispersionBlack: boolean;
   gradientStops: Array<{ position: number; color: string }>;
@@ -310,6 +320,11 @@ export class TextureView {
   private aiCutFeather: HTMLInputElement;
   private aiCutFeatherValue: HTMLElement;
   private aiCutRestoreButton: HTMLButtonElement;
+  private aiNormalStrength: HTMLInputElement;
+  private aiNormalStrengthValue: HTMLElement;
+  private aiNormalBlur: HTMLInputElement;
+  private aiNormalBlurValue: HTMLElement;
+  private aiNormalFlipY: HTMLInputElement;
   private aiCutoutBackup: {
     canvas: HTMLCanvasElement;
     width: number;
@@ -437,6 +452,10 @@ export class TextureView {
   private aiSeqRotation: HTMLSelectElement;
   private aiSeqFrameRotation: HTMLSelectElement;
   private aiSeqRegionStatus: HTMLElement;
+  private aiSeqStage: HTMLElement;
+  private aiSeqStageCanvas: HTMLCanvasElement;
+  private aiSeqStageCtx: CanvasRenderingContext2D;
+  private aiSeqStageInfo: HTMLElement;
   private aiSeqFrameRotations = new Map<number, number>();
   private aiSeqRegion = { x: 0, y: 0, width: 1, height: 1 };
   private aiSeqRegionSelecting = false;
@@ -514,6 +533,14 @@ export class TextureView {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13c2-3 4-3 6 0s4 3 6 0"/><path d="M5 18c2-3 4-3 6 0s4 3 6 0"/><path d="M7 8h10"/></svg>
           </button>
         </aside>
+        <div class="ai-seq-stage hidden">
+          <div class="ai-seq-stage-head">序列帧预览</div>
+          <canvas id="ai-seq-stage-canvas" width="320" height="240"></canvas>
+          <div class="ai-seq-stage-actions">
+            <span id="ai-seq-stage-info"></span>
+            <button type="button" class="primary" data-ai-seq-stage-apply>应用当前帧</button>
+          </div>
+        </div>
         <div class="texture-tool-options hidden">
           <div class="texture-tool-options-head" id="texture-tool-name">画笔</div>
           <label>大小 <input id="texture-tool-size" type="range" min="1" max="300" step="1" value="40"><span id="texture-tool-size-value">40</span></label>
@@ -618,6 +645,27 @@ export class TextureView {
               <div class="ai-button-row">
                 <button type="button" class="primary" data-ai-cut>一键抠图</button>
                 <button type="button" data-ai-cut-restore disabled>还原抠图</button>
+              </div>
+            </section>
+
+            <section class="ai-section normal-section" data-ai-section="normal">
+              <div class="ai-section-head"><span>AI 法线图生成</span><span class="ai-pill">本地</span></div>
+              <p class="ai-copy">从当前贴图的明暗高度生成法线贴图，可控制强度、平滑和 Y 方向。</p>
+              <div class="ai-row">
+                <span>强度</span>
+                <input id="ai-normal-strength" type="range" min="0.2" max="8" step="0.1" value="2">
+                <span id="ai-normal-strength-value">2.0</span>
+              </div>
+              <div class="ai-row">
+                <span>平滑</span>
+                <input id="ai-normal-blur" type="range" min="0" max="8" step="1" value="0">
+                <span id="ai-normal-blur-value">0</span>
+              </div>
+              <div class="tile-checks">
+                <label><input id="ai-normal-flip-y" type="checkbox"> 反转 Y</label>
+              </div>
+              <div class="ai-button-row">
+                <button type="button" class="primary" data-ai-normal-generate>生成法线图</button>
               </div>
             </section>
 
@@ -1217,6 +1265,11 @@ export class TextureView {
     this.aiCutFeather = this.element.querySelector('#ai-cut-feather') as HTMLInputElement;
     this.aiCutFeatherValue = this.element.querySelector('#ai-cut-feather-value') as HTMLElement;
     this.aiCutRestoreButton = this.element.querySelector('[data-ai-cut-restore]') as HTMLButtonElement;
+    this.aiNormalStrength = this.element.querySelector('#ai-normal-strength') as HTMLInputElement;
+    this.aiNormalStrengthValue = this.element.querySelector('#ai-normal-strength-value') as HTMLElement;
+    this.aiNormalBlur = this.element.querySelector('#ai-normal-blur') as HTMLInputElement;
+    this.aiNormalBlurValue = this.element.querySelector('#ai-normal-blur-value') as HTMLElement;
+    this.aiNormalFlipY = this.element.querySelector('#ai-normal-flip-y') as HTMLInputElement;
     this.tilePreview = this.element.querySelector('#tile-preview') as HTMLCanvasElement;
     this.tilePreviewCtx = this.tilePreview.getContext('2d') as CanvasRenderingContext2D;
     this.tileRepeatX = this.element.querySelector('#tile-repeat-x') as HTMLInputElement;
@@ -1303,6 +1356,10 @@ export class TextureView {
     this.aiSeqRotation = this.element.querySelector('#ai-seq-rotation') as HTMLSelectElement;
     this.aiSeqFrameRotation = this.element.querySelector('#ai-seq-frame-rotation') as HTMLSelectElement;
     this.aiSeqRegionStatus = this.element.querySelector('#ai-seq-region-status') as HTMLElement;
+    this.aiSeqStage = this.element.querySelector('.ai-seq-stage') as HTMLElement;
+    this.aiSeqStageCanvas = this.element.querySelector('#ai-seq-stage-canvas') as HTMLCanvasElement;
+    this.aiSeqStageCtx = this.aiSeqStageCanvas.getContext('2d') as CanvasRenderingContext2D;
+    this.aiSeqStageInfo = this.element.querySelector('#ai-seq-stage-info') as HTMLElement;
     this.composeSourceName = this.element.querySelector('#compose-source-name') as HTMLElement;
     this.composeParentThumb = this.element.querySelector('#compose-parent-thumb') as HTMLImageElement;
     this.composeChildThumb = this.element.querySelector('#compose-child-thumb') as HTMLImageElement;
@@ -1502,6 +1559,13 @@ export class TextureView {
     });
     this.element.querySelector('[data-ai-cut]')?.addEventListener('click', () => this.runAiCutout());
     this.aiCutRestoreButton.addEventListener('click', () => this.restoreAiCutout());
+    this.aiNormalStrength.addEventListener('input', () => {
+      this.aiNormalStrengthValue.textContent = Number(this.aiNormalStrength.value).toFixed(1);
+    });
+    this.aiNormalBlur.addEventListener('input', () => {
+      this.aiNormalBlurValue.textContent = this.aiNormalBlur.value;
+    });
+    this.element.querySelector('[data-ai-normal-generate]')?.addEventListener('click', () => this.generateAiNormalMap());
     const scheduleTilePreview = (): void => {
       window.clearTimeout(this.tilePreviewTimer);
       this.tilePreviewTimer = window.setTimeout(() => this.renderTilePreview(), 80);
@@ -1861,8 +1925,10 @@ export class TextureView {
     this.aiSeqRotation.addEventListener('change', () => this.renderAiSequenceGrid());
     this.aiSeqFrameRotation.addEventListener('change', () => {
       this.aiSeqRegionStatus.textContent = `单帧旋转 ${this.aiSeqFrameRotation.value}°`;
+      this.updateAiSequenceStage();
     });
     this.element.querySelector('[data-ai-seq-rotate]')?.addEventListener('click', () => this.applyAiSequenceRotation());
+    this.element.querySelector('[data-ai-seq-stage-apply]')?.addEventListener('click', () => this.applyAiSequenceFrame());
     this.element.querySelector('[data-ai-seq-region]')?.addEventListener('click', () => {
       this.aiSeqRegionSelecting = !this.aiSeqRegionSelecting;
       this.aiSeqRegionDraft = null;
@@ -2213,7 +2279,14 @@ export class TextureView {
     name: string,
     filePath: string,
     size: number,
-    options: { preserveTransform?: boolean; preserveHistory?: boolean; skipNormalDetect?: boolean; preservePath?: boolean } = {}
+    options: {
+      preserveTransform?: boolean;
+      preserveHistory?: boolean;
+      skipNormalDetect?: boolean;
+      preservePath?: boolean;
+      undoSnapshot?: TextureUndoSnapshot;
+      skipUndoReset?: boolean;
+    } = {}
   ): void {
     const previous = {
       rotation: this.rotation,
@@ -2224,6 +2297,8 @@ export class TextureView {
     };
 
     this.disposeImage();
+    this.pixelPatches.clear();
+    this.imageRevision = 0;
     this.bitmap = source;
     this.element.classList.add('has-image');
     this.imageWidth = width;
@@ -2318,7 +2393,18 @@ export class TextureView {
     this.normalGInverted = false;
     this.normalBanner.classList.add('hidden');
     if (!options.skipNormalDetect) this.detectNormalMap();
-    this.resetUndoHistory();
+    if (!options.skipUndoReset) {
+      if (options.undoSnapshot) {
+        this.textureRedoStack = [];
+        this.textureUndoStack.push(options.undoSnapshot);
+        const limit = Math.max(1, getUndoHistoryLimit());
+        while (this.textureUndoStack.length > limit) this.textureUndoStack.shift();
+        this.undoGestureSnapshot = this.captureUndoSnapshot();
+        this.undoGesturePushed = true;
+      } else {
+        this.resetUndoHistory();
+      }
+    }
   }
 
   private detectNormalMap(): void {
@@ -2777,6 +2863,7 @@ export class TextureView {
         section.classList.toggle('collapsed', collapsed);
         head.setAttribute('aria-expanded', String(!collapsed));
         if (collapsed && key === 'sequence') this.stopAiSequence();
+        if (key === 'sequence') this.updateAiSequenceStage();
         if (!collapsed && key === 'tile') this.renderTilePreview();
         if (!collapsed && key === 'dispersion') this.renderDispersionPreview();
         if (!collapsed && key === 'gradient') this.renderGradientEditor();
@@ -3244,6 +3331,7 @@ export class TextureView {
     this.detailTabButton.setAttribute('aria-selected', String(mode === 'detail'));
     this.aiEntryButton.setAttribute('aria-selected', String(mode === 'ai'));
     this.toolsEntryButton.setAttribute('aria-selected', String(mode === 'tools'));
+    this.updateAiSequenceStage();
     if (mode === 'ai') {
       if (!this.composeSource && this.aiSeqSource.value === 'child') this.aiSeqSource.value = 'parent';
       this.updateAiCutButtons();
@@ -3291,6 +3379,23 @@ export class TextureView {
 
   private updateAiCutButtons(): void {
     this.aiCutRestoreButton.disabled = !this.aiCutoutBackup;
+  }
+
+  private applyAiGeneratedImage(
+    source: ImageBitmap | HTMLCanvasElement,
+    width: number,
+    height: number,
+    name: string,
+    size: number,
+    detectNormal = false
+  ): void {
+    const snapshot = this.captureUndoSnapshot(true);
+    this.setImage(source, width, height, name, '', size, {
+      preserveTransform: true,
+      preservePath: true,
+      skipNormalDetect: !detectNormal,
+      undoSnapshot: snapshot
+    });
   }
 
   private runAiCutout(): void {
@@ -3405,14 +3510,12 @@ export class TextureView {
       size: this.fileSize
     };
 
-    this.setImage(
+    this.applyAiGeneratedImage(
       canvas,
       width,
       height,
       `${this.currentBaseName()}_cutout.png`,
-      '',
-      width * height * 4,
-      { preserveTransform: true, preserveHistory: false }
+      width * height * 4
     );
     this.setAiMode(true);
     this.callbacks.toast('AI 抠图完成；可继续调节容差后再次抠图', 'success');
@@ -3422,17 +3525,93 @@ export class TextureView {
     const backup = this.aiCutoutBackup;
     if (!backup) return;
     this.aiCutoutBackup = null;
-    this.setImage(
-      backup.canvas,
-      backup.width,
-      backup.height,
-      backup.name,
-      backup.path,
-      backup.size,
-      { preserveTransform: true, preserveHistory: false }
-    );
+    this.applyAiGeneratedImage(backup.canvas, backup.width, backup.height, backup.name, backup.size);
     this.setAiMode(true);
     this.callbacks.toast('已还原抠图前的图片', 'success');
+  }
+
+  private generateAiNormalMap(): void {
+    if (!this.bitmap || !this.imageWidth || !this.imageHeight) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    const width = this.imageWidth;
+    const height = this.imageHeight;
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = width;
+    sourceCanvas.height = height;
+    const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+    if (!sourceContext) return;
+    sourceContext.drawImage(this.bitmap as CanvasImageSource, 0, 0, width, height);
+    const pixels = sourceContext.getImageData(0, 0, width, height).data;
+    let heights = new Float32Array(width * height);
+    for (let index = 0; index < heights.length; index += 1) {
+      const offset = index * 4;
+      const alpha = pixels[offset + 3] / 255;
+      heights[index] = (pixels[offset] * 0.2126 + pixels[offset + 1] * 0.7152 + pixels[offset + 2] * 0.0722) / 255 * alpha;
+    }
+    const blur = Math.max(0, Math.min(8, Math.round(Number(this.aiNormalBlur.value) || 0)));
+    if (blur > 0) {
+      for (let pass = 0; pass < 2; pass += 1) {
+        const next = new Float32Array(heights.length);
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            let sum = 0;
+            let count = 0;
+            for (let dy = -blur; dy <= blur; dy += 1) {
+              const sy = Math.min(height - 1, Math.max(0, y + dy));
+              for (let dx = -blur; dx <= blur; dx += 1) {
+                const sx = Math.min(width - 1, Math.max(0, x + dx));
+                sum += heights[sy * width + sx];
+                count += 1;
+              }
+            }
+            next[y * width + x] = sum / Math.max(1, count);
+          }
+        }
+        heights = next;
+      }
+    }
+    const strength = Math.max(0.1, Math.min(12, Number(this.aiNormalStrength.value) || 2));
+    const flipY = this.aiNormalFlipY.checked ? -1 : 1;
+    const output = document.createElement('canvas');
+    output.width = width;
+    output.height = height;
+    const outputContext = output.getContext('2d', { willReadFrequently: true });
+    if (!outputContext) return;
+    const imageData = outputContext.createImageData(width, height);
+    const sample = (x: number, y: number): number => heights[
+      Math.min(height - 1, Math.max(0, y)) * width + Math.min(width - 1, Math.max(0, x))
+    ];
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const tl = sample(x - 1, y - 1);
+        const t = sample(x, y - 1);
+        const tr = sample(x + 1, y - 1);
+        const l = sample(x - 1, y);
+        const r = sample(x + 1, y);
+        const bl = sample(x - 1, y + 1);
+        const b = sample(x, y + 1);
+        const br = sample(x + 1, y + 1);
+        const dx = (tr + 2 * r + br) - (tl + 2 * l + bl);
+        const dy = (bl + 2 * b + br) - (tl + 2 * t + tr);
+        let nx = -dx * strength;
+        let ny = -dy * strength * flipY;
+        const length = Math.hypot(nx, ny, 1);
+        nx /= length;
+        ny /= length;
+        const nz = 1 / length;
+        const offset = (y * width + x) * 4;
+        imageData.data[offset] = Math.round((nx * 0.5 + 0.5) * 255);
+        imageData.data[offset + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+        imageData.data[offset + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+        imageData.data[offset + 3] = 255;
+      }
+    }
+    outputContext.putImageData(imageData, 0, 0);
+    this.applyAiGeneratedImage(output, width, height, `${this.currentBaseName()}_normal.png`, width * height * 4);
+    this.setAiMode(true);
+    this.callbacks.toast('法线图已生成，可继续调整后重新生成', 'success');
   }
 
   private syncTileDefaults(): void {
@@ -5201,7 +5380,7 @@ export class TextureView {
     if (this.aiSeqSelected.has(index)) this.aiSeqSelected.delete(index);
     else this.aiSeqSelected.add(index);
     this.aiSeqLastCell = index;
-    this.aiSeqFrameIndex = 0;
+    this.aiSeqFrameIndex = Math.max(0, this.aiSequenceFrames().indexOf(index));
     this.aiSeqFrameRotation.value = String(this.aiSeqFrameRotations.get(index) ?? 0);
     this.renderAiSequenceGrid();
   }
@@ -5308,6 +5487,7 @@ export class TextureView {
     const globalRotation = Number(this.aiSeqRotation.value) || 0;
     this.aiSeqStatus.textContent = `${cols} × ${rows} · 整体 ${globalRotation}°${this.aiSeqRegion.width < 0.999 || this.aiSeqRegion.height < 0.999 ? ' · 已框选分区' : ''}`;
     this.renderAiSequencePreview();
+    this.updateAiSequenceStage();
   }
 
   private aiSequenceFrameCanvas(index: number): { canvas: HTMLCanvasElement; rotation: number } | null {
@@ -5374,6 +5554,42 @@ export class TextureView {
       drawHeight
     );
     this.aiSeqStatus.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 单元格 ${index + 1} · 旋转 ${frame.rotation}°`;
+  }
+
+  private updateAiSequenceStage(): void {
+    const section = this.element.querySelector('[data-ai-section="sequence"]') as HTMLElement | null;
+    const source = this.aiSequenceSource();
+    const frames = this.aiSequenceFrames();
+    const visible = Boolean(
+      this.panelMode === 'ai' &&
+      section &&
+      !section.classList.contains('collapsed') &&
+      source &&
+      frames.length
+    );
+    this.aiSeqStage.classList.toggle('hidden', !visible);
+    if (!visible || !source || !frames.length) return;
+    const displayIndex = Math.min(this.aiSeqFrameIndex, frames.length - 1);
+    const index = frames[displayIndex];
+    const frame = this.aiSequenceFrameCanvas(index);
+    if (!frame) return;
+    const canvas = this.aiSeqStageCanvas;
+    const context = this.aiSeqStageCtx;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#0b0d10';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const scale = Math.min(canvas.width / frame.canvas.width, canvas.height / frame.canvas.height);
+    const drawWidth = frame.canvas.width * scale;
+    const drawHeight = frame.canvas.height * scale;
+    context.imageSmoothingEnabled = true;
+    context.drawImage(
+      frame.canvas,
+      (canvas.width - drawWidth) / 2,
+      (canvas.height - drawHeight) / 2,
+      drawWidth,
+      drawHeight
+    );
+    this.aiSeqStageInfo.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 旋转 ${frame.rotation}°`;
   }
 
   private toggleAiSequencePlay(): void {
@@ -5452,14 +5668,12 @@ export class TextureView {
     const frame = this.aiSequenceFrameCanvas(index);
     if (!frame) return;
     const canvas = frame.canvas;
-    this.setImage(
+    this.applyAiGeneratedImage(
       canvas,
       canvas.width,
       canvas.height,
       `${this.currentBaseName()}_${index + 1}.png`,
-      '',
-      canvas.width * canvas.height * 4,
-      { preserveTransform: true, preserveHistory: false }
+      canvas.width * canvas.height * 4
     );
     this.aiSeqCols.value = '1';
     this.aiSeqRows.value = '1';
@@ -5759,15 +5973,7 @@ export class TextureView {
     if (!pending) return;
     this.pendingUpscale = null;
     this.hideCompare();
-    this.setImage(
-      pending.bitmap,
-      pending.width,
-      pending.height,
-      pending.name,
-      '',
-      pending.size,
-      { preserveTransform: true, preserveHistory: false }
-    );
+    this.applyAiGeneratedImage(pending.bitmap, pending.width, pending.height, pending.name, pending.size);
     if (this.aiMode) this.renderAiSequenceGrid();
     this.callbacks.toast('已应用超分结果', 'success');
   }
@@ -5985,7 +6191,22 @@ export class TextureView {
       .filter((control) => !control.closest('#gradient-popover') && control.id !== 'gradient-position');
   }
 
-  private captureUndoSnapshot(): TextureUndoSnapshot {
+  private captureUndoSnapshot(includeImage = false): TextureUndoSnapshot {
+    let image: TextureUndoImage | undefined;
+    if (includeImage && this.bitmap && this.imageWidth && this.imageHeight) {
+      const canvas = document.createElement('canvas');
+      canvas.width = this.imageWidth;
+      canvas.height = this.imageHeight;
+      canvas.getContext('2d')?.drawImage(this.bitmap as CanvasImageSource, 0, 0, this.imageWidth, this.imageHeight);
+      image = {
+        canvas,
+        width: this.imageWidth,
+        height: this.imageHeight,
+        name: this.fileName,
+        path: this.filePath,
+        size: this.fileSize
+      };
+    }
     return {
       controls: this.undoControls().map((control) => ({
         value: control.value,
@@ -5999,6 +6220,7 @@ export class TextureView {
       levelsEnabled: this.levelsEnabled,
       curvesEnabled: this.curvesEnabled,
       imageRevision: this.imageRevision,
+      image,
       curvePoints: this.curvePoints.map((point) => ({ ...point })),
       dispersionBlack: this.dispersionBlack,
       gradientStops: this.gradientStops.map((stop) => ({ ...stop })),
@@ -6078,6 +6300,17 @@ export class TextureView {
     this.restoringUndo = true;
     try {
       this.closeGradientPopover();
+      if (snapshot.image) {
+        const image = snapshot.image;
+        this.setImage(image.canvas, image.width, image.height, image.name, image.path, image.size, {
+          preserveTransform: true,
+          preservePath: true,
+          skipNormalDetect: true,
+          skipUndoReset: true
+        });
+      } else {
+        this.restorePixelRevision(snapshot.imageRevision);
+      }
       const controls = this.undoControls();
       snapshot.controls.forEach((state, index) => {
         const control = controls[index];
@@ -6091,7 +6324,6 @@ export class TextureView {
         control.dispatchEvent(new Event('change', { bubbles: true }));
       });
 
-      this.restorePixelRevision(snapshot.imageRevision);
       this.setChannel(snapshot.channel);
       this.setBackground(snapshot.background);
       this.curvePoints = snapshot.curvePoints.map((point) => ({ ...point }));
@@ -6138,7 +6370,7 @@ export class TextureView {
 
   private undo(): void {
     if (!this.textureUndoStack.length) return;
-    const current = this.captureUndoSnapshot();
+    const current = this.captureUndoSnapshot(true);
     const previous = this.textureUndoStack.pop();
     if (!previous) return;
     this.textureRedoStack.push(current);
@@ -6151,7 +6383,7 @@ export class TextureView {
 
   private redo(): void {
     if (!this.textureRedoStack.length) return;
-    const current = this.captureUndoSnapshot();
+    const current = this.captureUndoSnapshot(true);
     const next = this.textureRedoStack.pop();
     if (!next) return;
     this.textureUndoStack.push(current);
