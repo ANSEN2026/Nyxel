@@ -1143,54 +1143,6 @@ label {
   cursor: crosshair !important;
 }
 
-.ai-seq-stage {
-  position: absolute;
-  left: calc((100% - var(--compose-width, 400px)) / 2);
-  top: 50%;
-  z-index: 23;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: rgba(12, 16, 22, 0.95);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-}
-
-.ai-seq-stage-head {
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.ai-seq-stage canvas {
-  width: 320px;
-  height: 240px;
-  display: block;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: #0b0d10;
-}
-
-.ai-seq-stage-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ai-seq-stage-actions span {
-  flex: 1;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.ai-seq-stage-actions button {
-  padding: 4px 9px;
-  font-size: 10px;
-}
-
 .adjust-effect-row {
   justify-content: flex-start;
   gap: 12px;

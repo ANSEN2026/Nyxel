@@ -452,11 +452,13 @@ export class TextureView {
   private aiSeqRotation: HTMLSelectElement;
   private aiSeqFrameRotation: HTMLSelectElement;
   private aiSeqRegionStatus: HTMLElement;
-  private aiSeqStage: HTMLElement;
-  private aiSeqStageCanvas: HTMLCanvasElement;
-  private aiSeqStageCtx: CanvasRenderingContext2D;
-  private aiSeqStageInfo: HTMLElement;
+  private aiSeqLiveTexture: THREE.CanvasTexture | null = null;
+  private aiSeqLiveActive = false;
+  private aiSeqLiveAspect = 1;
+  private previewAspectOverride: number | null = null;
   private aiSeqFrameRotations = new Map<number, number>();
+  private aiSeqPreviewRotation: number | null = null;
+  private aiSeqLiveRequested = false;
   private aiSeqRegion = { x: 0, y: 0, width: 1, height: 1 };
   private aiSeqRegionSelecting = false;
   private aiSeqRegionStart = { x: 0, y: 0 };
@@ -533,14 +535,6 @@ export class TextureView {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13c2-3 4-3 6 0s4 3 6 0"/><path d="M5 18c2-3 4-3 6 0s4 3 6 0"/><path d="M7 8h10"/></svg>
           </button>
         </aside>
-        <div class="ai-seq-stage hidden">
-          <div class="ai-seq-stage-head">序列帧预览</div>
-          <canvas id="ai-seq-stage-canvas" width="320" height="240"></canvas>
-          <div class="ai-seq-stage-actions">
-            <span id="ai-seq-stage-info"></span>
-            <button type="button" class="primary" data-ai-seq-stage-apply>应用当前帧</button>
-          </div>
-        </div>
         <div class="texture-tool-options hidden">
           <div class="texture-tool-options-head" id="texture-tool-name">画笔</div>
           <label>大小 <input id="texture-tool-size" type="range" min="1" max="300" step="1" value="40"><span id="texture-tool-size-value">40</span></label>
@@ -1356,10 +1350,6 @@ export class TextureView {
     this.aiSeqRotation = this.element.querySelector('#ai-seq-rotation') as HTMLSelectElement;
     this.aiSeqFrameRotation = this.element.querySelector('#ai-seq-frame-rotation') as HTMLSelectElement;
     this.aiSeqRegionStatus = this.element.querySelector('#ai-seq-region-status') as HTMLElement;
-    this.aiSeqStage = this.element.querySelector('.ai-seq-stage') as HTMLElement;
-    this.aiSeqStageCanvas = this.element.querySelector('#ai-seq-stage-canvas') as HTMLCanvasElement;
-    this.aiSeqStageCtx = this.aiSeqStageCanvas.getContext('2d') as CanvasRenderingContext2D;
-    this.aiSeqStageInfo = this.element.querySelector('#ai-seq-stage-info') as HTMLElement;
     this.composeSourceName = this.element.querySelector('#compose-source-name') as HTMLElement;
     this.composeParentThumb = this.element.querySelector('#compose-parent-thumb') as HTMLImageElement;
     this.composeChildThumb = this.element.querySelector('#compose-child-thumb') as HTMLImageElement;
@@ -1922,13 +1912,18 @@ export class TextureView {
     this.aiSeqGrid.addEventListener('pointerdown', (event) => this.aiSeqGridPointerDown(event));
     window.addEventListener('pointermove', (event) => this.aiSeqGridPointerMove(event));
     window.addEventListener('pointerup', () => this.aiSeqGridPointerUp());
-    this.aiSeqRotation.addEventListener('change', () => this.renderAiSequenceGrid());
+    this.aiSeqRotation.addEventListener('change', () => {
+      this.aiSeqLiveRequested = true;
+      this.renderAiSequenceGrid();
+    });
     this.aiSeqFrameRotation.addEventListener('change', () => {
       this.aiSeqRegionStatus.textContent = `单帧旋转 ${this.aiSeqFrameRotation.value}°`;
-      this.updateAiSequenceStage();
+      this.aiSeqPreviewRotation = Number(this.aiSeqFrameRotation.value) || 0;
+      this.aiSeqLiveRequested = true;
+      this.renderAiSequencePreview();
+      this.updateAiSequenceLivePreview();
     });
     this.element.querySelector('[data-ai-seq-rotate]')?.addEventListener('click', () => this.applyAiSequenceRotation());
-    this.element.querySelector('[data-ai-seq-stage-apply]')?.addEventListener('click', () => this.applyAiSequenceFrame());
     this.element.querySelector('[data-ai-seq-region]')?.addEventListener('click', () => {
       this.aiSeqRegionSelecting = !this.aiSeqRegionSelecting;
       this.aiSeqRegionDraft = null;
@@ -1940,6 +1935,7 @@ export class TextureView {
       this.aiSeqRegion = { x: 0, y: 0, width: 1, height: 1 };
       this.aiSeqRegionSelecting = false;
       this.aiSeqRegionDraft = null;
+      this.aiSeqLiveRequested = true;
       this.element.querySelector('[data-ai-seq-region]')?.classList.remove('active');
       this.aiSeqRegionStatus.textContent = '整图';
       this.renderAiSequenceGrid();
@@ -2863,7 +2859,7 @@ export class TextureView {
         section.classList.toggle('collapsed', collapsed);
         head.setAttribute('aria-expanded', String(!collapsed));
         if (collapsed && key === 'sequence') this.stopAiSequence();
-        if (key === 'sequence') this.updateAiSequenceStage();
+        if (key === 'sequence') this.updateAiSequenceLivePreview();
         if (!collapsed && key === 'tile') this.renderTilePreview();
         if (!collapsed && key === 'dispersion') this.renderDispersionPreview();
         if (!collapsed && key === 'gradient') this.renderGradientEditor();
@@ -3318,6 +3314,7 @@ export class TextureView {
     }
     this.panelMode = mode;
     this.aiMode = mode === 'ai';
+    if (mode !== 'ai') this.aiSeqLiveRequested = false;
     this.element.classList.toggle('ai-theme', mode === 'ai');
     this.element.classList.toggle('tools-theme', mode === 'tools');
     this.composePanel.classList.toggle('ai-mode', mode === 'ai');
@@ -3331,7 +3328,7 @@ export class TextureView {
     this.detailTabButton.setAttribute('aria-selected', String(mode === 'detail'));
     this.aiEntryButton.setAttribute('aria-selected', String(mode === 'ai'));
     this.toolsEntryButton.setAttribute('aria-selected', String(mode === 'tools'));
-    this.updateAiSequenceStage();
+    this.updateAiSequenceLivePreview();
     if (mode === 'ai') {
       if (!this.composeSource && this.aiSeqSource.value === 'child') this.aiSeqSource.value = 'parent';
       this.updateAiCutButtons();
@@ -5110,6 +5107,7 @@ export class TextureView {
 
   private resetAiSequenceSelection(): void {
     this.stopAiSequence();
+    this.aiSeqLiveRequested = false;
     this.aiSeqFrameIndex = 0;
     this.aiSeqSelected.clear();
     for (let index = 0; index < this.aiSequenceFrameCount(); index += 1) this.aiSeqSelected.add(index);
@@ -5117,6 +5115,7 @@ export class TextureView {
 
   private selectAllAiSequenceFrames(): void {
     this.stopAiSequence();
+    this.aiSeqLiveRequested = true;
     this.aiSeqFrameIndex = 0;
     this.aiSeqSelected.clear();
     for (let index = 0; index < this.aiSequenceFrameCount(); index += 1) this.aiSeqSelected.add(index);
@@ -5124,6 +5123,7 @@ export class TextureView {
 
   private selectAiSequenceRow(): void {
     this.stopAiSequence();
+    this.aiSeqLiveRequested = true;
     const cols = this.clampSequenceGrid(this.aiSeqCols.value);
     const rows = this.clampSequenceGrid(this.aiSeqRows.value);
     const row = Math.min(rows - 1, this.aiSeqLastCell >= 0 ? Math.floor(this.aiSeqLastCell / cols) : 0);
@@ -5191,6 +5191,7 @@ export class TextureView {
     this.aiSeqCols.value = String(detected.cols);
     this.aiSeqRows.value = String(detected.rows);
     this.resetAiSequenceSelection();
+    this.aiSeqLiveRequested = true;
     this.aiSeqRegionStatus.textContent = `已框选 · 识别 ${detected.cols} × ${detected.rows}`;
     this.renderAiSequenceGrid();
   }
@@ -5380,12 +5381,15 @@ export class TextureView {
     if (this.aiSeqSelected.has(index)) this.aiSeqSelected.delete(index);
     else this.aiSeqSelected.add(index);
     this.aiSeqLastCell = index;
+    this.aiSeqLiveRequested = true;
     this.aiSeqFrameIndex = Math.max(0, this.aiSequenceFrames().indexOf(index));
+    this.aiSeqPreviewRotation = null;
     this.aiSeqFrameRotation.value = String(this.aiSeqFrameRotations.get(index) ?? 0);
     this.renderAiSequenceGrid();
   }
 
   private renderAiSequenceGrid(): void {
+    this.aiSeqPreviewRotation = null;
     const context = this.aiSeqGridCtx;
     const canvas = this.aiSeqGrid;
     context.clearRect(0, 0, canvas.width, canvas.height);
@@ -5487,10 +5491,10 @@ export class TextureView {
     const globalRotation = Number(this.aiSeqRotation.value) || 0;
     this.aiSeqStatus.textContent = `${cols} × ${rows} · 整体 ${globalRotation}°${this.aiSeqRegion.width < 0.999 || this.aiSeqRegion.height < 0.999 ? ' · 已框选分区' : ''}`;
     this.renderAiSequencePreview();
-    this.updateAiSequenceStage();
+    this.updateAiSequenceLivePreview();
   }
 
-  private aiSequenceFrameCanvas(index: number): { canvas: HTMLCanvasElement; rotation: number } | null {
+  private aiSequenceFrameCanvas(index: number, previewRotation?: number): { canvas: HTMLCanvasElement; rotation: number } | null {
     const source = this.aiSequenceSource();
     if (!source) return null;
     const cols = this.clampSequenceGrid(this.aiSeqCols.value);
@@ -5511,7 +5515,8 @@ export class TextureView {
     if (!context) return null;
     context.drawImage(source.bitmap as CanvasImageSource, x0, y0, width, height, 0, 0, width, height);
     const globalRotation = ((Math.round(Number(this.aiSeqRotation.value) / 90) * 90) % 360 + 360) % 360;
-    const frameRotation = ((Math.round((this.aiSeqFrameRotations.get(index) ?? 0) / 90) * 90) % 360 + 360) % 360;
+    const rawRotation = previewRotation ?? this.aiSeqFrameRotations.get(index) ?? 0;
+    const frameRotation = ((Math.round(rawRotation / 90) * 90) % 360 + 360) % 360;
     const rotation = (globalRotation + frameRotation) % 360;
     if (rotation === 0) return { canvas: cropped, rotation };
     const rotated = document.createElement('canvas');
@@ -5540,7 +5545,7 @@ export class TextureView {
     }
     const displayIndex = Math.min(this.aiSeqFrameIndex, frames.length - 1);
     const index = frames[displayIndex];
-    const frame = this.aiSequenceFrameCanvas(index);
+    const frame = this.aiSequenceFrameCanvas(index, this.aiSeqPreviewRotationFor(index));
     if (!frame) return;
     const scale = Math.min(canvas.width / frame.canvas.width, canvas.height / frame.canvas.height);
     const drawWidth = frame.canvas.width * scale;
@@ -5556,40 +5561,83 @@ export class TextureView {
     this.aiSeqStatus.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 单元格 ${index + 1} · 旋转 ${frame.rotation}°`;
   }
 
-  private updateAiSequenceStage(): void {
+  private updateAiSequenceLivePreview(): void {
     const section = this.element.querySelector('[data-ai-section="sequence"]') as HTMLElement | null;
     const source = this.aiSequenceSource();
     const frames = this.aiSequenceFrames();
     const visible = Boolean(
       this.panelMode === 'ai' &&
+      this.aiSeqLiveRequested &&
       section &&
       !section.classList.contains('collapsed') &&
       source &&
       frames.length
     );
-    this.aiSeqStage.classList.toggle('hidden', !visible);
-    if (!visible || !source || !frames.length) return;
+    if (!visible || !source || !frames.length) {
+      this.setAiSequenceLivePreview(null);
+      return;
+    }
     const displayIndex = Math.min(this.aiSeqFrameIndex, frames.length - 1);
     const index = frames[displayIndex];
-    const frame = this.aiSequenceFrameCanvas(index);
+    const frame = this.aiSequenceFrameCanvas(index, this.aiSeqPreviewRotationFor(index));
     if (!frame) return;
-    const canvas = this.aiSeqStageCanvas;
-    const context = this.aiSeqStageCtx;
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#0b0d10';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    const scale = Math.min(canvas.width / frame.canvas.width, canvas.height / frame.canvas.height);
-    const drawWidth = frame.canvas.width * scale;
-    const drawHeight = frame.canvas.height * scale;
-    context.imageSmoothingEnabled = true;
-    context.drawImage(
-      frame.canvas,
-      (canvas.width - drawWidth) / 2,
-      (canvas.height - drawHeight) / 2,
-      drawWidth,
-      drawHeight
-    );
-    this.aiSeqStageInfo.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 旋转 ${frame.rotation}°`;
+    this.setAiSequenceLivePreview(frame.canvas);
+    this.aiSeqStatus.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 单元格 ${index + 1} · 旋转 ${frame.rotation}°`;
+  }
+
+  private setAiSequenceLivePreview(source: HTMLCanvasElement | null): void {
+    if (!this.material || !this.texture || !this.mesh) return;
+    if (!source) {
+      if (!this.aiSeqLiveActive) return;
+      this.aiSeqLiveActive = false;
+      this.previewAspectOverride = null;
+      this.material.uniforms.uTexture.value = this.texture;
+      if (this.aiSeqLiveTexture) {
+        this.aiSeqLiveTexture.dispose();
+        this.aiSeqLiveTexture = null;
+      }
+      this.applyMeshAspect(this.imageWidth / Math.max(1, this.imageHeight));
+      this.mesh.rotation.z = 0;
+      this.mesh.scale.set(1, 1, 1);
+      this.applyTransform();
+      this.fit();
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+    const liveTexture = new THREE.CanvasTexture(source);
+    liveTexture.colorSpace = THREE.NoColorSpace;
+    liveTexture.minFilter = THREE.LinearFilter;
+    liveTexture.magFilter = THREE.LinearFilter;
+    liveTexture.generateMipmaps = false;
+    liveTexture.needsUpdate = true;
+    if (this.aiSeqLiveTexture) this.aiSeqLiveTexture.dispose();
+    this.aiSeqLiveTexture = liveTexture;
+    const aspect = source.width / Math.max(1, source.height);
+    const first = !this.aiSeqLiveActive;
+    this.aiSeqLiveActive = true;
+    this.previewAspectOverride = aspect;
+    this.material.uniforms.uTexture.value = liveTexture;
+    // Show the frame exactly as it will be applied, without the viewer transform.
+    this.mesh.rotation.z = 0;
+    this.mesh.scale.set(1, 1, 1);
+    if (first || Math.abs(this.aiSeqLiveAspect - aspect) > 0.0001) {
+      this.aiSeqLiveAspect = aspect;
+      this.applyMeshAspect(aspect);
+      this.fit();
+    }
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  private applyMeshAspect(aspect: number): void {
+    if (!this.mesh) return;
+    this.mesh.geometry.dispose();
+    this.mesh.geometry = new THREE.PlaneGeometry(aspect, 1);
+  }
+
+  private aiSeqPreviewRotationFor(index: number): number | undefined {
+    return this.aiSeqPreviewRotation != null && index === this.aiSeqLastCell
+      ? this.aiSeqPreviewRotation
+      : undefined;
   }
 
   private toggleAiSequencePlay(): void {
@@ -5603,6 +5651,7 @@ export class TextureView {
       return;
     }
     this.aiSeqPlaying = true;
+    this.aiSeqLiveRequested = true;
     this.aiSeqPlayButton.textContent = '暂停';
     this.aiSeqFrameIndex = Math.min(this.aiSeqFrameIndex, frames.length - 1);
     this.aiSeqLastTime = performance.now();
@@ -5649,6 +5698,7 @@ export class TextureView {
       return;
     }
     const rotation = ((Math.round(Number(this.aiSeqFrameRotation.value) / 90) * 90) % 360 + 360) % 360;
+    this.aiSeqLiveRequested = true;
     for (const index of frames) {
       if (rotation === 0) this.aiSeqFrameRotations.delete(index);
       else this.aiSeqFrameRotations.set(index, rotation);
@@ -5665,7 +5715,7 @@ export class TextureView {
       return;
     }
     const index = frames[Math.min(this.aiSeqFrameIndex, frames.length - 1)];
-    const frame = this.aiSequenceFrameCanvas(index);
+    const frame = this.aiSequenceFrameCanvas(index, this.aiSeqPreviewRotationFor(index));
     if (!frame) return;
     const canvas = frame.canvas;
     this.applyAiGeneratedImage(
@@ -6008,6 +6058,13 @@ export class TextureView {
       this.texture.dispose();
       this.texture = null;
     }
+    if (this.aiSeqLiveTexture) {
+      this.aiSeqLiveTexture.dispose();
+      this.aiSeqLiveTexture = null;
+    }
+    this.aiSeqLiveActive = false;
+    this.aiSeqLiveAspect = 1;
+    this.previewAspectOverride = null;
     this.bitmap = null;
     this.element.classList.remove('has-image');
     this.textureCanvas = null;
@@ -6017,8 +6074,10 @@ export class TextureView {
   private fit(): void {
     if (!this.imageWidth || !this.imageHeight) return;
     const viewAspect = Math.max(0.001, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight));
-    const imageAspect = this.imageWidth / this.imageHeight;
-    const displayAspect = this.rotation % 180 === 0 ? imageAspect : 1 / imageAspect;
+    const imageAspect = this.previewAspectOverride ?? this.imageWidth / this.imageHeight;
+    const displayAspect = this.previewAspectOverride != null
+      ? imageAspect
+      : this.rotation % 180 === 0 ? imageAspect : 1 / imageAspect;
     if (displayAspect >= viewAspect) {
       const halfWidth = displayAspect / 2;
       const halfHeight = halfWidth / viewAspect;
@@ -6067,6 +6126,12 @@ export class TextureView {
 
   private applyTransform(): void {
     if (!this.mesh) return;
+    if (this.aiSeqLiveActive) {
+      this.mesh.rotation.z = 0;
+      this.mesh.scale.set(1, 1, 1);
+      this.renderPenOverlay();
+      return;
+    }
     this.mesh.rotation.z = THREE.MathUtils.degToRad(this.rotation);
     this.mesh.scale.set(this.flipH ? -1 : 1, this.flipV ? -1 : 1, 1);
     this.renderPenOverlay();
