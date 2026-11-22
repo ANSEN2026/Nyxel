@@ -3610,7 +3610,7 @@ export class TextureView {
     }
     const blurRadius = Math.max(0, Math.min(8, Math.round(blur)));
     if (blurRadius > 0) {
-      const blurOnce = (input: Float32Array): Float32Array => {
+      const blurOnce = (input: Float32Array): Float32Array<ArrayBuffer> => {
         const horizontal = new Float32Array(input.length);
         const vertical = new Float32Array(input.length);
         const windowSize = blurRadius * 2 + 1;
@@ -5704,6 +5704,7 @@ export class TextureView {
       const section = this.element.querySelector(`[data-ai-section="${key}"]`) as HTMLElement | null;
       if (!section) continue;
       const activate = (event: Event): void => {
+        if (this.restoringUndo) return;
         const target = event.target as HTMLElement | null;
         if (target?.closest('.ai-section-head')) return;
         this.livePreviewOwner = key;
@@ -5715,8 +5716,24 @@ export class TextureView {
   }
 
   private showLivePreview(owner: string, source: HTMLCanvasElement): void {
+    if (this.restoringUndo) return;
     this.livePreviewOwner = owner;
     this.setLivePreviewCanvas(source);
+  }
+
+  private clearPendingLivePreviewTimers(): void {
+    window.clearTimeout(this.cutoutPreviewTimer);
+    window.clearTimeout(this.normalPreviewTimer);
+    window.clearTimeout(this.tilePreviewTimer);
+    window.clearTimeout(this.dispersionTimer);
+    window.clearTimeout(this.gradientTimer);
+    window.clearTimeout(this.pathTimer);
+  }
+
+  private clearAllLivePreviews(): void {
+    this.clearPendingLivePreviewTimers();
+    this.aiSeqLiveRequested = false;
+    this.clearLivePreview();
   }
 
   private clearLivePreview(owner?: string): void {
@@ -6583,6 +6600,7 @@ export class TextureView {
     const limit = Math.max(1, getUndoHistoryLimit());
     while (this.textureRedoStack.length > limit) this.textureRedoStack.shift();
     this.restoreUndoSnapshot(previous);
+    this.clearAllLivePreviews();
     this.undoGestureSnapshot = this.captureUndoSnapshot();
     this.undoGesturePushed = true;
   }
@@ -6596,6 +6614,7 @@ export class TextureView {
     const limit = Math.max(1, getUndoHistoryLimit());
     while (this.textureUndoStack.length > limit) this.textureUndoStack.shift();
     this.restoreUndoSnapshot(next);
+    this.clearAllLivePreviews();
     this.undoGestureSnapshot = this.captureUndoSnapshot();
     this.undoGesturePushed = true;
   }
