@@ -423,6 +423,8 @@ export class TextureView {
   private pathStatus: HTMLElement;
   private pathOutput: HTMLCanvasElement | null = null;
   private pathTimer = 0;
+  private cutoutPreviewTimer = 0;
+  private normalPreviewTimer = 0;
   private penOverlay: HTMLCanvasElement;
   private penCtx: CanvasRenderingContext2D;
   private penEffectCanvas = document.createElement('canvas');
@@ -452,9 +454,10 @@ export class TextureView {
   private aiSeqRotation: HTMLSelectElement;
   private aiSeqFrameRotation: HTMLSelectElement;
   private aiSeqRegionStatus: HTMLElement;
-  private aiSeqLiveTexture: THREE.CanvasTexture | null = null;
-  private aiSeqLiveActive = false;
-  private aiSeqLiveAspect = 1;
+  private livePreviewTexture: THREE.CanvasTexture | null = null;
+  private livePreviewActive = false;
+  private livePreviewAspect = 1;
+  private livePreviewOwner: string | null = null;
   private previewAspectOverride: number | null = null;
   private aiSeqFrameRotations = new Map<number, number>();
   private aiSeqPreviewRotation: number | null = null;
@@ -1438,6 +1441,7 @@ export class TextureView {
     this.setupAiSections(this.aiPanelBody);
     this.setupAiSections(this.toolsPanelBody);
     this.bindEvents();
+    this.bindLivePreviewSections();
     this.bindUndoHistory();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.body);
@@ -1541,20 +1545,33 @@ export class TextureView {
     this.element.querySelectorAll<HTMLButtonElement>('[data-ai-panel-scale]').forEach((button) => {
       button.addEventListener('click', () => void this.runAiPanelScale(Number(button.dataset.aiPanelScale)));
     });
+    const scheduleCutoutPreview = (): void => {
+      window.clearTimeout(this.cutoutPreviewTimer);
+      this.cutoutPreviewTimer = window.setTimeout(() => this.updateAiCutoutPreview(), 120);
+    };
     this.aiCutTolerance.addEventListener('input', () => {
       this.aiCutToleranceValue.textContent = this.aiCutTolerance.value;
+      scheduleCutoutPreview();
     });
     this.aiCutFeather.addEventListener('input', () => {
       this.aiCutFeatherValue.textContent = this.aiCutFeather.value;
+      scheduleCutoutPreview();
     });
     this.element.querySelector('[data-ai-cut]')?.addEventListener('click', () => this.runAiCutout());
     this.aiCutRestoreButton.addEventListener('click', () => this.restoreAiCutout());
+    const scheduleNormalPreview = (): void => {
+      window.clearTimeout(this.normalPreviewTimer);
+      this.normalPreviewTimer = window.setTimeout(() => this.updateAiNormalPreview(), 120);
+    };
     this.aiNormalStrength.addEventListener('input', () => {
       this.aiNormalStrengthValue.textContent = Number(this.aiNormalStrength.value).toFixed(1);
+      scheduleNormalPreview();
     });
     this.aiNormalBlur.addEventListener('input', () => {
       this.aiNormalBlurValue.textContent = this.aiNormalBlur.value;
+      scheduleNormalPreview();
     });
+    this.aiNormalFlipY.addEventListener('change', scheduleNormalPreview);
     this.element.querySelector('[data-ai-normal-generate]')?.addEventListener('click', () => this.generateAiNormalMap());
     const scheduleTilePreview = (): void => {
       window.clearTimeout(this.tilePreviewTimer);
@@ -2858,6 +2875,7 @@ export class TextureView {
       const apply = (collapsed: boolean): void => {
         section.classList.toggle('collapsed', collapsed);
         head.setAttribute('aria-expanded', String(!collapsed));
+        if (collapsed) this.clearLivePreview(key);
         if (collapsed && key === 'sequence') this.stopAiSequence();
         if (key === 'sequence') this.updateAiSequenceLivePreview();
         if (!collapsed && key === 'tile') this.renderTilePreview();
@@ -3314,7 +3332,18 @@ export class TextureView {
     }
     this.panelMode = mode;
     this.aiMode = mode === 'ai';
-    if (mode !== 'ai') this.aiSeqLiveRequested = false;
+    if (mode !== 'ai') {
+      this.aiSeqLiveRequested = false;
+      this.clearLivePreview('sequence');
+      this.clearLivePreview('cutout');
+      this.clearLivePreview('normal');
+    }
+    if (mode !== 'tools') {
+      this.clearLivePreview('tile');
+      this.clearLivePreview('dispersion');
+      this.clearLivePreview('gradient');
+      this.clearLivePreview('path');
+    }
     this.element.classList.toggle('ai-theme', mode === 'ai');
     this.element.classList.toggle('tools-theme', mode === 'tools');
     this.composePanel.classList.toggle('ai-mode', mode === 'ai');
@@ -3395,20 +3424,18 @@ export class TextureView {
     });
   }
 
-  private runAiCutout(): void {
-    if (!this.bitmap) {
-      this.callbacks.toast('请先打开一张贴图', 'info');
-      return;
-    }
-    const tolerance = Math.max(0, Number(this.aiCutTolerance.value) || 0);
-    const feather = Math.max(0, Number(this.aiCutFeather.value) || 0);
-    const width = this.imageWidth;
-    const height = this.imageHeight;
+  private buildCutoutOutput(
+    width: number,
+    height: number,
+    tolerance: number,
+    feather: number
+  ): HTMLCanvasElement | null {
+    if (!this.bitmap || width < 1 || height < 1) return null;
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext('2d', { willReadFrequently: true });
-    if (!context) return;
+    if (!context) return null;
     context.drawImage(this.bitmap as CanvasImageSource, 0, 0);
     const imageData = context.getImageData(0, 0, width, height);
     const data = imageData.data;
@@ -3493,6 +3520,20 @@ export class TextureView {
       visit(x, y + 1);
     }
     context.putImageData(imageData, 0, 0);
+    return canvas;
+  }
+
+  private runAiCutout(): void {
+    if (!this.bitmap) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    const tolerance = Math.max(0, Number(this.aiCutTolerance.value) || 0);
+    const feather = Math.max(0, Number(this.aiCutFeather.value) || 0);
+    const width = this.imageWidth;
+    const height = this.imageHeight;
+    const canvas = this.buildCutoutOutput(width, height, tolerance, feather);
+    if (!canvas) return;
 
     const backup = document.createElement('canvas');
     backup.width = width;
@@ -3507,6 +3548,7 @@ export class TextureView {
       size: this.fileSize
     };
 
+    this.clearLivePreview('cutout');
     this.applyAiGeneratedImage(
       canvas,
       width,
@@ -3518,27 +3560,46 @@ export class TextureView {
     this.callbacks.toast('AI 抠图完成；可继续调节容差后再次抠图', 'success');
   }
 
+  private updateAiCutoutPreview(): void {
+    const section = this.element.querySelector('[data-ai-section="cutout"]') as HTMLElement | null;
+    if (!this.bitmap || this.panelMode !== 'ai' || !section || section.classList.contains('collapsed')) {
+      this.clearLivePreview('cutout');
+      return;
+    }
+    const tolerance = Math.max(0, Number(this.aiCutTolerance.value) || 0);
+    const feather = Math.max(0, Number(this.aiCutFeather.value) || 0);
+    const maxSize = 512;
+    const scale = Math.min(1, maxSize / Math.max(this.imageWidth, this.imageHeight, 1));
+    const width = Math.max(1, Math.round(this.imageWidth * scale));
+    const height = Math.max(1, Math.round(this.imageHeight * scale));
+    const output = this.buildCutoutOutput(width, height, tolerance, feather);
+    if (output) this.showLivePreview('cutout', output);
+    else this.clearLivePreview('cutout');
+  }
+
   private restoreAiCutout(): void {
     const backup = this.aiCutoutBackup;
     if (!backup) return;
     this.aiCutoutBackup = null;
+    this.clearLivePreview('cutout');
     this.applyAiGeneratedImage(backup.canvas, backup.width, backup.height, backup.name, backup.size);
     this.setAiMode(true);
     this.callbacks.toast('已还原抠图前的图片', 'success');
   }
 
-  private generateAiNormalMap(): void {
-    if (!this.bitmap || !this.imageWidth || !this.imageHeight) {
-      this.callbacks.toast('请先打开一张贴图', 'info');
-      return;
-    }
-    const width = this.imageWidth;
-    const height = this.imageHeight;
+  private buildNormalOutput(
+    width: number,
+    height: number,
+    strength: number,
+    blur: number,
+    flipY: 1 | -1
+  ): HTMLCanvasElement | null {
+    if (!this.bitmap || width < 1 || height < 1) return null;
     const sourceCanvas = document.createElement('canvas');
     sourceCanvas.width = width;
     sourceCanvas.height = height;
     const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
-    if (!sourceContext) return;
+    if (!sourceContext) return null;
     sourceContext.drawImage(this.bitmap as CanvasImageSource, 0, 0, width, height);
     const pixels = sourceContext.getImageData(0, 0, width, height).data;
     let heights = new Float32Array(width * height);
@@ -3547,35 +3608,40 @@ export class TextureView {
       const alpha = pixels[offset + 3] / 255;
       heights[index] = (pixels[offset] * 0.2126 + pixels[offset + 1] * 0.7152 + pixels[offset + 2] * 0.0722) / 255 * alpha;
     }
-    const blur = Math.max(0, Math.min(8, Math.round(Number(this.aiNormalBlur.value) || 0)));
-    if (blur > 0) {
-      for (let pass = 0; pass < 2; pass += 1) {
-        const next = new Float32Array(heights.length);
+    const blurRadius = Math.max(0, Math.min(8, Math.round(blur)));
+    if (blurRadius > 0) {
+      const blurOnce = (input: Float32Array): Float32Array => {
+        const horizontal = new Float32Array(input.length);
+        const vertical = new Float32Array(input.length);
+        const windowSize = blurRadius * 2 + 1;
         for (let y = 0; y < height; y += 1) {
           for (let x = 0; x < width; x += 1) {
             let sum = 0;
-            let count = 0;
-            for (let dy = -blur; dy <= blur; dy += 1) {
-              const sy = Math.min(height - 1, Math.max(0, y + dy));
-              for (let dx = -blur; dx <= blur; dx += 1) {
-                const sx = Math.min(width - 1, Math.max(0, x + dx));
-                sum += heights[sy * width + sx];
-                count += 1;
-              }
+            for (let dx = -blurRadius; dx <= blurRadius; dx += 1) {
+              sum += input[y * width + Math.min(width - 1, Math.max(0, x + dx))];
             }
-            next[y * width + x] = sum / Math.max(1, count);
+            horizontal[y * width + x] = sum / windowSize;
           }
         }
-        heights = next;
-      }
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            let sum = 0;
+            for (let dy = -blurRadius; dy <= blurRadius; dy += 1) {
+              sum += horizontal[Math.min(height - 1, Math.max(0, y + dy)) * width + x];
+            }
+            vertical[y * width + x] = sum / windowSize;
+          }
+        }
+        return vertical;
+      };
+      for (let pass = 0; pass < 2; pass += 1) heights = blurOnce(heights);
     }
-    const strength = Math.max(0.1, Math.min(12, Number(this.aiNormalStrength.value) || 2));
-    const flipY = this.aiNormalFlipY.checked ? -1 : 1;
+    const normalStrength = Math.max(0.1, Math.min(12, strength));
     const output = document.createElement('canvas');
     output.width = width;
     output.height = height;
     const outputContext = output.getContext('2d', { willReadFrequently: true });
-    if (!outputContext) return;
+    if (!outputContext) return null;
     const imageData = outputContext.createImageData(width, height);
     const sample = (x: number, y: number): number => heights[
       Math.min(height - 1, Math.max(0, y)) * width + Math.min(width - 1, Math.max(0, x))
@@ -3592,8 +3658,8 @@ export class TextureView {
         const br = sample(x + 1, y + 1);
         const dx = (tr + 2 * r + br) - (tl + 2 * l + bl);
         const dy = (bl + 2 * b + br) - (tl + 2 * t + tr);
-        let nx = -dx * strength;
-        let ny = -dy * strength * flipY;
+        let nx = -dx * normalStrength;
+        let ny = -dy * normalStrength * flipY;
         const length = Math.hypot(nx, ny, 1);
         nx /= length;
         ny /= length;
@@ -3606,9 +3672,45 @@ export class TextureView {
       }
     }
     outputContext.putImageData(imageData, 0, 0);
-    this.applyAiGeneratedImage(output, width, height, `${this.currentBaseName()}_normal.png`, width * height * 4);
+    return output;
+  }
+
+  private normalSettings(): { strength: number; blur: number; flipY: 1 | -1 } {
+    return {
+      strength: Math.max(0.1, Math.min(12, Number(this.aiNormalStrength.value) || 2)),
+      blur: Math.max(0, Math.min(8, Math.round(Number(this.aiNormalBlur.value) || 0))),
+      flipY: this.aiNormalFlipY.checked ? -1 : 1
+    };
+  }
+
+  private generateAiNormalMap(): void {
+    if (!this.bitmap || !this.imageWidth || !this.imageHeight) {
+      this.callbacks.toast('请先打开一张贴图', 'info');
+      return;
+    }
+    const { strength, blur, flipY } = this.normalSettings();
+    const output = this.buildNormalOutput(this.imageWidth, this.imageHeight, strength, blur, flipY);
+    if (!output) return;
+    this.clearLivePreview('normal');
+    this.applyAiGeneratedImage(output, output.width, output.height, `${this.currentBaseName()}_normal.png`, output.width * output.height * 4);
     this.setAiMode(true);
     this.callbacks.toast('法线图已生成，可继续调整后重新生成', 'success');
+  }
+
+  private updateAiNormalPreview(): void {
+    const section = this.element.querySelector('[data-ai-section="normal"]') as HTMLElement | null;
+    if (!this.bitmap || this.panelMode !== 'ai' || !section || section.classList.contains('collapsed')) {
+      this.clearLivePreview('normal');
+      return;
+    }
+    const { strength, blur, flipY } = this.normalSettings();
+    const maxSize = 512;
+    const scale = Math.min(1, maxSize / Math.max(this.imageWidth, this.imageHeight, 1));
+    const width = Math.max(1, Math.round(this.imageWidth * scale));
+    const height = Math.max(1, Math.round(this.imageHeight * scale));
+    const output = this.buildNormalOutput(width, height, strength, blur, flipY);
+    if (output) this.showLivePreview('normal', output);
+    else this.clearLivePreview('normal');
   }
 
   private syncTileDefaults(): void {
@@ -3787,6 +3889,7 @@ export class TextureView {
     context.fillStyle = '#0b0d10';
     context.fillRect(0, 0, canvas.width, canvas.height);
     if (!output) {
+      this.clearLivePreview('tile');
       context.fillStyle = '#7f8b96';
       context.font = '12px "Microsoft YaHei", sans-serif';
       context.textAlign = 'center';
@@ -3798,6 +3901,7 @@ export class TextureView {
     const drawHeight = output.height * scale;
     context.imageSmoothingEnabled = true;
     context.drawImage(output, (canvas.width - drawWidth) / 2, (canvas.height - drawHeight) / 2, drawWidth, drawHeight);
+    if (this.livePreviewOwner === 'tile') this.showLivePreview('tile', output);
   }
 
   private applyTileOutput(): void {
@@ -3916,6 +4020,7 @@ export class TextureView {
       context.fillRect(0, 0, canvas.width, canvas.height);
     }
     if (!output) {
+      this.clearLivePreview('dispersion');
       context.fillStyle = this.dispersionBlack ? '#aaa' : '#7f8b96';
       context.font = '12px "Microsoft YaHei", sans-serif';
       context.textAlign = 'center';
@@ -3927,6 +4032,7 @@ export class TextureView {
     const drawHeight = output.height * scale;
     context.imageSmoothingEnabled = true;
     context.drawImage(output, (canvas.width - drawWidth) / 2, (canvas.height - drawHeight) / 2, drawWidth, drawHeight);
+    if (this.livePreviewOwner === 'dispersion') this.showLivePreview('dispersion', output);
   }
 
   private applyDispersionOutput(): void {
@@ -4093,6 +4199,7 @@ export class TextureView {
     context.drawImage(output, 0, 0, width, height);
     this.syncGradientInputs();
     this.gradientStatus.textContent = `${this.gradientStops.length} 色标 · ${this.gradientAlphaStops.length} 透明度标 · 点击色标调色 / 点击透明度标调透明度`;
+    if (this.livePreviewOwner === 'gradient') this.showLivePreview('gradient', output);
     if (this.penPoints.length > 0) this.renderPenOverlay();
   }
 
@@ -4515,6 +4622,10 @@ export class TextureView {
         ? '先用钢笔在左侧绘制路径'
         : `路径 ${this.penPoints.length} 个锚点 · 头 → 尾`;
     this.pathStatus.textContent = status;
+    if (this.livePreviewOwner === 'path' && !this.penEditing) {
+      if (output) this.showLivePreview('path', output);
+      else this.clearLivePreview('path');
+    }
     this.syncPenOverlayVisibility();
   }
 
@@ -5574,27 +5685,56 @@ export class TextureView {
       frames.length
     );
     if (!visible || !source || !frames.length) {
-      this.setAiSequenceLivePreview(null);
+      this.clearLivePreview('sequence');
       return;
     }
     const displayIndex = Math.min(this.aiSeqFrameIndex, frames.length - 1);
     const index = frames[displayIndex];
     const frame = this.aiSequenceFrameCanvas(index, this.aiSeqPreviewRotationFor(index));
     if (!frame) return;
-    this.setAiSequenceLivePreview(frame.canvas);
+    if (!this.livePreviewOwner || this.livePreviewOwner === 'sequence') {
+      this.showLivePreview('sequence', frame.canvas);
+    }
     this.aiSeqStatus.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 单元格 ${index + 1} · 旋转 ${frame.rotation}°`;
   }
 
-  private setAiSequenceLivePreview(source: HTMLCanvasElement | null): void {
+  private bindLivePreviewSections(): void {
+    const keys = ['cutout', 'normal', 'tile', 'dispersion', 'gradient', 'sequence', 'path'];
+    for (const key of keys) {
+      const section = this.element.querySelector(`[data-ai-section="${key}"]`) as HTMLElement | null;
+      if (!section) continue;
+      const activate = (event: Event): void => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('.ai-section-head')) return;
+        this.livePreviewOwner = key;
+      };
+      section.addEventListener('pointerdown', activate, true);
+      section.addEventListener('input', activate, true);
+      section.addEventListener('change', activate, true);
+    }
+  }
+
+  private showLivePreview(owner: string, source: HTMLCanvasElement): void {
+    this.livePreviewOwner = owner;
+    this.setLivePreviewCanvas(source);
+  }
+
+  private clearLivePreview(owner?: string): void {
+    if (owner && this.livePreviewOwner !== owner) return;
+    if (!owner) this.livePreviewOwner = null;
+    this.setLivePreviewCanvas(null);
+  }
+
+  private setLivePreviewCanvas(source: HTMLCanvasElement | null): void {
     if (!this.material || !this.texture || !this.mesh) return;
     if (!source) {
-      if (!this.aiSeqLiveActive) return;
-      this.aiSeqLiveActive = false;
+      if (!this.livePreviewActive) return;
+      this.livePreviewActive = false;
       this.previewAspectOverride = null;
       this.material.uniforms.uTexture.value = this.texture;
-      if (this.aiSeqLiveTexture) {
-        this.aiSeqLiveTexture.dispose();
-        this.aiSeqLiveTexture = null;
+      if (this.livePreviewTexture) {
+        this.livePreviewTexture.dispose();
+        this.livePreviewTexture = null;
       }
       this.applyMeshAspect(this.imageWidth / Math.max(1, this.imageHeight));
       this.mesh.rotation.z = 0;
@@ -5610,18 +5750,18 @@ export class TextureView {
     liveTexture.magFilter = THREE.LinearFilter;
     liveTexture.generateMipmaps = false;
     liveTexture.needsUpdate = true;
-    if (this.aiSeqLiveTexture) this.aiSeqLiveTexture.dispose();
-    this.aiSeqLiveTexture = liveTexture;
+    if (this.livePreviewTexture) this.livePreviewTexture.dispose();
+    this.livePreviewTexture = liveTexture;
     const aspect = source.width / Math.max(1, source.height);
-    const first = !this.aiSeqLiveActive;
-    this.aiSeqLiveActive = true;
+    const first = !this.livePreviewActive;
+    this.livePreviewActive = true;
     this.previewAspectOverride = aspect;
     this.material.uniforms.uTexture.value = liveTexture;
     // Show the frame exactly as it will be applied, without the viewer transform.
     this.mesh.rotation.z = 0;
     this.mesh.scale.set(1, 1, 1);
-    if (first || Math.abs(this.aiSeqLiveAspect - aspect) > 0.0001) {
-      this.aiSeqLiveAspect = aspect;
+    if (first || Math.abs(this.livePreviewAspect - aspect) > 0.0001) {
+      this.livePreviewAspect = aspect;
       this.applyMeshAspect(aspect);
       this.fit();
     }
@@ -6058,12 +6198,13 @@ export class TextureView {
       this.texture.dispose();
       this.texture = null;
     }
-    if (this.aiSeqLiveTexture) {
-      this.aiSeqLiveTexture.dispose();
-      this.aiSeqLiveTexture = null;
+    if (this.livePreviewTexture) {
+      this.livePreviewTexture.dispose();
+      this.livePreviewTexture = null;
     }
-    this.aiSeqLiveActive = false;
-    this.aiSeqLiveAspect = 1;
+    this.livePreviewActive = false;
+    this.livePreviewAspect = 1;
+    this.livePreviewOwner = null;
     this.previewAspectOverride = null;
     this.bitmap = null;
     this.element.classList.remove('has-image');
@@ -6126,7 +6267,7 @@ export class TextureView {
 
   private applyTransform(): void {
     if (!this.mesh) return;
-    if (this.aiSeqLiveActive) {
+    if (this.livePreviewActive) {
       this.mesh.rotation.z = 0;
       this.mesh.scale.set(1, 1, 1);
       this.renderPenOverlay();
