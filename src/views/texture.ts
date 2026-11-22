@@ -554,12 +554,12 @@ export class TextureView {
                 </select>
               </div>
               <div class="tile-checks">
-                <label><input id="tile-edge-blend" type="checkbox" checked> 边缘混合</label>
+                <label><input id="tile-edge-blend" type="checkbox"> 边缘混合</label>
                 <label><input id="tile-sharp" type="checkbox"> 清晰衔接</label>
               </div>
               <div class="tile-slider-row">
                 <span>边缘混合</span>
-                <input id="tile-blend" type="range" min="0" max="50" step="1" value="20">
+                <input id="tile-blend" type="range" min="0" max="50" step="1" value="20" disabled>
                 <span id="tile-blend-value">20%</span>
               </div>
               <div class="tile-row">
@@ -1339,7 +1339,10 @@ export class TextureView {
     this.tileRepeatX.addEventListener('change', scheduleTilePreview);
     this.tileRepeatY.addEventListener('change', scheduleTilePreview);
     this.tileMode.addEventListener('change', scheduleTilePreview);
-    this.tileEdgeBlend.addEventListener('change', scheduleTilePreview);
+    this.tileEdgeBlend.addEventListener('change', () => {
+      this.tileBlend.disabled = !this.tileEdgeBlend.checked;
+      scheduleTilePreview();
+    });
     this.tileSharp.addEventListener('change', scheduleTilePreview);
     this.tileSeed.addEventListener('change', scheduleTilePreview);
     this.tileCustomSize.addEventListener('change', () => {
@@ -3217,8 +3220,8 @@ export class TextureView {
       const n = Math.sin(value * 12.9898 + 78.233) * 43758.5453;
       return n - Math.floor(n);
     };
-    const offsetX = (Number(this.tileOffsetXValue.value) || 0) + random(seed) * this.imageWidth;
-    const offsetY = (Number(this.tileOffsetYValue.value) || 0) + random(seed + 1) * this.imageHeight;
+    const offsetX = (Number(this.tileOffsetXValue.value) || 0) + (repeatX > 1 ? random(seed) * this.imageWidth : 0);
+    const offsetY = (Number(this.tileOffsetYValue.value) || 0) + (repeatY > 1 ? random(seed + 1) * this.imageHeight : 0);
 
     const sourceTile = document.createElement('canvas');
     sourceTile.width = this.imageWidth;
@@ -3392,9 +3395,10 @@ export class TextureView {
     this.tileOffsetY.value = '0';
     this.tileOffsetYValue.value = '0';
     this.tileMode.value = 'both';
-    this.tileEdgeBlend.checked = true;
+    this.tileEdgeBlend.checked = false;
     this.tileSharp.checked = false;
     this.tileBlend.value = '20';
+    this.tileBlend.disabled = true;
     this.tileBlendValue.textContent = '20%';
     this.tileSeed.value = '1';
     this.tileCustomSize.checked = false;
