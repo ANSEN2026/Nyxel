@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -12,6 +13,7 @@ import { basename } from '../utils';
 type UpAxis = 'y' | 'z';
 type UvBackground = 'checker' | 'solid' | 'texture';
 type ViewMode = '3d' | 'uv';
+type ModelTransformMode = 'translate' | 'rotate' | 'scale';
 
 const UV_ATTRIBUTES = ['uv', 'uv1', 'uv2', 'uv3'] as const;
 const UV_LABELS: Record<string, string> = { uv: 'UV1', uv1: 'UV2', uv2: 'UV3', uv3: 'UV4' };
@@ -200,6 +202,9 @@ export class ModelView {
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
+  private transformControls: TransformControls;
+  private transformMode: ModelTransformMode = 'translate';
+  private gizmoTarget: THREE.Object3D | null = null;
   private keyLight: THREE.DirectionalLight;
   private fillLight: THREE.DirectionalLight;
   private grid: THREE.GridHelper;
@@ -333,20 +338,20 @@ export class ModelView {
         <span class="muted" id="model-file-label">未加载</span>
       </div>
       <div class="view-body model-body">
-        <canvas class="view-canvas" title="Alt+左键旋转（3D）· Alt+中键平移 · Alt+右键缩放 · 左键点击 / 框选"></canvas>
-        <aside class="material-panel">
-          <div class="material-panel-head">
-            <div class="material-panel-title">
-              <strong>材质预设</strong>
-              <span>Material Preview</span>
+        <canvas class="view-canvas" title="左键点击模型选择 · W/E/R 移动/旋转/缩放 · Alt+左键旋转 · Alt+中键平移 · Alt+右键缩放"></canvas>
+        <aside class="model-scene-panel" data-3d-only>
+          <div class="model-scene-panel-head">
+            <div class="model-panel-title">
+              <strong>模型</strong>
+              <span>SCENE</span>
             </div>
-            <button type="button" data-material-reset title="重置材质">重置</button>
           </div>
-          <div class="material-ball-wrap">
-            <canvas id="material-ball"></canvas>
-            <span class="material-ball-label">MATERIAL BALL</span>
+          <div class="model-transform-mode" role="group" aria-label="变换工具">
+            <button type="button" data-model-transform="translate" class="active" title="W：移动">W<span>移动</span></button>
+            <button type="button" data-model-transform="rotate" title="E：旋转">E<span>旋转</span></button>
+            <button type="button" data-model-transform="scale" title="R：缩放">R<span>缩放</span></button>
           </div>
-          <div class="material-panel-body">
+          <div class="material-panel-body model-scene-panel-body">
             <section class="material-group model-scene-group">
               <div class="material-group-title">场景模型</div>
               <div class="model-list" id="model-list"></div>
@@ -422,6 +427,22 @@ export class ModelView {
                 <button type="button" data-reference-export>导出 OBJ</button>
               </div>
             </section>
+            <div class="model-shortcut-hint">左键点击模型选择 · W 移动 / E 旋转 / R 缩放 · 拖动坐标轴调整</div>
+          </div>
+        </aside>
+        <aside class="material-panel">
+          <div class="material-panel-head">
+            <div class="material-panel-title">
+              <strong>材质预设</strong>
+              <span>Material Preview</span>
+            </div>
+            <button type="button" data-material-reset title="重置材质">重置</button>
+          </div>
+          <div class="material-ball-wrap">
+            <canvas id="material-ball"></canvas>
+            <span class="material-ball-label">MATERIAL BALL</span>
+          </div>
+          <div class="material-panel-body">
             <label class="material-control-row">
               <span>预设</span>
               <select id="material-preset">
@@ -669,6 +690,23 @@ export class ModelView {
     };
     this.controls.enabled = false;
 
+    this.transformControls = new TransformControls(this.camera, this.renderer.domElement);
+    this.transformControls.setSize(0.85);
+    this.transformControls.setMode(this.transformMode);
+    this.scene.add(this.transformControls.getHelper());
+    this.transformControls.enabled = false;
+    this.transformControls.addEventListener('dragging-changed', (event) => {
+      const dragging = Boolean((event as unknown as { value?: boolean }).value);
+      this.controls.enabled = !dragging && this.mode === '3d' && this.altHeld;
+      if (!dragging) {
+        this.syncModelTransformControls();
+        this.updateStats();
+      }
+    });
+    this.transformControls.addEventListener('objectChange', () => {
+      this.syncModelTransformControls();
+    });
+
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.18, 0.35, 1);
@@ -906,19 +944,39 @@ export class ModelView {
       if (this.altHeld) return;
       this.altHeld = true;
       if (this.mode === '3d') this.controls.enabled = true;
+      this.transformControls.enabled = false;
       this.updateNavCursor();
     });
     window.addEventListener('keyup', (event) => {
       if (event.key !== 'Alt') return;
       this.altHeld = false;
       this.controls.enabled = false;
+      this.syncTransformGizmo();
       this.updateNavCursor();
     });
     window.addEventListener('blur', () => {
       this.altHeld = false;
       this.controls.enabled = false;
       this.endNavigation();
+      this.syncTransformGizmo();
       this.updateNavCursor();
+    });
+
+    window.addEventListener('keydown', (event) => {
+      if (!this.active || this.mode !== '3d' || event.altKey || event.ctrlKey || event.metaKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      const key = event.key.toLowerCase();
+      const mode: ModelTransformMode | null = key === 'w'
+        ? 'translate'
+        : key === 'e'
+          ? 'rotate'
+          : key === 'r'
+            ? 'scale'
+            : null;
+      if (!mode) return;
+      event.preventDefault();
+      this.setTransformMode(mode);
     });
 
     this.canvas.addEventListener('contextmenu', (event) => {
@@ -985,6 +1043,7 @@ export class ModelView {
         return;
       }
       if (event.button !== 0 || event.altKey) return;
+      if (this.transformControls.axis || this.transformControls.dragging) return;
       this.beginMarquee(event, '3d');
     });
 
@@ -1051,6 +1110,7 @@ export class ModelView {
       }
       this.updateNavCursor();
       if (!mode) return;
+      if (this.transformControls.axis || this.transformControls.dragging) return;
       if (marqueeActive) {
         if (mode === 'uv') this.selectUvInMarquee(startX, startY, currentX, currentY, additive, subtractive);
         else this.select3dInMarquee(startX, startY, currentX, currentY, additive, subtractive);
@@ -1278,6 +1338,7 @@ export class ModelView {
     this.fit();
     this.renderModelList();
     this.syncModelTransformControls();
+    this.syncTransformGizmo();
 
     if (this.mode === 'uv') {
       this.clearUvData();
@@ -1354,6 +1415,7 @@ export class ModelView {
     this.rebuildMaterials();
     this.renderModelList();
     this.syncModelTransformControls();
+    this.syncTransformGizmo();
     this.fileLabel.textContent = entry.name;
     this.callbacks.status.set(entry.name, this.statsText());
     this.updateStats();
@@ -1364,6 +1426,33 @@ export class ModelView {
       this.updateUvBackground();
       this.updateUvHud();
     }
+  }
+
+  private setTransformMode(mode: ModelTransformMode): void {
+    this.transformMode = mode;
+    this.transformControls.setMode(mode);
+    this.element.querySelectorAll<HTMLElement>('[data-model-transform]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.modelTransform === mode);
+    });
+  }
+
+  private syncTransformGizmo(): void {
+    const entry = this.activeModelEntry();
+    const visible = this.mode === '3d' && Boolean(entry);
+    this.transformControls.enabled = visible && !this.altHeld;
+    if (visible && entry) {
+      if (this.gizmoTarget !== entry.root) {
+        this.transformControls.attach(entry.root);
+        this.gizmoTarget = entry.root;
+      }
+    } else if (this.gizmoTarget) {
+      this.transformControls.detach();
+      this.gizmoTarget = null;
+    }
+  }
+
+  private updateTransformSnap(): void {
+    this.transformControls.setTranslationSnap(this.modelGridSnap.checked ? 0.1 : null);
   }
 
   private syncModelTransformControls(): void {
@@ -1446,10 +1535,18 @@ export class ModelView {
     ]) {
       field.addEventListener('change', apply);
     }
+    this.element.querySelectorAll<HTMLElement>('[data-model-transform]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const mode = button.dataset.modelTransform as ModelTransformMode | undefined;
+        if (mode) this.setTransformMode(mode);
+      });
+    });
+    this.modelGridSnap.addEventListener('change', () => this.updateTransformSnap());
     this.element.querySelector('[data-model-pivot]')?.addEventListener('click', () => this.centerModelPivot());
     this.element.querySelector('[data-model-remove]')?.addEventListener('click', () => this.removeActiveModel());
     this.element.querySelector('[data-model-save]')?.addEventListener('click', () => void this.saveModelScene());
     this.element.querySelector('[data-model-load]')?.addEventListener('click', () => void this.loadModelScene());
+    this.updateTransformSnap();
   }
 
   private async loadOfficialModelList(): Promise<void> {
@@ -1677,6 +1774,10 @@ export class ModelView {
   private removeActiveModel(): void {
     const entry = this.activeModelEntry();
     if (!entry) return;
+    if (this.gizmoTarget === entry.root) {
+      this.transformControls.detach();
+      this.gizmoTarget = null;
+    }
     this.scene.remove(entry.root);
     entry.object.traverse((child) => {
       const mesh = child as THREE.Mesh;
@@ -1697,6 +1798,7 @@ export class ModelView {
       this.fileLabel.textContent = '未加载';
       this.renderModelList();
       this.syncModelTransformControls();
+      this.syncTransformGizmo();
       this.updateMaterialBall(true);
       this.callbacks.status.set('模型', '未加载');
     }
@@ -2566,6 +2668,8 @@ export class ModelView {
   }
 
   private disposeModel(): void {
+    this.transformControls.detach();
+    this.gizmoTarget = null;
     this.clearReferenceModel();
     this.clearUvData();
     this.generatedMaterialTextures.forEach((texture) => texture.dispose());
@@ -2642,6 +2746,7 @@ export class ModelView {
     this.mode = mode;
     this.element.classList.toggle('uv-mode', mode === 'uv');
     this.controls.enabled = mode === '3d' && this.altHeld;
+    this.syncTransformGizmo();
     this.updateNavCursor();
     this.element.querySelectorAll('[data-mode]').forEach((button) => {
       button.classList.toggle('active', (button as HTMLElement).dataset.mode === mode);
@@ -3350,21 +3455,31 @@ export class ModelView {
   }
 
   private pick3d(clientX: number, clientY: number, additive = false, subtractive = false): void {
-    const model = this.model;
-    if (!model) return;
-    if (!this.uvDataBuilt) this.ensureUvData();
+    if (!this.modelEntries.length) return;
     const rect = this.canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
       -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
     );
     this.raycaster.setFromCamera(ndc, this.camera);
-    const hits = this.raycaster.intersectObject(model, true);
+    const hits = this.raycaster.intersectObjects(this.modelEntries.map((entry) => entry.root), true);
     const hit = hits.find((entry) => (entry.object as THREE.Mesh).isMesh && entry.faceIndex !== undefined);
     if (!hit) {
       if (!additive && !subtractive) this.clearSelection();
       return;
     }
+    const hitEntry = this.modelEntries.find((entry) => {
+      let cursor: THREE.Object3D | null = hit.object;
+      while (cursor) {
+        if (cursor === entry.root) return true;
+        cursor = cursor.parent;
+      }
+      return false;
+    });
+    if (hitEntry && hitEntry.id !== this.activeModelId) this.selectModelEntry(hitEntry.id);
+    const model = this.model;
+    if (!model) return;
+    if (!this.uvDataBuilt) this.ensureUvData();
     const mesh = hit.object as THREE.Mesh;
     const faceIndex = hit.faceIndex ?? -1;
     const triangle = this.uvTriangles.find((entry) => entry.mesh === mesh && entry.faceIndex === faceIndex);
