@@ -31,12 +31,24 @@ interface TextureUndoControl {
   checked?: boolean;
 }
 
+interface PixelPatch {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  before: ImageData;
+  after: ImageData;
+}
+
+type TextureTool = 'move' | 'eraser' | 'brush' | 'blur' | 'smudge';
+
 interface TextureUndoSnapshot {
   controls: TextureUndoControl[];
   channel: number;
   background: 'black' | 'gray' | 'checker';
   levelsEnabled: boolean;
   curvesEnabled: boolean;
+  imageRevision: number;
   curvePoints: Array<{ x: number; y: number }>;
   dispersionBlack: boolean;
   gradientStops: Array<{ position: number; color: string }>;
@@ -81,6 +93,12 @@ const FRAGMENT_SHADER = `
   uniform float uBlack;
   uniform float uWhite;
   uniform float uGamma;
+  uniform int uInvert;
+  uniform int uGrayscale;
+  uniform float uBrightness;
+  uniform float uContrast;
+  uniform int uFillBackground;
+  uniform vec3 uFillColor;
   varying vec2 vUv;
   void main() {
     vec4 color = texture2D(uTexture, vUv);
@@ -99,6 +117,16 @@ const FRAGMENT_SHADER = `
       color.g = texture2D(uCurve, vec2(clamp(color.g, 0.0, 1.0), 0.5)).r;
       color.b = texture2D(uCurve, vec2(clamp(color.b, 0.0, 1.0), 0.5)).r;
     }
+    if (uInvert == 1) color.rgb = 1.0 - color.rgb;
+    if (uGrayscale == 1) {
+      float gray = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+      color.rgb = vec3(gray);
+    }
+    color.rgb = (color.rgb - 0.5) * (1.0 + uContrast) + 0.5 + uBrightness;
+    color.rgb = clamp(color.rgb, 0.0, 1.0);
+    if (uFillBackground == 1) {
+      color = vec4(mix(uFillColor, color.rgb, color.a), 1.0);
+    }
     gl_FragColor = color;
   }
 `;
@@ -116,9 +144,41 @@ export class TextureView {
   private mesh: THREE.Mesh | null = null;
   private material: THREE.ShaderMaterial | null = null;
   private texture: THREE.Texture | null = null;
+  private textureCanvas: HTMLCanvasElement | null = null;
+  private textureContext: CanvasRenderingContext2D | null = null;
   private bitmap: ImageBitmap | HTMLCanvasElement | null = null;
   private imageWidth = 0;
   private imageHeight = 0;
+  private invertEnabled = false;
+  private grayscaleEnabled = false;
+  private brightnessValue = 0;
+  private contrastValue = 0;
+  private fillBackgroundEnabled = false;
+  private fillBackgroundColor = '#ffffff';
+  private invertToggle: HTMLInputElement;
+  private grayscaleToggle: HTMLInputElement;
+  private brightnessInput: HTMLInputElement;
+  private brightnessValueLabel: HTMLElement;
+  private contrastInput: HTMLInputElement;
+  private contrastValueLabel: HTMLElement;
+  private fillBackgroundToggle: HTMLInputElement;
+  private fillBackgroundColorInput: HTMLInputElement;
+  private textureTool: TextureTool = 'move';
+  private toolSizeInput: HTMLInputElement;
+  private toolSizeValue: HTMLElement;
+  private toolStrengthInput: HTMLInputElement;
+  private toolStrengthValue: HTMLElement;
+  private toolColorInput: HTMLInputElement;
+  private toolColorRow: HTMLElement;
+  private toolOptions: HTMLElement;
+  private toolName: HTMLElement;
+  private strokeActive = false;
+  private strokePointerId = -1;
+  private strokeLastPoint: { x: number; y: number } | null = null;
+  private strokeBeforeCanvas: HTMLCanvasElement | null = null;
+  private strokeDirty: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+  private imageRevision = 0;
+  private pixelPatches = new Map<number, PixelPatch>();
   private fileName = '';
   private filePath = '';
   private fileSize = 0;
@@ -177,8 +237,6 @@ export class TextureView {
   private packBusy = false;
 
   private composeOverlay: HTMLElement;
-  private composePreview: HTMLCanvasElement;
-  private composePreviewCtx: CanvasRenderingContext2D;
   private composeSource: { name: string; bitmap: ImageBitmap | HTMLCanvasElement } | null = null;
   private composeSourceName: HTMLElement;
   private composeParentThumb: HTMLImageElement;
@@ -439,6 +497,29 @@ export class TextureView {
       <div class="view-body texture-body bg-checker">
         <canvas class="view-canvas"></canvas>
         <canvas class="pen-overlay hidden"></canvas>
+        <aside class="texture-tool-rail" aria-label="图像工具">
+          <button type="button" data-texture-tool="move" class="active" title="移动工具">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg>
+          </button>
+          <button type="button" data-texture-tool="eraser" title="橡皮擦">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15.5l7.5-7.5 6.5 6.5-6.5 6.5H7z"/><path d="M9 21h11"/></svg>
+          </button>
+          <button type="button" data-texture-tool="brush" title="画笔">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20c2.5 0 3.5-1.2 4.5-3.5L17 8l-3-3-8.5 8.5C3.2 15.5 2 16.5 2 19c0 .6.4 1 1 1z"/><path d="M14 5l4 4"/></svg>
+          </button>
+          <button type="button" data-texture-tool="blur" title="模糊">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/><path d="M9.5 14a2.5 2.5 0 0 0 2.5 2.5"/></svg>
+          </button>
+          <button type="button" data-texture-tool="smudge" title="揉搓">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13c2-3 4-3 6 0s4 3 6 0"/><path d="M5 18c2-3 4-3 6 0s4 3 6 0"/><path d="M7 8h10"/></svg>
+          </button>
+        </aside>
+        <div class="texture-tool-options hidden">
+          <div class="texture-tool-options-head" id="texture-tool-name">画笔</div>
+          <label>大小 <input id="texture-tool-size" type="range" min="1" max="300" step="1" value="40"><span id="texture-tool-size-value">40</span></label>
+          <label>强度 <input id="texture-tool-strength" type="range" min="1" max="100" step="1" value="60"><span id="texture-tool-strength-value">60</span></label>
+          <label id="texture-tool-color-row">颜色 <input id="texture-tool-color" type="color" value="#ffffff"></label>
+        </div>
         <div class="view-empty"><strong>打开或拖入一张贴图</strong><span>支持 PNG / JPG / WebP / BMP / GIF / TGA</span></div>
         <div class="texture-meta hidden"></div>
         <div class="normal-banner hidden">
@@ -925,6 +1006,25 @@ export class TextureView {
                 <button data-action="mono" id="mono-toggle">色阶</button>
                 <button type="button" id="curve-toggle">曲线</button>
               </div>
+              <div class="compose-view-row adjust-effect-row">
+                <label class="compose-inline"><input id="adjust-invert" type="checkbox"> 颜色反相</label>
+                <label class="compose-inline"><input id="adjust-grayscale" type="checkbox"> 黑白</label>
+              </div>
+              <div class="compose-row">
+                <span class="compose-label">亮度</span>
+                <input id="adjust-brightness" type="range" min="-100" max="100" step="1" value="0">
+                <span id="adjust-brightness-value" class="compose-value">0</span>
+              </div>
+              <div class="compose-row">
+                <span class="compose-label">对比度</span>
+                <input id="adjust-contrast" type="range" min="-100" max="100" step="1" value="0">
+                <span id="adjust-contrast-value" class="compose-value">0</span>
+              </div>
+              <div class="compose-row">
+                <span class="compose-label">填充背景</span>
+                <label class="compose-inline"><input id="adjust-fill" type="checkbox"> 启用</label>
+                <input id="adjust-fill-color" type="color" value="#ffffff">
+              </div>
               <div class="levels-inline hidden">
                 <label>黑场 <input id="level-black" type="range" min="0" max="254" step="1" value="0"><span id="level-black-value">0</span></label>
                 <label>白场 <input id="level-white" type="range" min="1" max="255" step="1" value="255"><span id="level-white-value">255</span></label>
@@ -979,9 +1079,8 @@ export class TextureView {
               </div>
             </section>
 
-            <section class="compose-group" data-compose-group="preview">
-              <div class="compose-group-title">预览</div>
-              <div class="pack-preview-wrap compose-preview-wrap"><canvas id="compose-preview"></canvas></div>
+            <section class="compose-group" data-compose-group="output">
+              <div class="compose-group-title">输出</div>
               <div class="pack-actions">
                 <span class="pack-hint" id="compose-size"></span>
                 <span class="spacer"></span>
@@ -1076,6 +1175,22 @@ export class TextureView {
     `;
 
     this.canvas = this.element.querySelector('canvas') as HTMLCanvasElement;
+    this.toolSizeInput = this.element.querySelector('#texture-tool-size') as HTMLInputElement;
+    this.toolSizeValue = this.element.querySelector('#texture-tool-size-value') as HTMLElement;
+    this.toolStrengthInput = this.element.querySelector('#texture-tool-strength') as HTMLInputElement;
+    this.toolStrengthValue = this.element.querySelector('#texture-tool-strength-value') as HTMLElement;
+    this.toolColorInput = this.element.querySelector('#texture-tool-color') as HTMLInputElement;
+    this.toolColorRow = this.element.querySelector('#texture-tool-color-row') as HTMLElement;
+    this.toolOptions = this.element.querySelector('.texture-tool-options') as HTMLElement;
+    this.toolName = this.element.querySelector('#texture-tool-name') as HTMLElement;
+    this.invertToggle = this.element.querySelector('#adjust-invert') as HTMLInputElement;
+    this.grayscaleToggle = this.element.querySelector('#adjust-grayscale') as HTMLInputElement;
+    this.brightnessInput = this.element.querySelector('#adjust-brightness') as HTMLInputElement;
+    this.brightnessValueLabel = this.element.querySelector('#adjust-brightness-value') as HTMLElement;
+    this.contrastInput = this.element.querySelector('#adjust-contrast') as HTMLInputElement;
+    this.contrastValueLabel = this.element.querySelector('#adjust-contrast-value') as HTMLElement;
+    this.fillBackgroundToggle = this.element.querySelector('#adjust-fill') as HTMLInputElement;
+    this.fillBackgroundColorInput = this.element.querySelector('#adjust-fill-color') as HTMLInputElement;
     this.body = this.element.querySelector('.texture-body') as HTMLElement;
     this.emptyState = this.element.querySelector('.view-empty') as HTMLElement;
     this.metaBadge = this.element.querySelector('.texture-meta') as HTMLElement;
@@ -1188,8 +1303,6 @@ export class TextureView {
     this.aiSeqRotation = this.element.querySelector('#ai-seq-rotation') as HTMLSelectElement;
     this.aiSeqFrameRotation = this.element.querySelector('#ai-seq-frame-rotation') as HTMLSelectElement;
     this.aiSeqRegionStatus = this.element.querySelector('#ai-seq-region-status') as HTMLElement;
-    this.composePreview = this.element.querySelector('#compose-preview') as HTMLCanvasElement;
-    this.composePreviewCtx = this.composePreview.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
     this.composeSourceName = this.element.querySelector('#compose-source-name') as HTMLElement;
     this.composeParentThumb = this.element.querySelector('#compose-parent-thumb') as HTMLImageElement;
     this.composeChildThumb = this.element.querySelector('#compose-child-thumb') as HTMLImageElement;
@@ -1815,9 +1928,8 @@ export class TextureView {
     this.composePickButton.addEventListener('click', () => {
       this.composePicking = !this.composePicking;
       this.composePickButton.textContent = this.composePicking ? '拾取中…' : '拾取';
-      this.composePreview.classList.toggle('picking', this.composePicking);
+      this.canvas.classList.toggle('picking', this.composePicking);
     });
-    this.composePreview.addEventListener('click', (event) => this.pickComposeColor(event));
     this.composeOverlay.addEventListener('dragover', (event) => {
       if (!event.dataTransfer?.types || !Array.from(event.dataTransfer.types).includes('Files')) return;
       event.preventDefault();
@@ -1865,6 +1977,49 @@ export class TextureView {
       });
     });
 
+    this.element.querySelectorAll<HTMLElement>('[data-texture-tool]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const tool = button.dataset.textureTool as TextureTool | undefined;
+        if (tool) this.setTextureTool(tool);
+      });
+    });
+    this.toolSizeInput.addEventListener('input', () => {
+      this.toolSizeValue.textContent = this.toolSizeInput.value;
+    });
+    this.toolStrengthInput.addEventListener('input', () => {
+      this.toolStrengthValue.textContent = this.toolStrengthInput.value;
+    });
+    this.toolColorInput.addEventListener('input', () => {
+      this.canvas.style.setProperty('--brush-color', this.toolColorInput.value);
+    });
+    this.invertToggle.addEventListener('change', () => {
+      this.invertEnabled = this.invertToggle.checked;
+      this.updateAdjustmentUniforms();
+    });
+    this.grayscaleToggle.addEventListener('change', () => {
+      this.grayscaleEnabled = this.grayscaleToggle.checked;
+      this.updateAdjustmentUniforms();
+    });
+    this.brightnessInput.addEventListener('input', () => {
+      this.brightnessValue = Number(this.brightnessInput.value) || 0;
+      this.brightnessValueLabel.textContent = String(this.brightnessValue);
+      this.updateAdjustmentUniforms();
+    });
+    this.contrastInput.addEventListener('input', () => {
+      this.contrastValue = Number(this.contrastInput.value) || 0;
+      this.contrastValueLabel.textContent = String(this.contrastValue);
+      this.updateAdjustmentUniforms();
+    });
+    this.fillBackgroundToggle.addEventListener('change', () => {
+      this.fillBackgroundEnabled = this.fillBackgroundToggle.checked;
+      this.updateAdjustmentUniforms();
+    });
+    this.fillBackgroundColorInput.addEventListener('input', () => {
+      this.fillBackgroundColor = this.fillBackgroundColorInput.value;
+      this.updateAdjustmentUniforms();
+    });
+    this.setTextureTool('move');
+
     this.element.querySelector('[data-action="mono"]')?.addEventListener('click', () => this.setLevelsEnabled(!this.levelsEnabled));
     this.element.querySelector('[data-action="levels-reset"]')?.addEventListener('click', () => this.resetLevels());
     this.curveToggle.addEventListener('click', () => this.setCurvesEnabled(!this.curvesEnabled));
@@ -1895,12 +2050,23 @@ export class TextureView {
     }, { passive: false });
 
     this.canvas.addEventListener('pointerdown', (event) => {
-      if (!this.mesh || event.button !== 0) return;
-      this.dragging = true;
-      this.dragX = event.clientX;
-      this.dragY = event.clientY;
-      this.body.classList.add('dragging');
-      this.canvas.setPointerCapture(event.pointerId);
+      if (!this.mesh) return;
+      if (this.composePicking) {
+        event.preventDefault();
+        this.pickComposeColor(event);
+        return;
+      }
+      if (event.button === 1) {
+        event.preventDefault();
+        this.beginCanvasDrag(event);
+        return;
+      }
+      if (event.button !== 0) return;
+      if (this.textureTool === 'move') {
+        this.beginCanvasDrag(event);
+        return;
+      }
+      this.beginStroke(event);
     });
 
     this.canvas.addEventListener('pointermove', (event) => {
@@ -1915,12 +2081,15 @@ export class TextureView {
         this.panX -= (dx / Math.max(1, this.canvas.clientWidth)) * worldWidth;
         this.panY += (dy / Math.max(1, this.canvas.clientHeight)) * worldHeight;
         this.updateCamera();
+      } else if (this.strokeActive) {
+        this.continueStroke(event);
       } else {
         this.probe(event);
       }
     });
 
     const stopDrag = (event: PointerEvent) => {
+      if (this.strokeActive) this.endStroke(event);
       if (!this.dragging) return;
       this.dragging = false;
       this.body.classList.remove('dragging');
@@ -1933,7 +2102,7 @@ export class TextureView {
     this.canvas.addEventListener('pointerup', stopDrag);
     this.canvas.addEventListener('pointercancel', stopDrag);
     this.canvas.addEventListener('pointerleave', () => {
-      if (!this.dragging) this.callbacks.status.set(this.fileName, this.metaText());
+      if (!this.dragging && !this.strokeActive) this.callbacks.status.set(this.fileName, this.metaText());
     });
 
     window.addEventListener('paste', (event) => {
@@ -2056,6 +2225,7 @@ export class TextureView {
 
     this.disposeImage();
     this.bitmap = source;
+    this.element.classList.add('has-image');
     this.imageWidth = width;
     this.imageHeight = height;
     this.fileName = name;
@@ -2085,8 +2255,10 @@ export class TextureView {
     const textureCanvas = document.createElement('canvas');
     textureCanvas.width = width;
     textureCanvas.height = height;
-    const textureContext = textureCanvas.getContext('2d');
+    const textureContext = textureCanvas.getContext('2d', { willReadFrequently: true });
     if (textureContext) textureContext.drawImage(source as CanvasImageSource, 0, 0, width, height);
+    this.textureCanvas = textureCanvas;
+    this.textureContext = textureContext;
     this.texture = new THREE.Texture(textureCanvas as unknown as HTMLImageElement);
     // This is a raw image viewer, not a lit material. Keep the texture in its
     // original sRGB values so the custom shader outputs them unchanged;
@@ -2106,7 +2278,13 @@ export class TextureView {
         uCurves: { value: this.curvesEnabled ? 1 : 0 },
         uBlack: { value: this.levelBlack / 255 },
         uWhite: { value: this.levelWhite / 255 },
-        uGamma: { value: this.levelGamma }
+        uGamma: { value: this.levelGamma },
+        uInvert: { value: this.invertEnabled ? 1 : 0 },
+        uGrayscale: { value: this.grayscaleEnabled ? 1 : 0 },
+        uBrightness: { value: this.brightnessValue / 100 },
+        uContrast: { value: this.contrastValue / 100 },
+        uFillBackground: { value: this.fillBackgroundEnabled ? 1 : 0 },
+        uFillColor: { value: new THREE.Color(this.fillBackgroundColor) }
       },
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,
@@ -2698,15 +2876,9 @@ export class TextureView {
 
   private updateComposePreview(): void {
     if (this.composeOverlay.classList.contains('hidden')) return;
-    const canvas = this.composeImage(512);
-    if (!canvas) return;
-    this.composePreview.width = canvas.width;
-    this.composePreview.height = canvas.height;
-    this.composePreviewCtx.clearRect(0, 0, canvas.width, canvas.height);
-    this.composePreviewCtx.drawImage(canvas, 0, 0);
     const size = this.element.querySelector('#compose-size') as HTMLElement | null;
-    if (size) {
-      size.textContent = `${this.imageWidth} × ${this.imageHeight} · 输出 PNG${canvas.width !== this.imageWidth ? '（预览已缩放）' : ''}`;
+    if (size && this.imageWidth && this.imageHeight) {
+      size.textContent = `${this.imageWidth} × ${this.imageHeight} · 输出 PNG`;
     }
   }
 
@@ -2933,6 +3105,9 @@ export class TextureView {
     try {
       const canvas = this.composeImage(0);
       if (!canvas) return;
+      if (this.levelsEnabled) this.applyLevelsToCanvas(canvas);
+      if (this.curvesEnabled) this.applyCurvesToCanvas(canvas);
+      this.applyAdjustmentsToCanvas(canvas);
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('PNG 编码失败');
       const data = new Uint8Array(await blob.arrayBuffer());
@@ -2952,15 +3127,13 @@ export class TextureView {
       this.callbacks.toast('当前透明处理目标还没有图片', 'info');
       return;
     }
-    const rect = this.composePreview.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const sourceWidth = source.width;
-    const sourceHeight = source.height;
-    const x = Math.max(0, Math.min(sourceWidth - 1, Math.floor(((event.clientX - rect.left) / rect.width) * sourceWidth)));
-    const y = Math.max(0, Math.min(sourceHeight - 1, Math.floor(((event.clientY - rect.top) / rect.height) * sourceHeight)));
+    const point = this.imagePointFromEvent(event, source.width, source.height);
+    if (!point) return;
+    const x = Math.max(0, Math.min(source.width - 1, Math.floor(point.x)));
+    const y = Math.max(0, Math.min(source.height - 1, Math.floor(point.y)));
     const sample = document.createElement('canvas');
-    sample.width = sourceWidth;
-    sample.height = sourceHeight;
+    sample.width = source.width;
+    sample.height = source.height;
     const context = sample.getContext('2d', { willReadFrequently: true });
     if (!context) return;
     context.drawImage(source as CanvasImageSource, 0, 0);
@@ -2971,7 +3144,7 @@ export class TextureView {
     this.updateComposeRows();
     this.composePicking = false;
     this.composePickButton.textContent = '拾取';
-    this.composePreview.classList.remove('picking');
+    this.canvas.classList.remove('picking');
     this.scheduleComposePreview();
   }
 
@@ -3022,6 +3195,7 @@ export class TextureView {
       context.drawImage(this.bitmap as CanvasImageSource, 0, 0);
       if (this.levelsEnabled) this.applyLevelsToCanvas(canvas);
       if (this.curvesEnabled) this.applyCurvesToCanvas(canvas);
+      this.applyAdjustmentsToCanvas(canvas);
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('PNG 编码失败');
       const data = new Uint8Array(await blob.arrayBuffer());
@@ -5629,6 +5803,9 @@ export class TextureView {
       this.texture = null;
     }
     this.bitmap = null;
+    this.element.classList.remove('has-image');
+    this.textureCanvas = null;
+    this.textureContext = null;
   }
 
   private fit(): void {
@@ -5821,6 +5998,7 @@ export class TextureView {
       background: this.background,
       levelsEnabled: this.levelsEnabled,
       curvesEnabled: this.curvesEnabled,
+      imageRevision: this.imageRevision,
       curvePoints: this.curvePoints.map((point) => ({ ...point })),
       dispersionBlack: this.dispersionBlack,
       gradientStops: this.gradientStops.map((stop) => ({ ...stop })),
@@ -5861,6 +6039,8 @@ export class TextureView {
   private resetUndoHistory(): void {
     this.textureUndoStack = [];
     this.textureRedoStack = [];
+    this.pixelPatches.clear();
+    this.imageRevision = 0;
     this.undoGestureSnapshot = this.captureUndoSnapshot();
     this.undoGesturePushed = true;
   }
@@ -5869,6 +6049,29 @@ export class TextureView {
     if (this.restoringUndo) return;
     this.undoGestureSnapshot = this.captureUndoSnapshot();
     this.undoGesturePushed = true;
+  }
+
+  private restorePixelRevision(target: number): void {
+    const current = this.imageRevision;
+    if (target === current) return;
+    if (!this.textureContext) return;
+    const patch = target < current ? this.pixelPatches.get(current) : this.pixelPatches.get(target);
+    if (patch) {
+      const data = target < current ? patch.before : patch.after;
+      this.textureContext.putImageData(data, patch.x, patch.y);
+      if (this.texture) this.texture.needsUpdate = true;
+      if (this.textureCanvas) {
+        this.bitmap = this.textureCanvas;
+        imageStore.set({
+          bitmap: this.textureCanvas,
+          width: this.imageWidth,
+          height: this.imageHeight,
+          name: this.fileName,
+          path: this.filePath
+        });
+      }
+    }
+    this.imageRevision = target;
   }
 
   private restoreUndoSnapshot(snapshot: TextureUndoSnapshot): void {
@@ -5888,6 +6091,7 @@ export class TextureView {
         control.dispatchEvent(new Event('change', { bubbles: true }));
       });
 
+      this.restorePixelRevision(snapshot.imageRevision);
       this.setChannel(snapshot.channel);
       this.setBackground(snapshot.background);
       this.curvePoints = snapshot.curvePoints.map((point) => ({ ...point }));
@@ -6176,6 +6380,63 @@ export class TextureView {
     this.material.uniforms.uGamma.value = Math.max(0.01, this.levelGamma);
   }
 
+  private updateAdjustmentUniforms(): void {
+    if (!this.material) return;
+    this.material.uniforms.uInvert.value = this.invertEnabled ? 1 : 0;
+    this.material.uniforms.uGrayscale.value = this.grayscaleEnabled ? 1 : 0;
+    this.material.uniforms.uBrightness.value = this.brightnessValue / 100;
+    this.material.uniforms.uContrast.value = this.contrastValue / 100;
+    this.material.uniforms.uFillBackground.value = this.fillBackgroundEnabled ? 1 : 0;
+    (this.material.uniforms.uFillColor.value as THREE.Color).set(this.fillBackgroundColor);
+  }
+
+  private applyAdjustmentsToCanvas(canvas: HTMLCanvasElement): void {
+    if (!this.invertEnabled && !this.grayscaleEnabled && this.brightnessValue === 0 && this.contrastValue === 0 && !this.fillBackgroundEnabled) {
+      return;
+    }
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return;
+    const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    const data = image.data;
+    const brightness = this.brightnessValue / 100;
+    const contrast = this.contrastValue / 100;
+    const color = this.fillBackgroundColor.replace('#', '');
+    const fillR = Number.parseInt(color.slice(0, 2), 16) || 0;
+    const fillG = Number.parseInt(color.slice(2, 4), 16) || 0;
+    const fillB = Number.parseInt(color.slice(4, 6), 16) || 0;
+    for (let index = 0; index < data.length; index += 4) {
+      let r = data[index] / 255;
+      let g = data[index + 1] / 255;
+      let b = data[index + 2] / 255;
+      if (this.invertEnabled) {
+        r = 1 - r;
+        g = 1 - g;
+        b = 1 - b;
+      }
+      if (this.grayscaleEnabled) {
+        const gray = r * 0.2126 + g * 0.7152 + b * 0.0722;
+        r = gray;
+        g = gray;
+        b = gray;
+      }
+      r = Math.min(1, Math.max(0, (r - 0.5) * (1 + contrast) + 0.5 + brightness));
+      g = Math.min(1, Math.max(0, (g - 0.5) * (1 + contrast) + 0.5 + brightness));
+      b = Math.min(1, Math.max(0, (b - 0.5) * (1 + contrast) + 0.5 + brightness));
+      if (this.fillBackgroundEnabled) {
+        const alpha = data[index + 3] / 255;
+        data[index] = Math.round((r * alpha + (fillR / 255) * (1 - alpha)) * 255);
+        data[index + 1] = Math.round((g * alpha + (fillG / 255) * (1 - alpha)) * 255);
+        data[index + 2] = Math.round((b * alpha + (fillB / 255) * (1 - alpha)) * 255);
+        data[index + 3] = 255;
+      } else {
+        data[index] = Math.round(r * 255);
+        data[index + 1] = Math.round(g * 255);
+        data[index + 2] = Math.round(b * 255);
+      }
+    }
+    context.putImageData(image, 0, 0);
+  }
+
   private applyLevelsToCanvas(canvas: HTMLCanvasElement): void {
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) return;
@@ -6213,6 +6474,298 @@ export class TextureView {
     this.element.querySelectorAll('[data-bg]').forEach((button) => {
       button.classList.toggle('active', (button as HTMLElement).dataset.bg === value);
     });
+  }
+
+  private beginCanvasDrag(event: PointerEvent): void {
+    this.dragging = true;
+    this.dragX = event.clientX;
+    this.dragY = event.clientY;
+    this.body.classList.add('dragging');
+    this.canvas.setPointerCapture(event.pointerId);
+  }
+
+  private setTextureTool(tool: TextureTool): void {
+    this.textureTool = tool;
+    this.element.querySelectorAll<HTMLElement>('[data-texture-tool]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.textureTool === tool);
+    });
+    const names: Record<TextureTool, string> = {
+      move: '移动',
+      eraser: '橡皮擦',
+      brush: '画笔',
+      blur: '模糊',
+      smudge: '揉搓'
+    };
+    this.toolName.textContent = names[tool];
+    this.toolOptions.classList.toggle('hidden', tool === 'move');
+    this.toolColorRow.classList.toggle('hidden', tool !== 'brush');
+    this.canvas.style.cursor = tool === 'move' ? 'grab' : 'crosshair';
+    this.element.classList.toggle('texture-editing', tool !== 'move');
+  }
+
+  private imagePointFromEvent(
+    event: MouseEvent,
+    width = this.imageWidth,
+    height = this.imageHeight
+  ): { x: number; y: number } | null {
+    if (!this.mesh || !width || !height) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
+      return null;
+    }
+    const ndc = new THREE.Vector2(
+      ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      -((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = this.raycaster.intersectObject(this.mesh, false)[0];
+    if (!hit?.uv) return null;
+    let u = hit.uv.x;
+    let v = hit.uv.y;
+    if (this.flipH) u = 1 - u;
+    if (this.flipV) v = 1 - v;
+    return {
+      x: Math.min(width - 0.001, Math.max(0, u * width)),
+      y: Math.min(height - 0.001, Math.max(0, (1 - v) * height))
+    };
+  }
+
+  private ensureEditableTextureCanvas(): HTMLCanvasElement | null {
+    if (!this.textureCanvas || !this.textureContext) return null;
+    if (this.bitmap !== this.textureCanvas) {
+      this.textureContext.clearRect(0, 0, this.textureCanvas.width, this.textureCanvas.height);
+      if (this.bitmap) {
+        this.textureContext.drawImage(
+          this.bitmap as CanvasImageSource,
+          0,
+          0,
+          this.textureCanvas.width,
+          this.textureCanvas.height
+        );
+      }
+      this.bitmap = this.textureCanvas;
+      imageStore.set({
+        bitmap: this.textureCanvas,
+        width: this.imageWidth,
+        height: this.imageHeight,
+        name: this.fileName,
+        path: this.filePath
+      });
+    }
+    if (this.texture) this.texture.needsUpdate = true;
+    return this.textureCanvas;
+  }
+
+  private beginStroke(event: PointerEvent): void {
+    if (!this.bitmap || !this.textureCanvas || !this.textureContext) return;
+    const point = this.imagePointFromEvent(event);
+    if (!point) return;
+    event.preventDefault();
+    this.ensureEditableTextureCanvas();
+    this.beginUndoGesture();
+    this.strokeActive = true;
+    this.strokePointerId = event.pointerId;
+    this.strokeLastPoint = point;
+    this.strokeDirty = null;
+    const before = document.createElement('canvas');
+    before.width = this.textureCanvas.width;
+    before.height = this.textureCanvas.height;
+    before.getContext('2d')?.drawImage(this.textureCanvas, 0, 0);
+    this.strokeBeforeCanvas = before;
+    this.canvas.setPointerCapture(event.pointerId);
+    this.applyToolDab(point);
+  }
+
+  private continueStroke(event: PointerEvent): void {
+    if (!this.strokeActive || event.pointerId !== this.strokePointerId) return;
+    const point = this.imagePointFromEvent(event);
+    if (!point) return;
+    const previous = this.strokeLastPoint;
+    if (previous) {
+      const distance = Math.hypot(point.x - previous.x, point.y - previous.y);
+      const radius = Math.max(1, Number(this.toolSizeInput.value) || 40) / 2;
+      const step = Math.max(1, radius * 0.25);
+      const count = Math.max(1, Math.ceil(distance / step));
+      let lastSample = previous;
+      for (let index = 1; index <= count; index += 1) {
+        const t = index / count;
+        const sample = {
+          x: previous.x + (point.x - previous.x) * t,
+          y: previous.y + (point.y - previous.y) * t
+        };
+        this.applyToolDab(sample, lastSample);
+        lastSample = sample;
+      }
+    } else {
+      this.applyToolDab(point);
+    }
+    this.strokeLastPoint = point;
+  }
+
+  private endStroke(event: PointerEvent): void {
+    if (!this.strokeActive) return;
+    this.strokeActive = false;
+    try {
+      if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
+    } catch {
+      // ignore
+    }
+    const canvas = this.textureCanvas;
+    const context = this.textureContext;
+    const beforeCanvas = this.strokeBeforeCanvas;
+    const dirty = this.strokeDirty;
+    this.strokeBeforeCanvas = null;
+    this.strokeDirty = null;
+    this.strokeLastPoint = null;
+    this.strokePointerId = -1;
+    if (!canvas || !context || !beforeCanvas || !dirty) return;
+    const x = Math.max(0, Math.floor(dirty.minX));
+    const y = Math.max(0, Math.floor(dirty.minY));
+    const maxX = Math.min(canvas.width, Math.ceil(dirty.maxX));
+    const maxY = Math.min(canvas.height, Math.ceil(dirty.maxY));
+    const width = maxX - x;
+    const height = maxY - y;
+    if (width <= 0 || height <= 0) return;
+    const beforeContext = beforeCanvas.getContext('2d', { willReadFrequently: true });
+    if (!beforeContext) return;
+    const before = beforeContext.getImageData(x, y, width, height);
+    const after = context.getImageData(x, y, width, height);
+    this.imageRevision += 1;
+    this.pixelPatches.set(this.imageRevision, { x, y, width, height, before, after });
+    const limit = Math.max(20, getUndoHistoryLimit() * 3);
+    while (this.pixelPatches.size > limit) {
+      const oldest = this.pixelPatches.keys().next().value;
+      if (oldest === undefined) break;
+      this.pixelPatches.delete(oldest);
+    }
+    if (this.texture) this.texture.needsUpdate = true;
+    imageStore.set({
+      bitmap: canvas,
+      width: this.imageWidth,
+      height: this.imageHeight,
+      name: this.fileName,
+      path: this.filePath
+    });
+    window.setTimeout(() => this.commitUndoGesture(), 0);
+  }
+
+  private applyToolDab(current: { x: number; y: number }, previous?: { x: number; y: number }): void {
+    const canvas = this.textureCanvas;
+    const context = this.textureContext;
+    if (!canvas || !context) return;
+    const size = Math.max(1, Number(this.toolSizeInput.value) || 40);
+    const strength = Math.max(0.01, Math.min(1, (Number(this.toolStrengthInput.value) || 60) / 100));
+    const radius = size / 2;
+    const paintX = current.x;
+    const paintY = current.y;
+    switch (this.textureTool) {
+      case 'brush': {
+        const stamp = this.createSoftStamp(size, this.toolColorInput.value, 0.65);
+        context.save();
+        context.globalCompositeOperation = 'source-over';
+        context.globalAlpha = strength;
+        context.drawImage(stamp, paintX - radius, paintY - radius);
+        context.restore();
+        break;
+      }
+      case 'eraser': {
+        const stamp = this.createSoftStamp(size, '#000000', 0.5);
+        context.save();
+        context.globalCompositeOperation = 'destination-out';
+        context.globalAlpha = strength;
+        context.drawImage(stamp, paintX - radius, paintY - radius);
+        context.restore();
+        break;
+      }
+      case 'blur': {
+        const block = Math.max(2, Math.round(size));
+        const sx = Math.max(0, Math.min(canvas.width - 1, Math.round(paintX - block / 2)));
+        const sy = Math.max(0, Math.min(canvas.height - 1, Math.round(paintY - block / 2)));
+        const sw = Math.max(1, Math.min(block, canvas.width - sx));
+        const sh = Math.max(1, Math.min(block, canvas.height - sy));
+        const temp = document.createElement('canvas');
+        temp.width = sw;
+        temp.height = sh;
+        const tempCtx = temp.getContext('2d');
+        if (!tempCtx) return;
+        tempCtx.filter = `blur(${Math.max(0.6, size * 0.08)}px)`;
+        tempCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        tempCtx.filter = 'none';
+        const stamp = this.createSoftStamp(Math.max(sw, sh), '#000000', 0.45);
+        tempCtx.globalCompositeOperation = 'destination-in';
+        tempCtx.drawImage(stamp, (sw - stamp.width) / 2, (sh - stamp.height) / 2);
+        context.save();
+        context.globalAlpha = strength;
+        context.drawImage(temp, sx, sy);
+        context.restore();
+        this.markDirty(sx, sy, sx + sw, sy + sh);
+        break;
+      }
+      case 'smudge': {
+        if (!previous) return;
+        const block = Math.max(2, Math.round(size));
+        const sx = Math.max(0, Math.min(canvas.width - 1, Math.round(previous.x - block / 2)));
+        const sy = Math.max(0, Math.min(canvas.height - 1, Math.round(previous.y - block / 2)));
+        const sw = Math.max(1, Math.min(block, canvas.width - sx));
+        const sh = Math.max(1, Math.min(block, canvas.height - sy));
+        const temp = document.createElement('canvas');
+        temp.width = sw;
+        temp.height = sh;
+        const tempCtx = temp.getContext('2d');
+        if (!tempCtx) return;
+        tempCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        const stamp = this.createSoftStamp(Math.max(sw, sh), '#000000', 0.35);
+        tempCtx.globalCompositeOperation = 'destination-in';
+        tempCtx.drawImage(stamp, (sw - stamp.width) / 2, (sh - stamp.height) / 2);
+        const dx = current.x - previous.x;
+        const dy = current.y - previous.y;
+        const targetX = sx + dx;
+        const targetY = sy + dy;
+        context.save();
+        context.globalAlpha = strength * 0.75;
+        context.drawImage(temp, targetX, targetY);
+        context.restore();
+        this.markDirty(sx, sy, sx + sw, sy + sh);
+        this.markDirty(targetX, targetY, targetX + sw, targetY + sh);
+        break;
+      }
+      default:
+        return;
+    }
+    this.markDirty(paintX - radius, paintY - radius, paintX + radius, paintY + radius);
+    if (this.texture) this.texture.needsUpdate = true;
+  }
+
+  private createSoftStamp(size: number, color: string, hardness: number): HTMLCanvasElement {
+    const dimension = Math.max(2, Math.ceil(size) + 2);
+    const canvas = document.createElement('canvas');
+    canvas.width = dimension;
+    canvas.height = dimension;
+    const context = canvas.getContext('2d');
+    if (!context) return canvas;
+    const center = dimension / 2;
+    const radius = Math.max(0.5, size / 2);
+    const gradient = context.createRadialGradient(center, center, 0, center, center, radius);
+    const solidStop = Math.max(0, Math.min(0.95, hardness));
+    gradient.addColorStop(0, color);
+    gradient.addColorStop(solidStop, color);
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(center, center, radius, 0, Math.PI * 2);
+    context.fill();
+    return canvas;
+  }
+
+  private markDirty(minX: number, minY: number, maxX: number, maxY: number): void {
+    if (!this.strokeDirty) {
+      this.strokeDirty = { minX, minY, maxX, maxY };
+    } else {
+      this.strokeDirty.minX = Math.min(this.strokeDirty.minX, minX);
+      this.strokeDirty.minY = Math.min(this.strokeDirty.minY, minY);
+      this.strokeDirty.maxX = Math.max(this.strokeDirty.maxX, maxX);
+      this.strokeDirty.maxY = Math.max(this.strokeDirty.maxY, maxY);
+    }
   }
 
   private probe(event: PointerEvent): void {
