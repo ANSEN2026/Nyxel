@@ -636,6 +636,10 @@ function texturesDir(): string {
   return path.join(libraryRoot(), 'Textures');
 }
 
+function modelsDir(): string {
+  return path.join(libraryRoot(), 'Models');
+}
+
 function videosDir(): string {
   return path.join(libraryRoot(), 'Videos');
 }
@@ -652,6 +656,7 @@ async function ensureLibraryDirs(): Promise<void> {
   await Promise.all([
     fs.promises.mkdir(galleryDir(), { recursive: true }),
     fs.promises.mkdir(texturesDir(), { recursive: true }),
+    fs.promises.mkdir(modelsDir(), { recursive: true }),
     fs.promises.mkdir(videosDir(), { recursive: true }),
     fs.promises.mkdir(libraryMetaDir(), { recursive: true })
   ]);
@@ -700,6 +705,38 @@ async function seedOfficialTextures(): Promise<void> {
     notifyLibraryChanged();
   } catch (error) {
     console.warn('official textures seed failed', error);
+  }
+}
+
+const OFFICIAL_MODEL_PACK_VERSION = 1;
+
+function officialModelPackSource(): string {
+  const packaged = path.join(process.resourcesPath, 'official-models', '官方模型');
+  if (fs.existsSync(packaged)) return packaged;
+  return path.join(app.getAppPath(), 'resources', 'official-models', '官方模型');
+}
+
+async function seedOfficialModels(): Promise<void> {
+  const source = officialModelPackSource();
+  if (!fs.existsSync(source)) return;
+  const marker = path.join(app.getPath('userData'), 'official-models.json');
+  try {
+    const previous = JSON.parse(await fs.promises.readFile(marker, 'utf8')) as { version?: number };
+    if (Number(previous.version) >= OFFICIAL_MODEL_PACK_VERSION) return;
+  } catch {
+    // First run or unreadable marker: seed the built-in models.
+  }
+  try {
+    await ensureLibraryDirs();
+    await copyDirectoryMissing(source, path.join(modelsDir(), '官方模型'));
+    await fs.promises.writeFile(
+      marker,
+      JSON.stringify({ version: OFFICIAL_MODEL_PACK_VERSION, seededAt: new Date().toISOString() }, null, 2),
+      'utf8'
+    );
+    notifyLibraryChanged();
+  } catch (error) {
+    console.warn('official models seed failed', error);
   }
 }
 
@@ -4018,6 +4055,20 @@ function registerIpc(): void {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  ipcMain.handle('models:official', async () => {
+    await seedOfficialModels();
+    const dir = path.join(modelsDir(), '官方模型');
+    try {
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.fbx'))
+        .map((entry) => ({ name: entry.name.replace(/\.fbx$/i, ''), path: path.join(dir, entry.name) }))
+        .sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'));
+    } catch {
+      return [];
+    }
+  });
+
   ipcMain.handle('download:defaultDir', async () => {
     const dir = path.join(app.getPath('downloads'), 'Texture map');
     await fs.promises.mkdir(dir, { recursive: true });
@@ -4080,6 +4131,22 @@ function registerIpc(): void {
     if (!target) return null;
     await fs.promises.writeFile(target, Buffer.from(data));
     return target;
+  });
+
+  ipcMain.handle('file:saveText', async (_event, text: string, suggestedName: string) => {
+    if (!mainWindow) return null;
+    const settings = loadSettings();
+    await fs.promises.mkdir(settings.exportDir, { recursive: true });
+    const requested = path.basename(String(suggestedName || 'texturemap.txt'));
+    const extension = path.extname(requested).replace('.', '') || 'txt';
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: path.join(settings.exportDir, requested),
+      filters: [{ name: `${extension.toUpperCase()} File`, extensions: [extension] }],
+      properties: ['createDirectory', 'showOverwriteConfirmation']
+    });
+    if (result.canceled || !result.filePath) return null;
+    await fs.promises.writeFile(result.filePath, String(text), 'utf8');
+    return result.filePath;
   });
 
   ipcMain.handle('file:savePng', async (_event, data: Uint8Array, suggestedName: string) => {
@@ -4368,6 +4435,7 @@ function registerIpc(): void {
       root: libraryRoot(),
       galleryDir: galleryDir(),
       texturesDir: texturesDir(),
+      modelsDir: modelsDir(),
       videosDir: videosDir()
     };
   });
@@ -4496,6 +4564,7 @@ if (!gotLock) {
     registerIpc();
     createWindow();
     void seedOfficialTextures();
+    void seedOfficialModels();
     const settings = loadSettings();
     if (!registerScreenshotShortcut(settings.screenshotHotkey)) {
       mainWindow?.webContents.send('screenshot:done', {

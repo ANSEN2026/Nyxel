@@ -1808,6 +1808,30 @@ label {
   justify-content: flex-start;
 }
 
+.ai-seq-rotate-row {
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+}
+
+.ai-seq-rotate-row select {
+  grid-column: 2;
+}
+
+.ai-seq-rotate-row button {
+  grid-column: 3;
+  white-space: nowrap;
+}
+
+.ai-seq-region-row span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.ai-seq-region-row button.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
 #ai-seq-count {
   margin-left: auto;
   color: #a9d1ff;
@@ -3033,6 +3057,84 @@ label {
   min-height: 0;
   overflow: auto;
   padding: 12px 14px 18px;
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 116px;
+  overflow: auto;
+  margin-bottom: 6px;
+}
+
+.model-list-item {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 10px;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.model-list-item.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
+.model-list-empty {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.model-transform-row {
+  display: grid;
+  grid-template-columns: 34px repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.model-transform-row input {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.model-transform-actions,
+.model-scene-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.model-transform-actions label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.model-transform-actions button,
+.model-scene-actions button {
+  padding: 3px 6px;
+  font-size: 10px;
 }
 
 .material-panel-body .material-control-row {

@@ -270,6 +270,7 @@ export class TextureView {
   private tileOffsetY: HTMLInputElement;
   private tileOffsetYValue: HTMLInputElement;
   private tileMode: HTMLSelectElement;
+  private tileRotation: HTMLSelectElement;
   private tileEdgeBlend: HTMLInputElement;
   private tileSharp: HTMLInputElement;
   private tileBlend: HTMLInputElement;
@@ -375,13 +376,32 @@ export class TextureView {
   private aiSeqFps: HTMLInputElement;
   private aiSeqFpsValue: HTMLElement;
   private aiSeqLoop: HTMLInputElement;
+  private aiSeqRotation: HTMLSelectElement;
+  private aiSeqFrameRotation: HTMLSelectElement;
+  private aiSeqRegionStatus: HTMLElement;
+  private aiSeqFrameRotations = new Map<number, number>();
+  private aiSeqRegion = { x: 0, y: 0, width: 1, height: 1 };
+  private aiSeqRegionSelecting = false;
+  private aiSeqRegionStart = { x: 0, y: 0 };
+  private aiSeqRegionDraft: { x: number; y: number; width: number; height: number } | null = null;
   private aiSeqSelected = new Set<number>();
   private aiSeqLastCell = -1;
   private aiSeqPlaying = false;
   private aiSeqRaf = 0;
   private aiSeqFrameIndex = 0;
   private aiSeqLastTime = 0;
-  private aiSeqLayout = { x: 0, y: 0, width: 1, height: 1, cellWidth: 1, cellHeight: 1 };
+  private aiSeqLayout = {
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    cellWidth: 1,
+    cellHeight: 1,
+    regionX: 0,
+    regionY: 0,
+    regionWidth: 1,
+    regionHeight: 1
+  };
 
   private compareOverlay: HTMLElement;
   private compareImage: HTMLElement;
@@ -535,6 +555,15 @@ export class TextureView {
                 <label>水平重复 <input id="tile-repeat-x" type="number" min="1" max="8" value="1"></label>
                 <label>垂直重复 <input id="tile-repeat-y" type="number" min="1" max="8" value="1"></label>
               </div>
+              <div class="tile-mode-row">
+                <span>旋转</span>
+                <select id="tile-rotation">
+                  <option value="0" selected>0°</option>
+                  <option value="90">90°</option>
+                  <option value="180">180°</option>
+                  <option value="270">270°</option>
+                </select>
+              </div>
               <div class="tile-slider-row">
                 <span>水平位移</span>
                 <input id="tile-offset-x" type="range" min="0" max="2048" step="1" value="0">
@@ -639,12 +668,36 @@ export class TextureView {
                   <label>行 <input id="ai-seq-rows" type="number" min="1" max="32" value="7"></label>
                 </div>
               </div>
+              <div class="ai-row">
+                <span>整体旋转</span>
+                <select id="ai-seq-rotation">
+                  <option value="0" selected>0°</option>
+                  <option value="90">90°</option>
+                  <option value="180">180°</option>
+                  <option value="270">270°</option>
+                </select>
+              </div>
+              <div class="ai-row ai-seq-rotate-row">
+                <span>单帧旋转</span>
+                <select id="ai-seq-frame-rotation">
+                  <option value="0" selected>0°</option>
+                  <option value="90">90°</option>
+                  <option value="180">180°</option>
+                  <option value="270">270°</option>
+                </select>
+                <button type="button" data-ai-seq-rotate>应用</button>
+              </div>
               <div class="ai-seq-grid-wrap"><canvas id="ai-seq-grid" width="360" height="260"></canvas></div>
               <div class="ai-button-row ai-seq-select-row">
                 <button type="button" data-ai-seq-all>全选</button>
                 <button type="button" data-ai-seq-row>选中行</button>
                 <button type="button" data-ai-seq-clear>清空</button>
                 <span id="ai-seq-count">0 / 0</span>
+              </div>
+              <div class="ai-button-row ai-seq-region-row">
+                <button type="button" data-ai-seq-region>框选分区</button>
+                <button type="button" data-ai-seq-region-reset>整图</button>
+                <span id="ai-seq-region-status">整图</span>
               </div>
               <div class="ai-seq-player">
                 <canvas id="ai-seq-preview" width="160" height="120"></canvas>
@@ -1058,6 +1111,7 @@ export class TextureView {
     this.tileOffsetY = this.element.querySelector('#tile-offset-y') as HTMLInputElement;
     this.tileOffsetYValue = this.element.querySelector('#tile-offset-y-value') as HTMLInputElement;
     this.tileMode = this.element.querySelector('#tile-mode') as HTMLSelectElement;
+    this.tileRotation = this.element.querySelector('#tile-rotation') as HTMLSelectElement;
     this.tileEdgeBlend = this.element.querySelector('#tile-edge-blend') as HTMLInputElement;
     this.tileSharp = this.element.querySelector('#tile-sharp') as HTMLInputElement;
     this.tileBlend = this.element.querySelector('#tile-blend') as HTMLInputElement;
@@ -1131,6 +1185,9 @@ export class TextureView {
     this.aiSeqFps = this.element.querySelector('#ai-seq-fps') as HTMLInputElement;
     this.aiSeqFpsValue = this.element.querySelector('#ai-seq-fps-value') as HTMLElement;
     this.aiSeqLoop = this.element.querySelector('#ai-seq-loop') as HTMLInputElement;
+    this.aiSeqRotation = this.element.querySelector('#ai-seq-rotation') as HTMLSelectElement;
+    this.aiSeqFrameRotation = this.element.querySelector('#ai-seq-frame-rotation') as HTMLSelectElement;
+    this.aiSeqRegionStatus = this.element.querySelector('#ai-seq-region-status') as HTMLElement;
     this.composePreview = this.element.querySelector('#compose-preview') as HTMLCanvasElement;
     this.composePreviewCtx = this.composePreview.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
     this.composeSourceName = this.element.querySelector('#compose-source-name') as HTMLElement;
@@ -1339,6 +1396,7 @@ export class TextureView {
     this.tileRepeatX.addEventListener('change', scheduleTilePreview);
     this.tileRepeatY.addEventListener('change', scheduleTilePreview);
     this.tileMode.addEventListener('change', scheduleTilePreview);
+    this.tileRotation.addEventListener('change', scheduleTilePreview);
     this.tileEdgeBlend.addEventListener('change', () => {
       this.tileBlend.disabled = !this.tileEdgeBlend.checked;
       scheduleTilePreview();
@@ -1667,6 +1725,12 @@ export class TextureView {
       }
     });
     this.aiSeqSource.addEventListener('change', () => {
+      this.aiSeqRegion = { x: 0, y: 0, width: 1, height: 1 };
+      this.aiSeqRegionSelecting = false;
+      this.aiSeqRegionDraft = null;
+      this.aiSeqRegionStatus.textContent = '整图';
+      this.aiSeqFrameRotations.clear();
+      this.aiSeqRotation.value = '0';
       this.resetAiSequenceSelection();
       this.renderAiSequenceGrid();
     });
@@ -1678,7 +1742,29 @@ export class TextureView {
     };
     this.aiSeqCols.addEventListener('change', resetSequenceGrid);
     this.aiSeqRows.addEventListener('change', resetSequenceGrid);
-    this.aiSeqGrid.addEventListener('pointerdown', (event) => this.selectAiSequenceCell(event));
+    this.aiSeqGrid.addEventListener('pointerdown', (event) => this.aiSeqGridPointerDown(event));
+    window.addEventListener('pointermove', (event) => this.aiSeqGridPointerMove(event));
+    window.addEventListener('pointerup', () => this.aiSeqGridPointerUp());
+    this.aiSeqRotation.addEventListener('change', () => this.renderAiSequenceGrid());
+    this.aiSeqFrameRotation.addEventListener('change', () => {
+      this.aiSeqRegionStatus.textContent = `单帧旋转 ${this.aiSeqFrameRotation.value}°`;
+    });
+    this.element.querySelector('[data-ai-seq-rotate]')?.addEventListener('click', () => this.applyAiSequenceRotation());
+    this.element.querySelector('[data-ai-seq-region]')?.addEventListener('click', () => {
+      this.aiSeqRegionSelecting = !this.aiSeqRegionSelecting;
+      this.aiSeqRegionDraft = null;
+      this.aiSeqRegionStatus.textContent = this.aiSeqRegionSelecting ? '在预览上拖动框选序列区域' : '整图';
+      this.element.querySelector('[data-ai-seq-region]')?.classList.toggle('active', this.aiSeqRegionSelecting);
+      this.renderAiSequenceGrid();
+    });
+    this.element.querySelector('[data-ai-seq-region-reset]')?.addEventListener('click', () => {
+      this.aiSeqRegion = { x: 0, y: 0, width: 1, height: 1 };
+      this.aiSeqRegionSelecting = false;
+      this.aiSeqRegionDraft = null;
+      this.element.querySelector('[data-ai-seq-region]')?.classList.remove('active');
+      this.aiSeqRegionStatus.textContent = '整图';
+      this.renderAiSequenceGrid();
+    });
     this.element.querySelector('[data-ai-seq-all]')?.addEventListener('click', () => {
       this.selectAllAiSequenceFrames();
       this.renderAiSequenceGrid();
@@ -3259,7 +3345,19 @@ export class TextureView {
       const percent = Math.max(0, Math.min(50, Number(this.tileBlend.value) || 0));
       this.applyTileEdgeBlend(output, percent, this.tileMode.value as 'both' | 'horizontal' | 'vertical', this.tileSharp.checked);
     }
-    return output;
+
+    const rotation = ((Math.round(Number(this.tileRotation.value) / 90) * 90) % 360 + 360) % 360;
+    if (rotation === 0) return output;
+    const rotated = document.createElement('canvas');
+    const swap = rotation === 90 || rotation === 270;
+    rotated.width = swap ? output.height : output.width;
+    rotated.height = swap ? output.width : output.height;
+    const rotatedContext = rotated.getContext('2d');
+    if (!rotatedContext) return output;
+    rotatedContext.translate(rotated.width / 2, rotated.height / 2);
+    rotatedContext.rotate(THREE.MathUtils.degToRad(rotation));
+    rotatedContext.drawImage(output, -output.width / 2, -output.height / 2);
+    return rotated;
   }
 
   private applyTileEdgeBlend(
@@ -3395,6 +3493,7 @@ export class TextureView {
     this.tileOffsetY.value = '0';
     this.tileOffsetYValue.value = '0';
     this.tileMode.value = 'both';
+    this.tileRotation.value = '0';
     this.tileEdgeBlend.checked = false;
     this.tileSharp.checked = false;
     this.tileBlend.value = '20';
@@ -4683,16 +4782,243 @@ export class TextureView {
     this.aiSeqFrameIndex = 0;
   }
 
+  private aiSeqCanvasPoint(event: PointerEvent | MouseEvent): { x: number; y: number } | null {
+    const rect = this.aiSeqGrid.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const x = ((event.clientX - rect.left) / rect.width) * this.aiSeqGrid.width;
+    const y = ((event.clientY - rect.top) / rect.height) * this.aiSeqGrid.height;
+    if (x < 0 || y < 0 || x > this.aiSeqGrid.width || y > this.aiSeqGrid.height) return null;
+    return { x, y };
+  }
+
+  private aiSeqGridPointerDown(event: PointerEvent): void {
+    if (this.aiSeqRegionSelecting) {
+      const point = this.aiSeqCanvasPoint(event);
+      if (!point) return;
+      event.preventDefault();
+      this.aiSeqRegionStart = point;
+      this.aiSeqRegionDraft = { x: point.x, y: point.y, width: 0, height: 0 };
+      this.renderAiSequenceGrid();
+      return;
+    }
+    this.selectAiSequenceCell(event);
+  }
+
+  private aiSeqGridPointerMove(event: PointerEvent): void {
+    if (!this.aiSeqRegionSelecting || !this.aiSeqRegionDraft) return;
+    const point = this.aiSeqCanvasPoint(event);
+    if (!point) return;
+    const start = this.aiSeqRegionStart;
+    this.aiSeqRegionDraft = {
+      x: Math.min(start.x, point.x),
+      y: Math.min(start.y, point.y),
+      width: Math.abs(point.x - start.x),
+      height: Math.abs(point.y - start.y)
+    };
+    this.renderAiSequenceGrid();
+  }
+
+  private aiSeqGridPointerUp(): void {
+    if (!this.aiSeqRegionSelecting || !this.aiSeqRegionDraft) return;
+    const draft = this.aiSeqRegionDraft;
+    this.aiSeqRegionDraft = null;
+    if (draft.width < 6 || draft.height < 6) {
+      this.renderAiSequenceGrid();
+      return;
+    }
+    const layout = this.aiSeqLayout;
+    const x = Math.max(0, Math.min(1, (draft.x - layout.x) / Math.max(1, layout.width)));
+    const y = Math.max(0, Math.min(1, (draft.y - layout.y) / Math.max(1, layout.height)));
+    const width = Math.max(0.01, Math.min(1 - x, draft.width / Math.max(1, layout.width)));
+    const height = Math.max(0.01, Math.min(1 - y, draft.height / Math.max(1, layout.height)));
+    this.aiSeqRegion = { x, y, width, height };
+    this.aiSeqRegionSelecting = false;
+    this.element.querySelector('[data-ai-seq-region]')?.classList.remove('active');
+    const detected = this.detectAiSequenceGrid(this.aiSeqRegion);
+    this.aiSeqCols.value = String(detected.cols);
+    this.aiSeqRows.value = String(detected.rows);
+    this.resetAiSequenceSelection();
+    this.aiSeqRegionStatus.textContent = `已框选 · 识别 ${detected.cols} × ${detected.rows}`;
+    this.renderAiSequenceGrid();
+  }
+
+  private detectAiSequenceGrid(region: { x: number; y: number; width: number; height: number }): { cols: number; rows: number } {
+    const source = this.aiSequenceSource();
+    const fallback = {
+      cols: this.clampSequenceGrid(this.aiSeqCols.value),
+      rows: this.clampSequenceGrid(this.aiSeqRows.value)
+    };
+    if (!source) return fallback;
+    const sx = Math.max(0, Math.round(region.x * source.width));
+    const sy = Math.max(0, Math.round(region.y * source.height));
+    const sw = Math.max(1, Math.round(region.width * source.width));
+    const sh = Math.max(1, Math.round(region.height * source.height));
+    const scale = Math.min(1, 384 / Math.max(sw, sh));
+    const width = Math.max(4, Math.round(sw * scale));
+    const height = Math.max(4, Math.round(sh * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return fallback;
+    context.drawImage(source.bitmap as CanvasImageSource, sx, sy, sw, sh, 0, 0, width, height);
+    const data = context.getImageData(0, 0, width, height).data;
+    const columnProfile = new Float64Array(width);
+    const rowProfile = new Float64Array(height);
+    const edgeThreshold = 48;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = (y * width + x) * 4;
+        const left = x > 0 ? index - 4 : index;
+        const up = y > 0 ? index - width * 4 : index;
+        const horizontalEdge =
+          Math.abs(data[index] - data[left]) +
+          Math.abs(data[index + 1] - data[left + 1]) +
+          Math.abs(data[index + 2] - data[left + 2]) +
+          Math.abs(data[index + 3] - data[left + 3]);
+        const verticalEdge =
+          Math.abs(data[index] - data[up]) +
+          Math.abs(data[index + 1] - data[up + 1]) +
+          Math.abs(data[index + 2] - data[up + 2]) +
+          Math.abs(data[index + 3] - data[up + 3]);
+        if (horizontalEdge > edgeThreshold) columnProfile[x] += 1;
+        if (verticalEdge > edgeThreshold) rowProfile[y] += 1;
+      }
+    }
+    const smoothProfile = (profile: Float64Array, length: number): Float64Array => {
+      const window = Math.max(1, Math.floor(length / 256));
+      const smoothed = new Float64Array(profile.length);
+      for (let index = 0; index < profile.length; index += 1) {
+        let sum = 0;
+        let count = 0;
+        for (let offset = -window; offset <= window; offset += 1) {
+          const cursor = index + offset;
+          if (cursor < 0 || cursor >= profile.length) continue;
+          sum += profile[cursor];
+          count += 1;
+        }
+        smoothed[index] = sum / Math.max(1, count);
+      }
+      return smoothed;
+    };
+    /**
+     * 序列图的分隔缝通常贯穿整格高度/宽度，而画面内容产生的边缘只覆盖局部。
+     * 以边缘覆盖率找“贯穿线”，再用间距是否均匀筛掉内容噪声，比单纯数峰值稳。
+     */
+    const seamCount = (profile: Float64Array, length: number, crossLength: number): number => {
+      if (length < 8 || crossLength < 8) return 1;
+      // 分隔缝在缩放后常只剩 1~2 列尖峰，先平滑会把它抹掉，这里直接用原始覆盖率。
+      const smoothed = profile;
+      let sum = 0;
+      let maxValue = 0;
+      for (const value of smoothed) {
+        sum += value;
+        maxValue = Math.max(maxValue, value);
+      }
+      const mean = sum / Math.max(1, smoothed.length);
+      let variance = 0;
+      for (const value of smoothed) variance += (value - mean) * (value - mean);
+      variance /= Math.max(1, smoothed.length);
+      const deviation = Math.sqrt(variance);
+      if (maxValue < crossLength * 0.2) return 1;
+      const threshold = Math.max(crossLength * 0.35, mean + deviation * 1.25);
+      const margin = Math.max(2, Math.floor(length * 0.02));
+      const maxBandWidth = Math.max(4, Math.floor(length * 0.05));
+      const rawPeaks: number[] = [];
+      let cursor = margin;
+      while (cursor < length - margin) {
+        if (smoothed[cursor] < threshold) {
+          cursor += 1;
+          continue;
+        }
+        let end = cursor;
+        let peakIndex = cursor;
+        let peakValue = smoothed[cursor];
+        while (end + 1 < length - margin && smoothed[end + 1] >= threshold * 0.6) {
+          end += 1;
+          if (smoothed[end] > peakValue) {
+            peakValue = smoothed[end];
+            peakIndex = end;
+          }
+        }
+        if (end - cursor + 1 <= maxBandWidth) rawPeaks.push(peakIndex);
+        cursor = end + 1;
+      }
+      if (!rawPeaks.length) return 1;
+      // 一条缝的左右两侧会各形成一列尖峰，需要按间距合并成一条。
+      const mergeGap = Math.max(6, Math.min(10, Math.floor(length / 48)));
+      const peaks: number[] = [];
+      for (const peak of rawPeaks) {
+        const previous = peaks[peaks.length - 1];
+        if (previous !== undefined && peak - previous <= mergeGap) {
+          peaks[peaks.length - 1] = Math.round((previous + peak) / 2);
+          continue;
+        }
+        peaks.push(peak);
+      }
+      if (!peaks.length || peaks.length >= 32) return 1;
+      // 真实帧分隔的间距基本一致；内容边缘往往疏密不均。
+      if (peaks.length >= 2) {
+        const gaps: number[] = [];
+        for (let index = 1; index < peaks.length; index += 1) gaps.push(peaks[index] - peaks[index - 1]);
+        const gapMean = gaps.reduce((total, gap) => total + gap, 0) / gaps.length;
+        const gapDeviation = Math.sqrt(
+          gaps.reduce((total, gap) => total + (gap - gapMean) * (gap - gapMean), 0) / gaps.length
+        );
+        if (gapMean < 3 || gapDeviation > gapMean * 0.35) return 1;
+      }
+      return Math.max(1, Math.min(32, peaks.length + 1));
+    };
+    const periodicCount = (profile: Float64Array, length: number): number => {
+      const smoothed = smoothProfile(profile, length);
+      let mean = 0;
+      for (const value of smoothed) mean += value;
+      mean /= Math.max(1, smoothed.length);
+      let variance = 0;
+      for (const value of smoothed) variance += (value - mean) * (value - mean);
+      variance /= Math.max(1, smoothed.length);
+      if (Math.sqrt(variance) < 1e-6) return 1;
+      const centered = new Float64Array(smoothed.length);
+      for (let index = 0; index < smoothed.length; index += 1) centered[index] = smoothed[index] - mean;
+      let bestLag = 0;
+      let bestScore = 0;
+      const minLag = Math.max(2, Math.floor(length / 32));
+      const maxLag = Math.max(minLag + 1, Math.floor(length / 2));
+      for (let lag = minLag; lag <= maxLag; lag += 1) {
+        let cross = 0;
+        let leftEnergy = 0;
+        let rightEnergy = 0;
+        for (let index = 0; index + lag < centered.length; index += 1) {
+          cross += centered[index] * centered[index + lag];
+          leftEnergy += centered[index] * centered[index];
+          rightEnergy += centered[index + lag] * centered[index + lag];
+        }
+        const score = cross / Math.sqrt(Math.max(1e-9, leftEnergy * rightEnergy));
+        if (score > bestScore) {
+          bestScore = score;
+          bestLag = lag;
+        }
+      }
+      if (!bestLag || bestScore < 0.18) return 1;
+      return Math.max(1, Math.min(32, Math.round(length / bestLag)));
+    };
+    const cols = seamCount(columnProfile, width, height);
+    const rows = seamCount(rowProfile, height, width);
+    if (cols > 1 || rows > 1) return { cols, rows };
+    return {
+      cols: periodicCount(columnProfile, width),
+      rows: periodicCount(rowProfile, height)
+    };
+  }
+
   private selectAiSequenceCell(event: PointerEvent): void {
     const source = this.aiSequenceSource();
     if (!source) return;
-    const rect = this.aiSeqGrid.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const x = ((event.clientX - rect.left) / rect.width) * this.aiSeqGrid.width;
-    const y = ((event.clientY - rect.top) / rect.height) * this.aiSeqGrid.height;
+    const point = this.aiSeqCanvasPoint(event);
+    if (!point) return;
     const layout = this.aiSeqLayout;
-    const col = Math.floor((x - layout.x) / Math.max(1, layout.cellWidth));
-    const row = Math.floor((y - layout.y) / Math.max(1, layout.cellHeight));
+    const col = Math.floor((point.x - layout.regionX) / Math.max(1, layout.cellWidth));
+    const row = Math.floor((point.y - layout.regionY) / Math.max(1, layout.cellHeight));
     const cols = this.clampSequenceGrid(this.aiSeqCols.value);
     const rows = this.clampSequenceGrid(this.aiSeqRows.value);
     if (col < 0 || row < 0 || col >= cols || row >= rows) return;
@@ -4702,6 +5028,7 @@ export class TextureView {
     else this.aiSeqSelected.add(index);
     this.aiSeqLastCell = index;
     this.aiSeqFrameIndex = 0;
+    this.aiSeqFrameRotation.value = String(this.aiSeqFrameRotations.get(index) ?? 0);
     this.renderAiSequenceGrid();
   }
 
@@ -4729,19 +5056,45 @@ export class TextureView {
     const height = Math.max(1, source.height * scale);
     const x = (canvas.width - width) / 2;
     const y = (canvas.height - height) / 2;
-    const cellWidth = width / cols;
-    const cellHeight = height / rows;
-    this.aiSeqLayout = { x, y, width, height, cellWidth, cellHeight };
+    const regionX = x + this.aiSeqRegion.x * width;
+    const regionY = y + this.aiSeqRegion.y * height;
+    const regionWidth = Math.max(1, this.aiSeqRegion.width * width);
+    const regionHeight = Math.max(1, this.aiSeqRegion.height * height);
+    const cellWidth = regionWidth / cols;
+    const cellHeight = regionHeight / rows;
+    this.aiSeqLayout = {
+      x,
+      y,
+      width,
+      height,
+      cellWidth,
+      cellHeight,
+      regionX,
+      regionY,
+      regionWidth,
+      regionHeight
+    };
     context.imageSmoothingEnabled = true;
     context.drawImage(source.bitmap as CanvasImageSource, x, y, width, height);
+
+    if (this.aiSeqRegion.width < 0.999 || this.aiSeqRegion.height < 0.999) {
+      context.fillStyle = 'rgba(0, 0, 0, 0.45)';
+      context.fillRect(x, y, width, Math.max(0, regionY - y));
+      context.fillRect(x, regionY + regionHeight, width, Math.max(0, y + height - regionY - regionHeight));
+      context.fillRect(x, regionY, Math.max(0, regionX - x), regionHeight);
+      context.fillRect(regionX + regionWidth, regionY, Math.max(0, x + width - regionX - regionWidth), regionHeight);
+    }
+    context.strokeStyle = 'rgba(245, 177, 61, 0.9)';
+    context.lineWidth = 1.5;
+    context.strokeRect(regionX, regionY, regionWidth, regionHeight);
 
     const frames = this.aiSequenceFrames();
     const currentFrame = frames[Math.min(this.aiSeqFrameIndex, Math.max(0, frames.length - 1))];
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < cols; col += 1) {
         const index = row * cols + col;
-        const cellX = x + col * cellWidth;
-        const cellY = y + row * cellHeight;
+        const cellX = regionX + col * cellWidth;
+        const cellY = regionY + row * cellHeight;
         if (this.aiSeqSelected.has(index)) {
           context.fillStyle = index === currentFrame ? 'rgba(90, 169, 255, 0.1)' : 'rgba(90, 169, 255, 0.035)';
           context.fillRect(cellX, cellY, cellWidth, cellHeight);
@@ -4755,10 +5108,68 @@ export class TextureView {
           context.textAlign = 'left';
           context.fillText(String(index + 1), cellX + 3, cellY + 10);
         }
+        const rotation = this.aiSeqFrameRotations.get(index) ?? 0;
+        if (rotation) {
+          context.fillStyle = 'rgba(245, 177, 61, 0.95)';
+          context.font = '8px sans-serif';
+          context.textAlign = 'right';
+          context.fillText(`${rotation}°`, cellX + cellWidth - 3, cellY + cellHeight - 3);
+        }
       }
     }
+
+    if (this.aiSeqRegionDraft) {
+      const draft = this.aiSeqRegionDraft;
+      context.save();
+      context.strokeStyle = '#f5b13d';
+      context.lineWidth = 2;
+      context.setLineDash([5, 4]);
+      context.strokeRect(draft.x, draft.y, draft.width, draft.height);
+      context.fillStyle = 'rgba(245, 177, 61, 0.12)';
+      context.fillRect(draft.x, draft.y, draft.width, draft.height);
+      context.restore();
+    }
+
     this.aiSeqCount.textContent = `${this.aiSeqSelected.size} / ${cols * rows}`;
+    const globalRotation = Number(this.aiSeqRotation.value) || 0;
+    this.aiSeqStatus.textContent = `${cols} × ${rows} · 整体 ${globalRotation}°${this.aiSeqRegion.width < 0.999 || this.aiSeqRegion.height < 0.999 ? ' · 已框选分区' : ''}`;
     this.renderAiSequencePreview();
+  }
+
+  private aiSequenceFrameCanvas(index: number): { canvas: HTMLCanvasElement; rotation: number } | null {
+    const source = this.aiSequenceSource();
+    if (!source) return null;
+    const cols = this.clampSequenceGrid(this.aiSeqCols.value);
+    const rows = this.clampSequenceGrid(this.aiSeqRows.value);
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const region = this.aiSeqRegion;
+    const x0 = Math.max(0, Math.min(source.width - 1, Math.round((region.x + (col / cols) * region.width) * source.width)));
+    const x1 = Math.max(x0 + 1, Math.min(source.width, Math.round((region.x + ((col + 1) / cols) * region.width) * source.width)));
+    const y0 = Math.max(0, Math.min(source.height - 1, Math.round((region.y + (row / rows) * region.height) * source.height)));
+    const y1 = Math.max(y0 + 1, Math.min(source.height, Math.round((region.y + ((row + 1) / rows) * region.height) * source.height)));
+    const width = x1 - x0;
+    const height = y1 - y0;
+    const cropped = document.createElement('canvas');
+    cropped.width = width;
+    cropped.height = height;
+    const context = cropped.getContext('2d');
+    if (!context) return null;
+    context.drawImage(source.bitmap as CanvasImageSource, x0, y0, width, height, 0, 0, width, height);
+    const globalRotation = ((Math.round(Number(this.aiSeqRotation.value) / 90) * 90) % 360 + 360) % 360;
+    const frameRotation = ((Math.round((this.aiSeqFrameRotations.get(index) ?? 0) / 90) * 90) % 360 + 360) % 360;
+    const rotation = (globalRotation + frameRotation) % 360;
+    if (rotation === 0) return { canvas: cropped, rotation };
+    const rotated = document.createElement('canvas');
+    const swap = rotation === 90 || rotation === 270;
+    rotated.width = swap ? height : width;
+    rotated.height = swap ? width : height;
+    const rotatedContext = rotated.getContext('2d');
+    if (!rotatedContext) return { canvas: cropped, rotation: 0 };
+    rotatedContext.translate(rotated.width / 2, rotated.height / 2);
+    rotatedContext.rotate(THREE.MathUtils.degToRad(rotation));
+    rotatedContext.drawImage(cropped, -width / 2, -height / 2);
+    return { canvas: rotated, rotation };
   }
 
   private renderAiSequencePreview(): void {
@@ -4775,32 +5186,20 @@ export class TextureView {
     }
     const displayIndex = Math.min(this.aiSeqFrameIndex, frames.length - 1);
     const index = frames[displayIndex];
-    const cols = this.clampSequenceGrid(this.aiSeqCols.value);
-    const rows = this.clampSequenceGrid(this.aiSeqRows.value);
-    const col = index % cols;
-    const row = Math.floor(index / cols);
-    const x0 = Math.round((col / cols) * source.width);
-    const x1 = Math.round(((col + 1) / cols) * source.width);
-    const y0 = Math.round((row / rows) * source.height);
-    const y1 = Math.round(((row + 1) / rows) * source.height);
-    const width = Math.max(1, x1 - x0);
-    const height = Math.max(1, y1 - y0);
-    const scale = Math.min(canvas.width / width, canvas.height / height);
-    const drawWidth = width * scale;
-    const drawHeight = height * scale;
+    const frame = this.aiSequenceFrameCanvas(index);
+    if (!frame) return;
+    const scale = Math.min(canvas.width / frame.canvas.width, canvas.height / frame.canvas.height);
+    const drawWidth = frame.canvas.width * scale;
+    const drawHeight = frame.canvas.height * scale;
     context.imageSmoothingEnabled = true;
     context.drawImage(
-      source.bitmap as CanvasImageSource,
-      x0,
-      y0,
-      width,
-      height,
+      frame.canvas,
       (canvas.width - drawWidth) / 2,
       (canvas.height - drawHeight) / 2,
       drawWidth,
       drawHeight
     );
-    this.aiSeqStatus.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 单元格 ${index + 1}`;
+    this.aiSeqStatus.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 单元格 ${index + 1} · 旋转 ${frame.rotation}°`;
   }
 
   private toggleAiSequencePlay(): void {
@@ -4853,6 +5252,21 @@ export class TextureView {
     this.aiSeqPlayButton.textContent = '播放';
   }
 
+  private applyAiSequenceRotation(): void {
+    const frames = this.aiSequenceFrames();
+    if (!frames.length) {
+      this.callbacks.toast('请先在网格中选择要旋转的帧', 'info');
+      return;
+    }
+    const rotation = ((Math.round(Number(this.aiSeqFrameRotation.value) / 90) * 90) % 360 + 360) % 360;
+    for (const index of frames) {
+      if (rotation === 0) this.aiSeqFrameRotations.delete(index);
+      else this.aiSeqFrameRotations.set(index, rotation);
+    }
+    this.renderAiSequenceGrid();
+    this.callbacks.toast(`已设置 ${frames.length} 帧旋转 ${rotation}°`, 'success');
+  }
+
   private applyAiSequenceFrame(): void {
     const source = this.aiSequenceSource();
     const frames = this.aiSequenceFrames();
@@ -4861,35 +5275,26 @@ export class TextureView {
       return;
     }
     const index = frames[Math.min(this.aiSeqFrameIndex, frames.length - 1)];
-    const cols = this.clampSequenceGrid(this.aiSeqCols.value);
-    const rows = this.clampSequenceGrid(this.aiSeqRows.value);
-    const col = index % cols;
-    const row = Math.floor(index / cols);
-    const x0 = Math.round((col / cols) * source.width);
-    const x1 = Math.round(((col + 1) / cols) * source.width);
-    const y0 = Math.round((row / rows) * source.height);
-    const y1 = Math.round(((row + 1) / rows) * source.height);
-    const width = Math.max(1, x1 - x0);
-    const height = Math.max(1, y1 - y0);
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext('2d');
-    if (!context) return;
-    context.drawImage(source.bitmap as CanvasImageSource, x0, y0, width, height, 0, 0, width, height);
+    const frame = this.aiSequenceFrameCanvas(index);
+    if (!frame) return;
+    const canvas = frame.canvas;
     this.setImage(
       canvas,
-      width,
-      height,
+      canvas.width,
+      canvas.height,
       `${this.currentBaseName()}_${index + 1}.png`,
       '',
-      width * height * 4,
+      canvas.width * canvas.height * 4,
       { preserveTransform: true, preserveHistory: false }
     );
     this.aiSeqCols.value = '1';
     this.aiSeqRows.value = '1';
+    this.aiSeqRegion = { x: 0, y: 0, width: 1, height: 1 };
+    this.aiSeqRegionStatus.textContent = '整图';
+    this.aiSeqFrameRotations.clear();
+    this.aiSeqRotation.value = '0';
     this.setAiMode(true);
-    this.callbacks.toast(`已应用序列帧 ${index + 1}`, 'success');
+    this.callbacks.toast(`已应用序列帧 ${index + 1}${frame.rotation ? ` · 旋转 ${frame.rotation}°` : ''}`, 'success');
   }
 
   private async openAiPanel(): Promise<void> {

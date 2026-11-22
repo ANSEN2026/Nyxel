@@ -49,12 +49,17 @@
       "electron/editor.html",
       "resources/**/*",
       "!resources/official-textures/**/*",
+      "!resources/official-models/**/*",
       "package.json"
     ],
     "extraResources": [
       {
         "from": "resources/official-textures",
         "to": "official-textures"
+      },
+      {
+        "from": "resources/official-models",
+        "to": "official-models"
       },
       {
         "from": "electron/motion_capture/sidecar",

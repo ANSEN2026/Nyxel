@@ -353,8 +353,12 @@ export interface NyxelApi {
     read: (filePath: string) => Promise<Uint8Array>;
     openProject: (filePath?: string) => Promise<{ path: string; data: Uint8Array } | null>;
     savePng: (data: Uint8Array, suggestedName: string) => Promise<string | null>;
+    saveText: (text: string, suggestedName: string) => Promise<string | null>;
     saveProject: (data: Uint8Array, suggestedName: string) => Promise<string | null>;
     saveVideo: (data: Uint8Array, suggestedName: string, extension: 'mp4' | 'webm') => Promise<string | null>;
+  };
+  models: {
+    official: () => Promise<Array<{ name: string; path: string }>>;
   };
   settings: {
     load: () => Promise<Settings>;

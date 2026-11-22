@@ -27,8 +27,12 @@ contextBridge.exposeInMainWorld('nyxel', {
     read: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
     openProject: (filePath?: string) => ipcRenderer.invoke('file:openProject', filePath),
     savePng: (data: Uint8Array, suggestedName: string) => ipcRenderer.invoke('file:savePng', data, suggestedName),
+    saveText: (text: string, suggestedName: string) => ipcRenderer.invoke('file:saveText', text, suggestedName),
     saveProject: (data: Uint8Array, suggestedName: string) => ipcRenderer.invoke('file:saveProject', data, suggestedName),
     saveVideo: (data: Uint8Array, suggestedName: string, extension: 'mp4' | 'webm') => ipcRenderer.invoke('file:saveVideo', data, suggestedName, extension)
+  },
+  models: {
+    official: () => ipcRenderer.invoke('models:official')
   },
   settings: {
     load: () => ipcRenderer.invoke('settings:load'),

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
@@ -16,6 +17,23 @@ const UV_ATTRIBUTES = ['uv', 'uv1', 'uv2', 'uv3'] as const;
 const UV_LABELS: Record<string, string> = { uv: 'UV1', uv1: 'UV2', uv2: 'UV3', uv3: 'UV4' };
 const UV_LINE_COLOR = 0xe8f0ec;
 const UV_OUT_OF_BOUNDS = 0xff5d5d;
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    for (let index = 0; index < chunk.length; index += 1) binary += String.fromCharCode(chunk[index]);
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
 
 interface UvTriangle {
   mesh: THREE.Mesh;
@@ -46,6 +64,8 @@ interface MaterialSettings {
   bloomStrength: number;
   brightness: number;
   contrast: number;
+  doubleSided: boolean;
+  ueBackground: boolean;
 }
 
 const MATERIAL_CHANNEL_INDEX: Record<MaterialChannel, number> = {
@@ -79,7 +99,9 @@ const MATERIAL_PRESETS: Record<string, MaterialSettings> = {
     emissiveIntensity: 0,
     bloomStrength: 0.18,
     brightness: 1,
-    contrast: 1
+    contrast: 1,
+    doubleSided: false,
+    ueBackground: false
   }
 };
 
@@ -89,6 +111,16 @@ interface UvOverlapResponse {
   covered: number;
   overlap: number;
   data: Uint8Array;
+}
+
+interface ModelEntry {
+  id: number;
+  name: string;
+  filePath: string;
+  size: number;
+  upAxis: UpAxis;
+  root: THREE.Group;
+  object: THREE.Object3D;
 }
 
 export class ModelView {
@@ -122,6 +154,33 @@ export class ModelView {
   private materialBrightnessValue: HTMLInputElement;
   private materialContrast: HTMLInputElement;
   private materialContrastValue: HTMLInputElement;
+  private materialDoubleSided: HTMLInputElement;
+  private materialBackgroundToggle: HTMLInputElement;
+  private modelList: HTMLElement;
+  private modelPosX: HTMLInputElement;
+  private modelPosY: HTMLInputElement;
+  private modelPosZ: HTMLInputElement;
+  private modelRotX: HTMLInputElement;
+  private modelRotY: HTMLInputElement;
+  private modelRotZ: HTMLInputElement;
+  private modelScaleX: HTMLInputElement;
+  private modelScaleY: HTMLInputElement;
+  private modelScaleZ: HTMLInputElement;
+  private modelGridSnap: HTMLInputElement;
+  private officialModelSelect: HTMLSelectElement;
+  private referenceMode: HTMLSelectElement;
+  private referenceInner: HTMLInputElement;
+  private referenceInnerValue: HTMLInputElement;
+  private referenceOuter: HTMLInputElement;
+  private referenceOuterValue: HTMLInputElement;
+  private referenceWaveSize: HTMLInputElement;
+  private referenceWaveSizeValue: HTMLInputElement;
+  private referenceWaveSpacing: HTMLInputElement;
+  private referenceWaveSpacingValue: HTMLInputElement;
+  private referenceRingCount: HTMLInputElement;
+  private referenceRingCountValue: HTMLInputElement;
+  private referenceGroup: THREE.Group | null = null;
+  private studioBackgroundTexture: THREE.CanvasTexture | null = null;
   private materialSettings: MaterialSettings = { ...MATERIAL_PRESETS.default };
   private materialPresetKey = 'default';
   private materialBallRenderer: THREE.WebGLRenderer | null = null;
@@ -147,6 +206,9 @@ export class ModelView {
   private refCube: THREE.Group;
 
   private model: THREE.Object3D | null = null;
+  private modelEntries: ModelEntry[] = [];
+  private activeModelId = -1;
+  private modelEntrySeq = 0;
   private originalMaterials = new WeakMap<THREE.Mesh, THREE.Material | THREE.Material[]>();
   private generatedMaterials: THREE.Material[] = [];
   private externalTexture: THREE.Texture | null = null;
@@ -241,6 +303,7 @@ export class ModelView {
           <button data-mode="uv">UV</button>
         </div>
         <button class="primary" data-action="open">打开 FBX</button>
+        <button data-action="clear-models">清空模型</button>
         <button data-action="fit" id="model-fit">Fit View</button>
         <span class="toolbar-sep"></span>
         <div class="segmented" data-group="up" data-3d-only>
@@ -284,6 +347,81 @@ export class ModelView {
             <span class="material-ball-label">MATERIAL BALL</span>
           </div>
           <div class="material-panel-body">
+            <section class="material-group model-scene-group">
+              <div class="material-group-title">场景模型</div>
+              <div class="model-list" id="model-list"></div>
+              <div class="model-transform-row">
+                <span>位置</span>
+                <input id="model-pos-x" type="number" step="0.1" value="0" title="X">
+                <input id="model-pos-y" type="number" step="0.1" value="0" title="Y">
+                <input id="model-pos-z" type="number" step="0.1" value="0" title="Z">
+              </div>
+              <div class="model-transform-row">
+                <span>旋转</span>
+                <input id="model-rot-x" type="number" step="1" value="0" title="X°">
+                <input id="model-rot-y" type="number" step="1" value="0" title="Y°">
+                <input id="model-rot-z" type="number" step="1" value="0" title="Z°">
+              </div>
+              <div class="model-transform-row">
+                <span>缩放</span>
+                <input id="model-scale-x" type="number" step="0.01" value="1" title="X">
+                <input id="model-scale-y" type="number" step="0.01" value="1" title="Y">
+                <input id="model-scale-z" type="number" step="0.01" value="1" title="Z">
+              </div>
+              <div class="model-transform-actions">
+                <label><input id="model-grid-snap" type="checkbox"> 网格吸附</label>
+                <button type="button" data-model-pivot>轴心居中</button>
+                <button type="button" data-model-remove>移除</button>
+              </div>
+              <div class="model-scene-actions">
+                <button type="button" data-model-save>保存组合</button>
+                <button type="button" data-model-load>载入组合</button>
+              </div>
+            </section>
+            <section class="material-group reference-group">
+              <div class="material-group-title">官方参考模型</div>
+              <label class="material-control-row">
+                <span>模型</span>
+                <select id="official-model-select"><option value="">载入中…</option></select>
+                <button type="button" data-official-load>载入</button>
+              </label>
+              <label class="material-control-row">
+                <span>模式</span>
+                <select id="reference-mode">
+                  <option value="ring" selected>圆盘通道</option>
+                  <option value="wave">波浪</option>
+                </select>
+              </label>
+              <label class="material-control-row">
+                <span>内环</span>
+                <input id="reference-inner" type="range" min="0" max="1.4" step="0.01" value="0.55">
+                <input id="reference-inner-value" class="material-number" type="number" min="0" max="1.4" step="0.01" value="0.55">
+              </label>
+              <label class="material-control-row">
+                <span>外环</span>
+                <input id="reference-outer" type="range" min="0.1" max="2" step="0.01" value="1">
+                <input id="reference-outer-value" class="material-number" type="number" min="0.1" max="2" step="0.01" value="1">
+              </label>
+              <label class="material-control-row">
+                <span>波浪大小</span>
+                <input id="reference-wave-size" type="range" min="0" max="0.6" step="0.005" value="0.12">
+                <input id="reference-wave-size-value" class="material-number" type="number" min="0" max="0.6" step="0.005" value="0.12">
+              </label>
+              <label class="material-control-row">
+                <span>波浪间隔</span>
+                <input id="reference-wave-spacing" type="range" min="0.03" max="0.8" step="0.01" value="0.16">
+                <input id="reference-wave-spacing-value" class="material-number" type="number" min="0.03" max="0.8" step="0.01" value="0.16">
+              </label>
+              <label class="material-control-row">
+                <span>圈数</span>
+                <input id="reference-ring-count" type="range" min="1" max="24" step="1" value="6">
+                <input id="reference-ring-count-value" class="material-number" type="number" min="1" max="24" step="1" value="6">
+              </label>
+              <div class="model-scene-actions">
+                <button type="button" data-reference-generate>生成</button>
+                <button type="button" data-reference-export>导出 OBJ</button>
+              </div>
+            </section>
             <label class="material-control-row">
               <span>预设</span>
               <select id="material-preset">
@@ -359,6 +497,17 @@ export class ModelView {
                 <input id="material-contrast-value" class="material-number" type="number" min="-8" max="8" step="0.01" value="1">
               </label>
             </section>
+            <section class="material-group">
+              <div class="material-group-title">显示</div>
+              <label class="material-control-row">
+                <span>双面显示</span>
+                <input id="material-double-sided" class="toggle" type="checkbox">
+              </label>
+              <label class="material-control-row">
+                <span>UE 材质背景</span>
+                <input id="material-ue-bg" class="toggle" type="checkbox">
+              </label>
+            </section>
             <div class="material-hint">仅影响模型预览材质，不改动原始贴图。</div>
           </div>
         </aside>
@@ -430,6 +579,31 @@ export class ModelView {
     this.materialBrightnessValue = this.element.querySelector('#material-brightness-value') as HTMLInputElement;
     this.materialContrast = this.element.querySelector('#material-contrast') as HTMLInputElement;
     this.materialContrastValue = this.element.querySelector('#material-contrast-value') as HTMLInputElement;
+    this.materialDoubleSided = this.element.querySelector('#material-double-sided') as HTMLInputElement;
+    this.materialBackgroundToggle = this.element.querySelector('#material-ue-bg') as HTMLInputElement;
+    this.modelList = this.element.querySelector('#model-list') as HTMLElement;
+    this.modelPosX = this.element.querySelector('#model-pos-x') as HTMLInputElement;
+    this.modelPosY = this.element.querySelector('#model-pos-y') as HTMLInputElement;
+    this.modelPosZ = this.element.querySelector('#model-pos-z') as HTMLInputElement;
+    this.modelRotX = this.element.querySelector('#model-rot-x') as HTMLInputElement;
+    this.modelRotY = this.element.querySelector('#model-rot-y') as HTMLInputElement;
+    this.modelRotZ = this.element.querySelector('#model-rot-z') as HTMLInputElement;
+    this.modelScaleX = this.element.querySelector('#model-scale-x') as HTMLInputElement;
+    this.modelScaleY = this.element.querySelector('#model-scale-y') as HTMLInputElement;
+    this.modelScaleZ = this.element.querySelector('#model-scale-z') as HTMLInputElement;
+    this.modelGridSnap = this.element.querySelector('#model-grid-snap') as HTMLInputElement;
+    this.officialModelSelect = this.element.querySelector('#official-model-select') as HTMLSelectElement;
+    this.referenceMode = this.element.querySelector('#reference-mode') as HTMLSelectElement;
+    this.referenceInner = this.element.querySelector('#reference-inner') as HTMLInputElement;
+    this.referenceInnerValue = this.element.querySelector('#reference-inner-value') as HTMLInputElement;
+    this.referenceOuter = this.element.querySelector('#reference-outer') as HTMLInputElement;
+    this.referenceOuterValue = this.element.querySelector('#reference-outer-value') as HTMLInputElement;
+    this.referenceWaveSize = this.element.querySelector('#reference-wave-size') as HTMLInputElement;
+    this.referenceWaveSizeValue = this.element.querySelector('#reference-wave-size-value') as HTMLInputElement;
+    this.referenceWaveSpacing = this.element.querySelector('#reference-wave-spacing') as HTMLInputElement;
+    this.referenceWaveSpacingValue = this.element.querySelector('#reference-wave-spacing-value') as HTMLInputElement;
+    this.referenceRingCount = this.element.querySelector('#reference-ring-count') as HTMLInputElement;
+    this.referenceRingCountValue = this.element.querySelector('#reference-ring-count-value') as HTMLInputElement;
     this.uvChannelSelect = this.element.querySelector('#uv-channel') as HTMLSelectElement;
     this.uvBgSelect = this.element.querySelector('#uv-bg') as HTMLSelectElement;
     this.uvHud = this.element.querySelector('.uv-hud') as HTMLElement;
@@ -625,6 +799,8 @@ export class ModelView {
 
     this.setupMaterialPanel();
     this.bindEvents();
+    this.bindReferenceControls();
+    void this.loadOfficialModelList();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.body);
     this.resizeObserver.observe(this.canvas);
@@ -634,7 +810,15 @@ export class ModelView {
 
   private bindEvents(): void {
     this.element.querySelector('[data-action="open"]')?.addEventListener('click', () => void this.pickOpen());
+    this.element.querySelector('[data-action="clear-models"]')?.addEventListener('click', () => {
+      this.disposeModel();
+      this.emptyState.classList.remove('hidden');
+      this.statsBadge.classList.add('hidden');
+      this.fileLabel.textContent = '未加载';
+      this.callbacks.status.set('模型', '未加载');
+    });
     this.element.querySelector('[data-action="fit"]')?.addEventListener('click', () => this.fitCurrent());
+    this.bindModelSceneControls();
     this.element.querySelector('[data-action="texture"]')?.addEventListener('click', () => void this.pickTexture());
     this.element.querySelector('[data-action="light-panel"]')?.addEventListener('click', () => {
       this.lightPanel.classList.toggle('hidden');
@@ -988,7 +1172,7 @@ export class ModelView {
   }
 
   private async loadBuffer(buffer: Uint8Array, name: string, filePath: string, size: number): Promise<void> {
-    const axis = await this.askAxis('y');
+    const axis = this.upAxis;
     this.fileName = name;
     this.filePath = filePath;
     this.fileSize = size;
@@ -1055,11 +1239,21 @@ export class ModelView {
     axis: UpAxis,
     missingTextures: string[]
   ): void {
-    this.disposeModel();
     this.upAxis = axis;
-    this.model = object;
-    this.originalMaterials = new WeakMap();
-    this.generatedMaterials = [];
+    const root = new THREE.Group();
+    root.name = name;
+    root.add(object);
+    this.scene.add(root);
+    const entry: ModelEntry = {
+      id: ++this.modelEntrySeq,
+      name,
+      filePath,
+      size: this.fileSize,
+      upAxis: axis,
+      root,
+      object
+    };
+    object.rotation.x = axis === 'z' ? -Math.PI / 2 : 0;
 
     object.traverse((child) => {
       const mesh = child as THREE.Mesh;
@@ -1069,14 +1263,24 @@ export class ModelView {
       mesh.receiveShadow = true;
     });
 
-    this.scene.add(object);
+    this.modelEntries.push(entry);
+    this.activeModelId = entry.id;
+    this.model = object;
+    this.fileName = name;
+    this.filePath = filePath;
+    this.fileSize = entry.size;
     this.uvDataBuilt = false;
     this.refreshUvChannels();
-    this.setUpAxis(axis, false);
+    this.element.querySelectorAll('[data-up]').forEach((button) => {
+      button.classList.toggle('active', (button as HTMLElement).dataset.up === axis);
+    });
     this.rebuildMaterials();
     this.fit();
+    this.renderModelList();
+    this.syncModelTransformControls();
 
     if (this.mode === 'uv') {
+      this.clearUvData();
       this.ensureUvData();
       this.fitUv();
       this.updateUvBackground();
@@ -1099,9 +1303,10 @@ export class ModelView {
 
   private setUpAxis(axis: UpAxis, doFit = true): void {
     this.upAxis = axis;
-    if (this.model) {
-      this.model.rotation.x = axis === 'z' ? -Math.PI / 2 : 0;
-      this.model.updateMatrixWorld(true);
+    for (const entry of this.modelEntries) {
+      entry.upAxis = axis;
+      entry.object.rotation.x = axis === 'z' ? -Math.PI / 2 : 0;
+      entry.object.updateMatrixWorld(true);
     }
     this.clearSelection();
     this.element.querySelectorAll('[data-up]').forEach((button) => {
@@ -1111,12 +1316,520 @@ export class ModelView {
     this.updateStats();
   }
 
+  private renderModelList(): void {
+    this.modelList.innerHTML = '';
+    if (!this.modelEntries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'model-list-empty';
+      empty.textContent = '还没有模型';
+      this.modelList.append(empty);
+      return;
+    }
+    for (const entry of this.modelEntries) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `model-list-item${entry.id === this.activeModelId ? ' active' : ''}`;
+      button.textContent = entry.name;
+      button.title = entry.filePath || entry.name;
+      button.addEventListener('click', () => this.selectModelEntry(entry.id));
+      this.modelList.append(button);
+    }
+  }
+
+  private activeModelEntry(): ModelEntry | null {
+    return this.modelEntries.find((entry) => entry.id === this.activeModelId) ?? null;
+  }
+
+  private selectModelEntry(id: number): void {
+    const entry = this.modelEntries.find((item) => item.id === id);
+    if (!entry) return;
+    this.activeModelId = entry.id;
+    this.model = entry.object;
+    this.fileName = entry.name;
+    this.filePath = entry.filePath;
+    this.fileSize = entry.size;
+    this.uvDataBuilt = false;
+    this.clearSelection();
+    this.refreshUvChannels();
+    this.rebuildMaterials();
+    this.renderModelList();
+    this.syncModelTransformControls();
+    this.fileLabel.textContent = entry.name;
+    this.callbacks.status.set(entry.name, this.statsText());
+    this.updateStats();
+    if (this.mode === 'uv') {
+      this.clearUvData();
+      this.ensureUvData();
+      this.fitUv();
+      this.updateUvBackground();
+      this.updateUvHud();
+    }
+  }
+
+  private syncModelTransformControls(): void {
+    const entry = this.activeModelEntry();
+    const disabled = !entry;
+    const fields = [
+      this.modelPosX,
+      this.modelPosY,
+      this.modelPosZ,
+      this.modelRotX,
+      this.modelRotY,
+      this.modelRotZ,
+      this.modelScaleX,
+      this.modelScaleY,
+      this.modelScaleZ
+    ];
+    for (const field of fields) field.disabled = disabled;
+    if (!entry) {
+      this.modelPosX.value = '0';
+      this.modelPosY.value = '0';
+      this.modelPosZ.value = '0';
+      this.modelRotX.value = '0';
+      this.modelRotY.value = '0';
+      this.modelRotZ.value = '0';
+      this.modelScaleX.value = '1';
+      this.modelScaleY.value = '1';
+      this.modelScaleZ.value = '1';
+      return;
+    }
+    const root = entry.root;
+    this.modelPosX.value = root.position.x.toFixed(2);
+    this.modelPosY.value = root.position.y.toFixed(2);
+    this.modelPosZ.value = root.position.z.toFixed(2);
+    this.modelRotX.value = String(Math.round(THREE.MathUtils.radToDeg(root.rotation.x)));
+    this.modelRotY.value = String(Math.round(THREE.MathUtils.radToDeg(root.rotation.y)));
+    this.modelRotZ.value = String(Math.round(THREE.MathUtils.radToDeg(root.rotation.z)));
+    this.modelScaleX.value = root.scale.x.toFixed(2);
+    this.modelScaleY.value = root.scale.y.toFixed(2);
+    this.modelScaleZ.value = root.scale.z.toFixed(2);
+  }
+
+  private bindModelSceneControls(): void {
+    const apply = (): void => {
+      const entry = this.activeModelEntry();
+      if (!entry) return;
+      const snap = this.modelGridSnap.checked ? 0.1 : 0;
+      const snapValue = (value: number): number => snap > 0 ? Math.round(value / snap) * snap : value;
+      const position = new THREE.Vector3(
+        snapValue(Number(this.modelPosX.value) || 0),
+        snapValue(Number(this.modelPosY.value) || 0),
+        snapValue(Number(this.modelPosZ.value) || 0)
+      );
+      const rotation = new THREE.Euler(
+        THREE.MathUtils.degToRad(Number(this.modelRotX.value) || 0),
+        THREE.MathUtils.degToRad(Number(this.modelRotY.value) || 0),
+        THREE.MathUtils.degToRad(Number(this.modelRotZ.value) || 0)
+      );
+      const scale = new THREE.Vector3(
+        Math.max(0.001, Number(this.modelScaleX.value) || 1),
+        Math.max(0.001, Number(this.modelScaleY.value) || 1),
+        Math.max(0.001, Number(this.modelScaleZ.value) || 1)
+      );
+      entry.root.position.copy(position);
+      entry.root.rotation.copy(rotation);
+      entry.root.scale.copy(scale);
+      entry.root.updateMatrixWorld(true);
+      this.syncModelTransformControls();
+      this.updateStats();
+    };
+    for (const field of [
+      this.modelPosX,
+      this.modelPosY,
+      this.modelPosZ,
+      this.modelRotX,
+      this.modelRotY,
+      this.modelRotZ,
+      this.modelScaleX,
+      this.modelScaleY,
+      this.modelScaleZ
+    ]) {
+      field.addEventListener('change', apply);
+    }
+    this.element.querySelector('[data-model-pivot]')?.addEventListener('click', () => this.centerModelPivot());
+    this.element.querySelector('[data-model-remove]')?.addEventListener('click', () => this.removeActiveModel());
+    this.element.querySelector('[data-model-save]')?.addEventListener('click', () => void this.saveModelScene());
+    this.element.querySelector('[data-model-load]')?.addEventListener('click', () => void this.loadModelScene());
+  }
+
+  private async loadOfficialModelList(): Promise<void> {
+    try {
+      const models = await window.nyxel.models.official();
+      this.officialModelSelect.innerHTML = '';
+      if (!models.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '未找到官方模型';
+        this.officialModelSelect.append(option);
+        return;
+      }
+      for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.path;
+        option.textContent = model.name;
+        this.officialModelSelect.append(option);
+      }
+    } catch {
+      this.officialModelSelect.innerHTML = '<option value="">官方模型不可用</option>';
+    }
+  }
+
+  private bindReferenceControls(): void {
+    const syncPair = (range: HTMLInputElement, number: HTMLInputElement, onChange?: () => void): void => {
+      range.addEventListener('input', () => {
+        number.value = range.value;
+        onChange?.();
+      });
+      number.addEventListener('change', () => {
+        const value = Math.max(Number(range.min) || 0, Math.min(Number(range.max) || 1, Number(number.value) || 0));
+        range.value = String(value);
+        number.value = String(value);
+        onChange?.();
+      });
+    };
+    const syncWave = (): void => {
+      const outer = Math.max(0.1, Number(this.referenceOuter.value) || 1);
+      const spacing = Math.max(0.03, Number(this.referenceWaveSpacing.value) || 0.16);
+      const count = Math.max(1, Math.min(24, Math.round(outer / spacing)));
+      this.referenceRingCount.value = String(count);
+      this.referenceRingCountValue.value = String(count);
+    };
+    syncPair(this.referenceInner, this.referenceInnerValue);
+    syncPair(this.referenceOuter, this.referenceOuterValue, syncWave);
+    syncPair(this.referenceWaveSize, this.referenceWaveSizeValue);
+    syncPair(this.referenceWaveSpacing, this.referenceWaveSpacingValue, syncWave);
+    syncPair(this.referenceRingCount, this.referenceRingCountValue, () => {
+      const outer = Math.max(0.1, Number(this.referenceOuter.value) || 1);
+      const count = Math.max(1, Number(this.referenceRingCount.value) || 1);
+      const spacing = Math.max(0.03, outer / count);
+      this.referenceWaveSpacing.value = spacing.toFixed(2);
+      this.referenceWaveSpacingValue.value = spacing.toFixed(2);
+    });
+    this.officialModelSelect.addEventListener('change', () => {
+      this.element.querySelector('[data-official-load]')?.classList.remove('active');
+    });
+    this.element.querySelector('[data-official-load]')?.addEventListener('click', () => {
+      const target = this.officialModelSelect.value;
+      if (!target) {
+        this.callbacks.toast('没有可载入的官方模型', 'info');
+        return;
+      }
+      void this.loadPath(target);
+    });
+    this.referenceMode.addEventListener('change', () => this.updateReferenceMode());
+    this.element.querySelector('[data-reference-generate]')?.addEventListener('click', () => this.generateReferenceModel());
+    this.element.querySelector('[data-reference-export]')?.addEventListener('click', () => void this.exportReferenceModel());
+    this.updateReferenceMode();
+  }
+
+  private updateReferenceMode(): void {
+    const wave = this.referenceMode.value === 'wave';
+    this.referenceWaveSize.disabled = !wave;
+    this.referenceWaveSizeValue.disabled = !wave;
+    this.referenceWaveSpacing.disabled = !wave;
+    this.referenceWaveSpacingValue.disabled = !wave;
+    this.referenceRingCount.disabled = !wave;
+    this.referenceRingCountValue.disabled = !wave;
+  }
+
+  private clearReferenceModel(): void {
+    if (!this.referenceGroup) return;
+    this.scene.remove(this.referenceGroup);
+    this.referenceGroup.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.material) {
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        materials.forEach((material) => material.dispose());
+      }
+    });
+    this.referenceGroup = null;
+  }
+
+  private referenceGeometry(): THREE.BufferGeometry {
+    const inner = Math.max(0, Number(this.referenceInner.value) || 0);
+    const outer = Math.max(inner + 0.01, Number(this.referenceOuter.value) || 1);
+    if (this.referenceMode.value === 'ring') {
+      const shape = new THREE.Shape();
+      shape.absarc(0, 0, outer, 0, Math.PI * 2, false);
+      if (inner > 0.001) {
+        const hole = new THREE.Path();
+        hole.absarc(0, 0, inner, 0, Math.PI * 2, true);
+        shape.holes.push(hole);
+      }
+      const geometry = new THREE.ExtrudeGeometry(shape, {
+        depth: 0.08,
+        bevelEnabled: true,
+        bevelSegments: 2,
+        bevelSize: 0.012,
+        bevelThickness: 0.012,
+        steps: 1,
+        curveSegments: 160
+      });
+      geometry.rotateX(-Math.PI / 2);
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+
+    const cycles = Math.max(1, Math.min(24, Math.round(Number(this.referenceRingCount.value) || 6)));
+    const amplitude = Math.max(0, Number(this.referenceWaveSize.value) || 0);
+    const segments = 192;
+    const radialRings = Math.max(24, cycles * 18);
+    const positions: number[] = [];
+    const indices: number[] = [];
+    const heightAt = (radius: number): number => {
+      const phase = (radius / Math.max(0.001, outer)) * cycles * Math.PI * 2;
+      return Math.sin(phase) * amplitude;
+    };
+    const hasHole = inner > 0.001;
+    if (!hasHole) positions.push(0, heightAt(0), 0);
+    for (let ring = 1; ring <= radialRings; ring += 1) {
+      const radius = hasHole
+        ? inner + ((outer - inner) * (ring - 1)) / Math.max(1, radialRings - 1)
+        : (outer * ring) / radialRings;
+      const y = heightAt(radius);
+      for (let segment = 0; segment < segments; segment += 1) {
+        const angle = (segment / segments) * Math.PI * 2;
+        positions.push(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
+      }
+    }
+    if (!hasHole) {
+      for (let segment = 0; segment < segments; segment += 1) {
+        indices.push(0, 1 + ((segment + 1) % segments), 1 + segment);
+      }
+    }
+    const base = hasHole ? 0 : 1;
+    for (let ring = 1; ring < radialRings; ring += 1) {
+      const start = base + (ring - 1) * segments;
+      const next = base + ring * segments;
+      for (let segment = 0; segment < segments; segment += 1) {
+        const a = start + segment;
+        const b = start + ((segment + 1) % segments);
+        const c = next + segment;
+        const d = next + ((segment + 1) % segments);
+        indices.push(a, b, c, b, d, c);
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return geometry;
+  }
+
+  private generateReferenceModel(): void {
+    this.clearReferenceModel();
+    const group = new THREE.Group();
+    const mesh = new THREE.Mesh(
+      this.referenceGeometry(),
+      new THREE.MeshStandardMaterial({
+        color: 0x9fc3d8,
+        metalness: 0.22,
+        roughness: 0.34,
+        side: THREE.DoubleSide
+      })
+    );
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    this.referenceGroup = group;
+    this.scene.add(group);
+    this.emptyState.classList.add('hidden');
+    this.fit();
+    this.callbacks.toast(`已生成${this.referenceMode.value === 'wave' ? '波浪' : '圆盘通道'}参考模型`, 'success');
+  }
+
+  private async exportReferenceModel(): Promise<void> {
+    if (!this.referenceGroup) {
+      this.callbacks.toast('请先生成参考模型', 'info');
+      return;
+    }
+    try {
+      const text = new OBJExporter().parse(this.referenceGroup);
+      const saved = await window.nyxel.file.saveText(text, '参考模型.obj');
+      if (saved) this.callbacks.toast(`参考模型已导出：${saved}`, 'success');
+    } catch (error) {
+      this.callbacks.toast(`导出参考模型失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private centerModelPivot(): void {
+    const entry = this.activeModelEntry();
+    if (!entry) return;
+    entry.root.updateMatrixWorld(true);
+    entry.object.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(entry.object);
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const worldMatrix = entry.object.matrixWorld.clone();
+    entry.root.position.copy(center);
+    entry.root.updateMatrixWorld(true);
+    const inverse = new THREE.Matrix4().copy(entry.root.matrixWorld).invert();
+    const local = new THREE.Matrix4().multiplyMatrices(inverse, worldMatrix);
+    local.decompose(entry.object.position, entry.object.quaternion, entry.object.scale);
+    entry.object.updateMatrixWorld(true);
+    entry.root.updateMatrixWorld(true);
+    this.syncModelTransformControls();
+    this.updateStats();
+    this.callbacks.toast('坐标轴心已定位到模型中心', 'success');
+  }
+
+  private removeActiveModel(): void {
+    const entry = this.activeModelEntry();
+    if (!entry) return;
+    this.scene.remove(entry.root);
+    entry.object.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+    });
+    this.modelEntries = this.modelEntries.filter((item) => item.id !== entry.id);
+    const next = this.modelEntries[this.modelEntries.length - 1];
+    if (next) {
+      this.selectModelEntry(next.id);
+    } else {
+      this.model = null;
+      this.activeModelId = -1;
+      this.fileName = '';
+      this.filePath = '';
+      this.fileSize = 0;
+      this.emptyState.classList.remove('hidden');
+      this.statsBadge.classList.add('hidden');
+      this.fileLabel.textContent = '未加载';
+      this.renderModelList();
+      this.syncModelTransformControls();
+      this.updateMaterialBall(true);
+      this.callbacks.status.set('模型', '未加载');
+    }
+  }
+
+  private async saveModelScene(): Promise<void> {
+    if (!this.modelEntries.length) {
+      this.callbacks.toast('场景里还没有模型', 'info');
+      return;
+    }
+    this.callbacks.status.set('模型', '正在打包模型组合…');
+    const models: Array<{
+      name: string;
+      path: string;
+      data: string;
+      position: number[];
+      rotation: number[];
+      scale: number[];
+    }> = [];
+    for (const entry of this.modelEntries) {
+      const model = {
+        name: entry.name,
+        path: entry.filePath,
+        data: '',
+        position: [entry.root.position.x, entry.root.position.y, entry.root.position.z],
+        rotation: [
+          THREE.MathUtils.radToDeg(entry.root.rotation.x),
+          THREE.MathUtils.radToDeg(entry.root.rotation.y),
+          THREE.MathUtils.radToDeg(entry.root.rotation.z)
+        ],
+        scale: [entry.root.scale.x, entry.root.scale.y, entry.root.scale.z]
+      };
+      if (entry.filePath) {
+        try {
+          const bytes = await window.nyxel.file.read(entry.filePath);
+          model.data = bytesToBase64(bytes);
+        } catch {
+          // 模型文件不可读时保留路径引用，至少还能在同一台机器上还原。
+        }
+      }
+      models.push(model);
+    }
+    const payload = {
+      format: 'texturemap-model-scene',
+      version: 2,
+      upAxis: this.upAxis,
+      models
+    };
+    try {
+      const bytes = new TextEncoder().encode(JSON.stringify(payload));
+      const saved = await window.nyxel.file.saveProject(bytes, '模型组合.tmproj');
+      if (saved) this.callbacks.toast(`模型组合已打包保存：${saved}`, 'success');
+    } catch (error) {
+      this.callbacks.toast(`保存模型组合失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    } finally {
+      this.callbacks.status.set(this.fileName, this.statsText());
+    }
+  }
+
+  private async loadModelScene(): Promise<void> {
+    try {
+      const result = await window.nyxel.file.openProject();
+      if (!result) return;
+      const payload = JSON.parse(new TextDecoder().decode(result.data)) as {
+        format?: string;
+        upAxis?: UpAxis;
+        models?: Array<{
+          name?: string;
+          path?: string;
+          data?: string;
+          position?: number[];
+          rotation?: number[];
+          scale?: number[];
+        }>;
+      };
+      if (payload.format !== 'texturemap-model-scene' || !Array.isArray(payload.models)) {
+        this.callbacks.toast('不是 Texture map 模型组合文件', 'error');
+        return;
+      }
+      if (!payload.models.length) {
+        this.callbacks.toast('模型组合为空', 'info');
+        return;
+      }
+      this.disposeModel();
+      this.upAxis = payload.upAxis === 'z' ? 'z' : 'y';
+      this.element.querySelectorAll('[data-up]').forEach((button) => {
+        button.classList.toggle('active', (button as HTMLElement).dataset.up === this.upAxis);
+      });
+      const pending = [...payload.models];
+      for (const model of pending) {
+        if (!model.data && !model.path) continue;
+        const before = this.modelEntries.length;
+        const name = model.name || basename(model.path || '模型.fbx');
+        if (model.data) {
+          const bytes = base64ToBytes(model.data);
+          await this.loadBuffer(bytes, name, '', bytes.byteLength);
+        } else if (model.path) {
+          await this.loadPath(model.path);
+        }
+        if (this.modelEntries.length === before) continue;
+        const entry = this.modelEntries.slice(before)[0];
+        if (!entry) continue;
+        const position = model.position ?? [0, 0, 0];
+        const rotation = model.rotation ?? [0, 0, 0];
+        const scale = model.scale ?? [1, 1, 1];
+        entry.root.position.set(position[0] ?? 0, position[1] ?? 0, position[2] ?? 0);
+        entry.root.rotation.set(
+          THREE.MathUtils.degToRad(rotation[0] ?? 0),
+          THREE.MathUtils.degToRad(rotation[1] ?? 0),
+          THREE.MathUtils.degToRad(rotation[2] ?? 0)
+        );
+        entry.root.scale.set(
+          Math.max(0.001, scale[0] ?? 1),
+          Math.max(0.001, scale[1] ?? 1),
+          Math.max(0.001, scale[2] ?? 1)
+        );
+        entry.root.updateMatrixWorld(true);
+      }
+      this.fit();
+      this.renderModelList();
+      this.syncModelTransformControls();
+      this.callbacks.toast(`已载入模型组合：${this.modelEntries.length} 个模型`, 'success');
+    } catch (error) {
+      this.callbacks.toast(`载入模型组合失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
   private rebuildMaterials(): void {
     this.generatedMaterials.forEach((material) => material.dispose());
     this.generatedMaterials = [];
     this.generatedMaterialTextures.forEach((texture) => texture.dispose());
     this.generatedMaterialTextures = [];
-    if (!this.model) {
+    if (!this.modelEntries.length) {
       this.updateMaterialBall();
       return;
     }
@@ -1138,7 +1851,7 @@ export class ModelView {
       return clone;
     };
 
-    this.model.traverse((child) => {
+    for (const entry of this.modelEntries) entry.object.traverse((child) => {
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh) return;
       const original = this.originalMaterials.get(mesh);
@@ -1193,6 +1906,8 @@ export class ModelView {
         emissiveMaterial.emissiveIntensity = this.materialSettings.emissiveIntensity;
       }
     }
+    material.side = this.materialSettings.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+    material.needsUpdate = true;
     this.patchMaterialShader(material);
     this.updateMaterialUniforms(material);
   }
@@ -1269,6 +1984,8 @@ export class ModelView {
         emissiveMaterial.emissiveIntensity = this.materialSettings.emissiveIntensity;
       }
     }
+    material.side = this.materialSettings.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+    material.needsUpdate = true;
     const uniforms = material.userData.nyxelUniforms as
       | Record<string, { value: number | THREE.Color }>
       | undefined;
@@ -1321,7 +2038,9 @@ export class ModelView {
       brightness: legacyBrightness
         ? number(1 + number(data.brightness, 0, -1, 1), base.brightness, -8, 8)
         : number(data.brightness, base.brightness, -8, 8),
-      contrast: number(data.contrast, base.contrast, -8, 8)
+      contrast: number(data.contrast, base.contrast, -8, 8),
+      doubleSided: data.doubleSided === true,
+      ueBackground: data.ueBackground === true
     };
   }
 
@@ -1373,6 +2092,15 @@ export class ModelView {
   }
 
   private bindMaterialPanelEvents(): void {
+    this.materialDoubleSided.addEventListener('change', () => {
+      this.materialSettings.doubleSided = this.materialDoubleSided.checked;
+      this.markMaterialCustom();
+    });
+    this.materialBackgroundToggle.addEventListener('change', () => {
+      this.materialSettings.ueBackground = this.materialBackgroundToggle.checked;
+      this.applyMaterialBackground();
+      this.markMaterialCustom();
+    });
     this.materialPresetSelect.addEventListener('change', () => {
       if (this.materialPresetSelect.value === 'custom') {
         const stored = this.readStoredMaterialSettings();
@@ -1470,6 +2198,9 @@ export class ModelView {
     this.materialBrightnessValue.value = settings.brightness.toFixed(2);
     this.materialContrast.value = String(settings.contrast);
     this.materialContrastValue.value = settings.contrast.toFixed(2);
+    this.materialDoubleSided.checked = settings.doubleSided;
+    this.materialBackgroundToggle.checked = settings.ueBackground;
+    this.applyMaterialBackground();
     this.element.querySelectorAll<HTMLElement>('[data-material-channel]').forEach((button) => {
       button.classList.toggle('active', button.dataset.materialChannel === settings.channel);
     });
@@ -1528,6 +2259,51 @@ export class ModelView {
     this.materialBallMesh = mesh;
     this.materialBallComposer = composer;
     this.resizeMaterialBall();
+    this.applyMaterialBackground();
+  }
+
+  private createStudioBackgroundTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const context = canvas.getContext('2d');
+    if (context) {
+      const vertical = context.createLinearGradient(0, 0, 0, canvas.height);
+      vertical.addColorStop(0, '#343941');
+      vertical.addColorStop(0.45, '#1c2026');
+      vertical.addColorStop(1, '#08090b');
+      context.fillStyle = vertical;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      const glow = context.createRadialGradient(
+        canvas.width * 0.5,
+        canvas.height * 0.28,
+        0,
+        canvas.width * 0.5,
+        canvas.height * 0.28,
+        canvas.width * 0.72
+      );
+      glow.addColorStop(0, 'rgba(135, 155, 185, 0.28)');
+      glow.addColorStop(0.45, 'rgba(80, 95, 115, 0.1)');
+      glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      context.fillStyle = glow;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  private applyMaterialBackground(): void {
+    if (this.materialSettings.ueBackground) {
+      if (!this.studioBackgroundTexture) this.studioBackgroundTexture = this.createStudioBackgroundTexture();
+      this.scene.background = this.studioBackgroundTexture;
+      if (this.materialBallScene) this.materialBallScene.background = this.studioBackgroundTexture;
+    } else {
+      this.scene.background = new THREE.Color(0x080a0e);
+      if (this.materialBallScene) this.materialBallScene.background = new THREE.Color(0x0b0d10);
+    }
+    if (this.materialBallComposer) this.materialBallComposer.render();
   }
 
   private resizeMaterialBall(): void {
@@ -1735,8 +2511,16 @@ export class ModelView {
   }
 
   private fit(): void {
-    if (!this.model) return;
-    const box = this.boundingBox(this.model);
+    if (!this.model && !this.referenceGroup) return;
+    const box = new THREE.Box3();
+    if (this.modelEntries.length) {
+      for (const entry of this.modelEntries) box.expandByObject(entry.root);
+      if (this.referenceGroup) box.expandByObject(this.referenceGroup);
+    } else if (this.referenceGroup) {
+      box.setFromObject(this.referenceGroup);
+    } else if (this.model) {
+      box.setFromObject(this.model);
+    }
     if (box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
@@ -1782,35 +2566,46 @@ export class ModelView {
   }
 
   private disposeModel(): void {
+    this.clearReferenceModel();
     this.clearUvData();
     this.generatedMaterialTextures.forEach((texture) => texture.dispose());
     this.generatedMaterialTextures = [];
-    if (!this.model) {
-      this.updateMaterialBall(true);
-      return;
-    }
-    this.scene.remove(this.model);
-    this.model.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
-      if (mesh.material) {
+    this.generatedMaterials.forEach((material) => material.dispose());
+    this.generatedMaterials = [];
+    const disposedTextures = new Set<THREE.Texture>();
+    for (const entry of this.modelEntries) {
+      this.scene.remove(entry.root);
+      entry.object.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (!mesh.material) return;
         const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        materials.forEach((material) => {
+        for (const material of materials) {
           const map = (material as THREE.MeshStandardMaterial).map;
-          if (map) map.dispose();
+          if (map && !disposedTextures.has(map)) {
+            disposedTextures.add(map);
+            map.dispose();
+          }
           material.dispose();
-        });
-      }
-    });
+        }
+      });
+    }
+    this.modelEntries = [];
+    this.activeModelId = -1;
+    this.originalMaterials = new WeakMap();
     if (this.externalTexture) {
       this.externalTexture.dispose();
       this.externalTexture = null;
     }
-    this.generatedMaterials = [];
     this.model = null;
+    this.fileName = '';
+    this.filePath = '';
+    this.fileSize = 0;
     this.materialBallSource = null;
     this.materialBallTexture?.dispose();
     this.materialBallTexture = null;
+    this.renderModelList();
+    this.syncModelTransformControls();
     this.updateMaterialBall(true);
   }
 
