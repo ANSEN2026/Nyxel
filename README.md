@@ -1,6 +1,6 @@
-# Texture map v1.0.0 正式版
+# Texture map v1.1.0 正式版
 
-贴图、FBX 模型、配色分析、视频与绘画桌面应用。v1.0 正式版整合了材质预览、UV 检视、AI 超分、文件库、视频、绘画、备忘录、下载和完整界面统一；内部数据目录和 GitHub 仓库仍保留 Nyxel 名称以兼容旧版本。
+贴图、FBX 模型、配色分析、视频与绘画桌面应用。v1.1 在 1.0 正式版基础上加入压黑边、模块实时预览、回到未调参数、QQ 风格截图和 AI 法线图，并移除未使用的骨骼模块缩小安装包；内部数据目录和 GitHub 仓库仍保留 Nyxel 名称以兼容旧版本。
 
 - B站：https://space.bilibili.com/354642845?spm_id_from=333.1007.0.0
 - 爱发电：https://ifdian.net/a/nyxelstudio
@@ -123,8 +123,8 @@ npm run dist    # 生成 NSIS 安装包
 
 ## 打包产物
 
-- `release/Texture map Setup 1.0.0.exe`（NSIS，未签名）
-- `release/Texture-map-Setup-1.0.0.exe`（用于 GitHub Release 和 `latest.yml` 的文件名）
+- `release/Texture map Setup 1.1.0.exe`（NSIS，未签名）
+- `release/Texture-map-Setup-1.1.0.exe`（用于 GitHub Release 和 `latest.yml` 的文件名）
 - `release/win-unpacked/Texture map.exe`（免安装目录）
 - GitHub Releases：https://github.com/ANSEN2026/Nyxel/releases
 - 安装时选择的目录若最后一级不是 `Texture map`，安装器会自动创建 `Texture map` 子文件夹
