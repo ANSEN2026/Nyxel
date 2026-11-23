@@ -355,10 +355,10 @@ export class TextureView {
   private tileOutput: HTMLCanvasElement | null = null;
   private tilePreviewTimer = 0;
 
-  private bleedMode: HTMLSelectElement;
-  private bleedRadius: HTMLInputElement;
-  private bleedRadiusValue: HTMLInputElement;
-  private bleedPreviewTimer = 0;
+  private edgeMode: HTMLSelectElement;
+  private edgeDistance: HTMLInputElement;
+  private edgeDistanceValue: HTMLInputElement;
+  private edgePreviewTimer = 0;
 
   private dispersionPreview: HTMLCanvasElement;
   private dispersionCtx: CanvasRenderingContext2D;
@@ -852,24 +852,24 @@ export class TextureView {
               <button type="button" data-tools-expand-all>展开全部</button>
               <button type="button" data-tools-collapse-all>收起全部</button>
             </div>
-            <section class="ai-section" data-ai-section="bleed">
-              <div class="ai-section-head"><span>压黑边</span><span class="ai-pill">扩边</span></div>
-              <p class="ai-copy">把主体边缘颜色向外压进透明或黑边区域，减少缩放、过滤时的黑边和接缝。自动判断透明背景或黑底；透明模式只修正边缘 RGB，不改变透明度。</p>
+            <section class="ai-section" data-ai-section="edge">
+              <div class="ai-section-head"><span>压黑边</span><span class="ai-pill">向内渐变</span></div>
+              <p class="ai-copy">从四周向内生成黑到白的渐变压边，中间保持原图。透明图片会把压边区域变为透明，而不是涂上黑色。</p>
               <div class="ai-row">
-                <span>背景</span>
-                <select id="bleed-mode">
+                <span>模式</span>
+                <select id="edge-mode">
                   <option value="auto" selected>自动判断</option>
-                  <option value="alpha">透明背景</option>
-                  <option value="black">黑底</option>
+                  <option value="darken">压暗边缘</option>
+                  <option value="alpha">透明边缘</option>
                 </select>
               </div>
               <div class="tile-slider-row">
-                <span>扩边宽度</span>
-                <input id="bleed-radius" type="range" min="1" max="128" step="1" value="8">
-                <input id="bleed-radius-value" class="tile-number" type="number" min="1" max="128" step="1" value="8">
+                <span>向内距离</span>
+                <input id="edge-distance" type="range" min="1" max="1024" step="1" value="128">
+                <input id="edge-distance-value" class="tile-number" type="number" min="1" max="1024" step="1" value="128">
               </div>
               <div class="ai-button-row">
-                <button type="button" class="primary" data-bleed-apply>一键压黑边</button>
+                <button type="button" class="primary" data-edge-apply>一键压黑边</button>
               </div>
             </section>
 
@@ -1293,9 +1293,9 @@ export class TextureView {
     this.aiNormalBlur = this.element.querySelector('#ai-normal-blur') as HTMLInputElement;
     this.aiNormalBlurValue = this.element.querySelector('#ai-normal-blur-value') as HTMLElement;
     this.aiNormalFlipY = this.element.querySelector('#ai-normal-flip-y') as HTMLInputElement;
-    this.bleedMode = this.element.querySelector('#bleed-mode') as HTMLSelectElement;
-    this.bleedRadius = this.element.querySelector('#bleed-radius') as HTMLInputElement;
-    this.bleedRadiusValue = this.element.querySelector('#bleed-radius-value') as HTMLInputElement;
+    this.edgeMode = this.element.querySelector('#edge-mode') as HTMLSelectElement;
+    this.edgeDistance = this.element.querySelector('#edge-distance') as HTMLInputElement;
+    this.edgeDistanceValue = this.element.querySelector('#edge-distance-value') as HTMLInputElement;
     this.tilePreview = this.element.querySelector('#tile-preview') as HTMLCanvasElement;
     this.tilePreviewCtx = this.tilePreview.getContext('2d') as CanvasRenderingContext2D;
     this.tileRepeatX = this.element.querySelector('#tile-repeat-x') as HTMLInputElement;
@@ -1602,22 +1602,22 @@ export class TextureView {
     });
     this.aiNormalFlipY.addEventListener('change', scheduleNormalPreview);
     this.element.querySelector('[data-ai-normal-generate]')?.addEventListener('click', () => this.generateAiNormalMap());
-    const scheduleBleedPreview = (): void => {
-      window.clearTimeout(this.bleedPreviewTimer);
-      this.bleedPreviewTimer = window.setTimeout(() => this.renderBleedPreview(), 100);
+    const scheduleEdgePreview = (): void => {
+      window.clearTimeout(this.edgePreviewTimer);
+      this.edgePreviewTimer = window.setTimeout(() => this.renderEdgePreview(), 100);
     };
-    this.bleedMode.addEventListener('change', scheduleBleedPreview);
-    this.bleedRadius.addEventListener('input', () => {
-      this.bleedRadiusValue.value = this.bleedRadius.value;
-      scheduleBleedPreview();
+    this.edgeMode.addEventListener('change', scheduleEdgePreview);
+    this.edgeDistance.addEventListener('input', () => {
+      this.edgeDistanceValue.value = this.edgeDistance.value;
+      scheduleEdgePreview();
     });
-    this.bleedRadiusValue.addEventListener('change', () => {
-      const value = Math.max(1, Math.min(128, Math.round(Number(this.bleedRadiusValue.value) || 8)));
-      this.bleedRadius.value = String(value);
-      this.bleedRadiusValue.value = String(value);
-      scheduleBleedPreview();
+    this.edgeDistanceValue.addEventListener('change', () => {
+      const value = Math.max(1, Math.min(1024, Math.round(Number(this.edgeDistanceValue.value) || 128)));
+      this.edgeDistance.value = String(value);
+      this.edgeDistanceValue.value = String(value);
+      scheduleEdgePreview();
     });
-    this.element.querySelector('[data-bleed-apply]')?.addEventListener('click', () => this.applyBleedOutput());
+    this.element.querySelector('[data-edge-apply]')?.addEventListener('click', () => this.applyEdgeOutput());
     const scheduleTilePreview = (): void => {
       window.clearTimeout(this.tilePreviewTimer);
       this.tilePreviewTimer = window.setTimeout(() => this.renderTilePreview(), 80);
@@ -3410,7 +3410,7 @@ export class TextureView {
     if (mode !== 'tools') {
       this.clearLivePreview('tile');
       this.clearLivePreview('dispersion');
-      this.clearLivePreview('bleed');
+      this.clearLivePreview('edge');
       this.clearLivePreview('gradient');
       this.clearLivePreview('path');
     }
@@ -4033,18 +4033,18 @@ export class TextureView {
     this.renderTilePreview();
   }
 
-  private bleedSettings(): { mode: 'auto' | 'alpha' | 'black'; radius: number } {
-    const raw = this.bleedMode.value;
-    const mode = raw === 'alpha' || raw === 'black' ? raw : 'auto';
-    const radius = Math.max(1, Math.min(128, Math.round(Number(this.bleedRadius.value) || 8)));
-    return { mode, radius };
+  private edgeSettings(): { mode: 'auto' | 'darken' | 'alpha'; distance: number } {
+    const raw = this.edgeMode.value;
+    const mode = raw === 'darken' || raw === 'alpha' ? raw : 'auto';
+    const distance = Math.max(1, Math.min(1024, Math.round(Number(this.edgeDistance.value) || 128)));
+    return { mode, distance };
   }
 
-  private buildBleedOutput(
+  private buildEdgeOutput(
     width: number,
     height: number,
-    mode: 'auto' | 'alpha' | 'black',
-    radius: number
+    mode: 'auto' | 'darken' | 'alpha',
+    distance: number
   ): HTMLCanvasElement | null {
     if (!this.bitmap || width < 1 || height < 1) return null;
     const source = document.createElement('canvas');
@@ -4055,7 +4055,6 @@ export class TextureView {
     sourceContext.drawImage(this.bitmap as CanvasImageSource, 0, 0, width, height);
     const image = sourceContext.getImageData(0, 0, width, height);
     const data = image.data;
-    const pixels = width * height;
     let hasAlpha = false;
     for (let index = 3; index < data.length; index += 4) {
       if (data[index] < 250) {
@@ -4063,120 +4062,64 @@ export class TextureView {
         break;
       }
     }
-    const resolved = mode === 'auto' ? (hasAlpha ? 'alpha' : 'black') : mode;
-    const background = new Uint8Array(pixels);
-    let backgroundCount = 0;
-    if (resolved === 'alpha') {
-      for (let index = 0; index < pixels; index += 1) {
-        if (data[index * 4 + 3] < 8) {
-          background[index] = 1;
-          backgroundCount += 1;
-        }
-      }
-    } else {
-      // Only the black region connected to the image border counts as margin,
-      // so black details inside the subject are left intact.
-      const queue = new Int32Array(pixels);
-      let head = 0;
-      let tail = 0;
-      const isBlack = (index: number): boolean => {
-        const offset = index * 4;
-        return Math.max(data[offset], data[offset + 1], data[offset + 2]) <= 12;
-      };
-      const seed = (index: number): void => {
-        if (background[index] || !isBlack(index)) return;
-        background[index] = 1;
-        queue[tail++] = index;
-      };
+    const resolved = mode === 'auto' ? (hasAlpha ? 'alpha' : 'darken') : mode;
+    const reach = Math.max(1, Math.min(Math.round(distance), Math.min(width, height) / 2));
+    for (let y = 0; y < height; y += 1) {
+      const edgeY = Math.min(y, height - 1 - y);
       for (let x = 0; x < width; x += 1) {
-        seed(x);
-        seed((height - 1) * width + x);
-      }
-      for (let y = 1; y < height - 1; y += 1) {
-        seed(y * width);
-        seed(y * width + width - 1);
-      }
-      while (head < tail) {
-        const index = queue[head++];
-        const x = index % width;
-        const y = (index / width) | 0;
-        if (x > 0) seed(index - 1);
-        if (x + 1 < width) seed(index + 1);
-        if (y > 0) seed(index - width);
-        if (y + 1 < height) seed(index + width);
-      }
-      backgroundCount = tail;
-    }
-    if (backgroundCount === 0 || backgroundCount === pixels) return source;
-    const filled = new Uint8Array(pixels);
-    for (let index = 0; index < pixels; index += 1) filled[index] = background[index] ? 0 : 1;
-    const next = new Uint8Array(pixels);
-    const passes = Math.max(1, Math.min(128, Math.round(radius)));
-    for (let pass = 0; pass < passes; pass += 1) {
-      let changed = false;
-      next.set(filled);
-      for (let y = 0; y < height; y += 1) {
-        for (let x = 0; x < width; x += 1) {
-          const index = y * width + x;
-          if (filled[index]) continue;
-          let neighbor = -1;
-          if (x > 0 && filled[index - 1]) neighbor = index - 1;
-          else if (y > 0 && filled[index - width]) neighbor = index - width;
-          else if (x + 1 < width && filled[index + 1]) neighbor = index + 1;
-          else if (y + 1 < height && filled[index + width]) neighbor = index + width;
-          if (neighbor < 0) continue;
-          const offset = index * 4;
-          const sourceOffset = neighbor * 4;
-          const alpha = data[offset + 3];
-          data[offset] = data[sourceOffset];
-          data[offset + 1] = data[sourceOffset + 1];
-          data[offset + 2] = data[sourceOffset + 2];
-          if (resolved === 'alpha') data[offset + 3] = alpha;
-          next[index] = 1;
-          changed = true;
+        const edgeX = Math.min(x, width - 1 - x);
+        const t = Math.min(1, Math.min(edgeX, edgeY) / reach);
+        // Smooth black-to-white falloff: 0 at the border, 1 at the center.
+        const factor = t * t * (3 - 2 * t);
+        if (factor >= 1) continue;
+        const offset = (y * width + x) * 4;
+        if (resolved === 'alpha') {
+          data[offset + 3] = Math.round(data[offset + 3] * factor);
+        } else {
+          data[offset] = Math.round(data[offset] * factor);
+          data[offset + 1] = Math.round(data[offset + 1] * factor);
+          data[offset + 2] = Math.round(data[offset + 2] * factor);
         }
       }
-      filled.set(next);
-      if (!changed) break;
     }
     sourceContext.putImageData(image, 0, 0);
     return source;
   }
 
-  private renderBleedPreview(): void {
-    const section = this.element.querySelector('[data-ai-section="bleed"]') as HTMLElement | null;
+  private renderEdgePreview(): void {
+    const section = this.element.querySelector('[data-ai-section="edge"]') as HTMLElement | null;
     if (!this.bitmap || this.panelMode !== 'tools' || !section || section.classList.contains('collapsed')) {
-      this.clearLivePreview('bleed');
+      this.clearLivePreview('edge');
       return;
     }
-    const { mode, radius } = this.bleedSettings();
+    const { mode, distance } = this.edgeSettings();
     const maxSize = 512;
     const scale = Math.min(1, maxSize / Math.max(this.imageWidth, this.imageHeight, 1));
     const width = Math.max(1, Math.round(this.imageWidth * scale));
     const height = Math.max(1, Math.round(this.imageHeight * scale));
-    const output = this.buildBleedOutput(width, height, mode, Math.max(1, Math.round(radius * scale)));
-    if (output) this.showLivePreview('bleed', output);
-    else this.clearLivePreview('bleed');
+    const output = this.buildEdgeOutput(width, height, mode, Math.max(1, Math.round(distance * scale)));
+    if (output) this.showLivePreview('edge', output);
+    else this.clearLivePreview('edge');
   }
 
-  private applyBleedOutput(): void {
+  private applyEdgeOutput(): void {
     if (!this.bitmap) {
       this.callbacks.toast('请先打开一张贴图', 'info');
       return;
     }
-    const { mode, radius } = this.bleedSettings();
-    const output = this.buildBleedOutput(this.imageWidth, this.imageHeight, mode, radius);
+    const { mode, distance } = this.edgeSettings();
+    const output = this.buildEdgeOutput(this.imageWidth, this.imageHeight, mode, distance);
     if (!output) return;
-    this.clearLivePreview('bleed');
+    this.clearLivePreview('edge');
     this.applyAiGeneratedImage(
       output,
       output.width,
       output.height,
-      `${this.currentBaseName()}_bleed.png`,
+      `${this.currentBaseName()}_edge.png`,
       output.width * output.height * 4
     );
     this.setPanelMode('tools');
-    this.callbacks.toast(`已压黑边：${mode === 'auto' ? '自动判断' : mode === 'alpha' ? '透明背景' : '黑底'} · ${radius}px`, 'success');
+    this.callbacks.toast(`已压黑边：${mode === 'auto' ? '自动判断' : mode === 'darken' ? '压暗边缘' : '透明边缘'} · ${distance}px`, 'success');
   }
 
   private buildDispersionOutput(): HTMLCanvasElement | null {
@@ -5915,7 +5858,7 @@ export class TextureView {
   }
 
   private bindLivePreviewSections(): void {
-    const keys = ['cutout', 'normal', 'tile', 'dispersion', 'bleed', 'gradient', 'sequence', 'path'];
+    const keys = ['cutout', 'normal', 'tile', 'dispersion', 'edge', 'gradient', 'sequence', 'path'];
     for (const key of keys) {
       const section = this.element.querySelector(`[data-ai-section="${key}"]`) as HTMLElement | null;
       if (!section) continue;
@@ -5942,7 +5885,7 @@ export class TextureView {
     window.clearTimeout(this.normalPreviewTimer);
     window.clearTimeout(this.tilePreviewTimer);
     window.clearTimeout(this.dispersionTimer);
-    window.clearTimeout(this.bleedPreviewTimer);
+    window.clearTimeout(this.edgePreviewTimer);
     window.clearTimeout(this.gradientTimer);
     window.clearTimeout(this.pathTimer);
   }
