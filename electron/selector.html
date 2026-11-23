@@ -293,14 +293,28 @@
           rect = clampRect(x, y, width, height);
           const { x: left, y: top, width: w, height: h } = rect;
           shadeFull.style.display = 'none';
+          // Set each side individually: assigning cssText would wipe the
+          // display:block set above and leave the outside area unshaded.
           shadeTop.style.display = 'block';
+          shadeTop.style.left = '0';
+          shadeTop.style.top = '0';
+          shadeTop.style.width = '100%';
+          shadeTop.style.height = `${top}px`;
           shadeBottom.style.display = 'block';
+          shadeBottom.style.left = '0';
+          shadeBottom.style.top = `${top + h}px`;
+          shadeBottom.style.width = '100%';
+          shadeBottom.style.height = `${Math.max(0, window.innerHeight - top - h)}px`;
           shadeLeft.style.display = 'block';
+          shadeLeft.style.left = '0';
+          shadeLeft.style.top = `${top}px`;
+          shadeLeft.style.width = `${left}px`;
+          shadeLeft.style.height = `${h}px`;
           shadeRight.style.display = 'block';
-          shadeTop.style.cssText = `left:0;top:0;width:100%;height:${top}px;`;
-          shadeBottom.style.cssText = `left:0;top:${top + h}px;width:100%;height:${Math.max(0, window.innerHeight - top - h)}px;`;
-          shadeLeft.style.cssText = `left:0;top:${top}px;width:${left}px;height:${h}px;`;
-          shadeRight.style.cssText = `left:${left + w}px;top:${top}px;width:${Math.max(0, window.innerWidth - left - w)}px;height:${h}px;`;
+          shadeRight.style.left = `${left + w}px`;
+          shadeRight.style.top = `${top}px`;
+          shadeRight.style.width = `${Math.max(0, window.innerWidth - left - w)}px`;
+          shadeRight.style.height = `${h}px`;
           selection.style.display = 'block';
           selection.style.left = `${left}px`;
           selection.style.top = `${top}px`;

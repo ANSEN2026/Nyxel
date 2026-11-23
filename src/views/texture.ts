@@ -375,8 +375,6 @@ export class TextureView {
   private edgeAuxOptions: Array<{ name: string; path: string }> = [];
   private edgeAuxLoadToken = 0;
   private edgePreviewTimer = 0;
-  private sectionUndoHistory = new Map<string, Array<Array<{ value: string; checked: boolean }>>>();
-  private sectionUndoSnapshots = new Map<string, string>();
 
   private dispersionPreview: HTMLCanvasElement;
   private dispersionCtx: CanvasRenderingContext2D;
@@ -3083,31 +3081,23 @@ export class TextureView {
       body.className = 'ai-section-body';
       while (head.nextSibling) body.append(head.nextSibling);
       section.append(body);
-      const undoButton = document.createElement('button');
-      undoButton.type = 'button';
-      undoButton.className = 'ai-section-undo';
-      undoButton.title = '暂无可撤回的参数';
-      undoButton.disabled = true;
-      undoButton.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6 4 10l4 4"/><path d="M4 10h8a4 4 0 0 1 0 8h-1"/></svg>';
-      undoButton.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.restoreSectionUndo(key, section);
-      });
-      undoButton.addEventListener('keydown', (event) => event.stopPropagation());
-      head.append(undoButton);
+      if (section.querySelector('input:not([type="file"]), select')) {
+        const resetButton = document.createElement('button');
+        resetButton.type = 'button';
+        resetButton.className = 'ai-section-undo';
+        resetButton.title = '回到未调参数';
+        resetButton.setAttribute('aria-label', '回到未调参数');
+        resetButton.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10a6 6 0 1 1 1.8 4.3"/><path d="M4 5v5h5"/></svg>';
+        resetButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.resetSectionParameters(key, section);
+        });
+        resetButton.addEventListener('keydown', (event) => event.stopPropagation());
+        head.append(resetButton);
+      }
       head.setAttribute('role', 'button');
       head.setAttribute('tabindex', '0');
-      section.addEventListener('pointerdown', (event) => {
-        const target = event.target as HTMLElement | null;
-        if (target?.closest('.ai-section-head')) return;
-        this.recordSectionUndo(key, section);
-      }, true);
-      section.addEventListener('focusin', (event) => {
-        const target = event.target as HTMLElement | null;
-        if (target?.closest('.ai-section-head')) return;
-        this.recordSectionUndo(key, section);
-      }, true);
       const apply = (collapsed: boolean): void => {
         section.classList.toggle('collapsed', collapsed);
         head.setAttribute('aria-expanded', String(!collapsed));
@@ -6243,82 +6233,83 @@ export class TextureView {
     this.aiSeqStatus.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 单元格 ${index + 1} · 旋转 ${frame.rotation}°`;
   }
 
-  private sectionUndoControls(section: HTMLElement): Array<HTMLInputElement | HTMLSelectElement> {
-    return [...section.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')]
-      .filter((control) => !(control instanceof HTMLInputElement && control.type === 'file'));
+  private resetAiSequenceParameters(): void {
+    this.stopAiSequence();
+    this.aiSeqSource.value = 'parent';
+    this.aiSeqCols.value = '7';
+    this.aiSeqRows.value = '7';
+    this.aiSeqRotation.value = '0';
+    this.aiSeqFrameRotation.value = '0';
+    this.aiSeqFps.value = '12';
+    this.aiSeqFpsValue.textContent = '12';
+    this.aiSeqLoop.checked = true;
+    this.aiSeqRegion = { x: 0, y: 0, width: 1, height: 1 };
+    this.aiSeqRegionSelecting = false;
+    this.aiSeqRegionDraft = null;
+    this.aiSeqRegionStatus.textContent = '整图';
+    this.element.querySelector('[data-ai-seq-region]')?.classList.remove('active');
+    this.aiSeqFrameRotations.clear();
+    this.aiSeqPreviewRotation = null;
+    this.aiSeqFrameIndex = 0;
+    this.resetAiSequenceSelection();
+    this.renderAiSequenceGrid();
+    this.renderAiSequencePreview();
   }
 
-  private updateSectionUndoButton(key: string, section: HTMLElement): void {
-    const button = section.querySelector('.ai-section-undo') as HTMLButtonElement | null;
-    if (!button) return;
-    const available = (this.sectionUndoHistory.get(key)?.length ?? 0) > 0;
-    button.disabled = !available;
-    button.title = available ? '撤回本节参数' : '暂无可撤回的参数';
-  }
-
-  private recordSectionUndo(key: string, section: HTMLElement): void {
-    if (this.restoringUndo) return;
-    const snapshot = this.sectionUndoControls(section).map((control) => ({
-      value: control.value,
-      checked: control instanceof HTMLInputElement ? control.checked : false
-    }));
-    const signature = JSON.stringify(snapshot);
-    if (this.sectionUndoSnapshots.get(key) === signature) return;
-    const history = this.sectionUndoHistory.get(key) ?? [];
-    history.push(snapshot);
-    if (history.length > 20) history.shift();
-    this.sectionUndoHistory.set(key, history);
-    this.sectionUndoSnapshots.set(key, signature);
-    this.updateSectionUndoButton(key, section);
-  }
-
-  private refreshSectionPreview(key: string): void {
-    if (key === 'edge') this.renderEdgePreview();
-    else if (key === 'tile') this.renderTilePreview();
-    else if (key === 'dispersion') this.renderDispersionPreview();
-    else if (key === 'gradient') this.renderGradientEditor();
-    else if (key === 'path') this.renderPathGradient();
-    else if (key === 'cutout') this.updateAiCutoutPreview();
-    else if (key === 'normal') this.updateAiNormalPreview();
-    else if (key === 'sequence') this.renderAiSequenceGrid();
-  }
-
-  private restoreSectionUndo(key: string, section: HTMLElement): void {
-    const history = this.sectionUndoHistory.get(key);
-    if (!history?.length) return;
-    const snapshot = history.pop();
-    if (!snapshot) return;
-    const controls = this.sectionUndoControls(section);
-    this.restoringUndo = true;
-    try {
-      controls.forEach((control, index) => {
-        const state = snapshot[index];
-        if (!state) return;
-        if (control instanceof HTMLInputElement && (control.type === 'checkbox' || control.type === 'radio')) {
-          control.checked = state.checked;
-        } else {
-          control.value = state.value;
-        }
-      });
-      for (const control of controls) {
-        control.dispatchEvent(new Event('input', { bubbles: true }));
-        control.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    } finally {
-      this.restoringUndo = false;
+  // Reset the section's controls to their unadjusted defaults. The left preview
+  // then falls back to the imported image instead of the last adjusted result.
+  private resetSectionParameters(key: string, _section: HTMLElement): void {
+    switch (key) {
+      case 'cutout':
+        this.aiCutTolerance.value = '28';
+        this.aiCutToleranceValue.textContent = '28';
+        this.aiCutFeather.value = '6';
+        this.aiCutFeatherValue.textContent = '6';
+        this.updateAiCutoutPreview();
+        break;
+      case 'normal':
+        this.aiNormalStrength.value = '2';
+        this.aiNormalStrengthValue.textContent = '2.0';
+        this.aiNormalBlur.value = '0';
+        this.aiNormalBlurValue.textContent = '0';
+        this.aiNormalFlipY.checked = false;
+        this.updateAiNormalPreview();
+        break;
+      case 'tile':
+        this.resetTileControls();
+        break;
+      case 'dispersion':
+        this.resetDispersionControls();
+        break;
+      case 'edge':
+        this.edgeMode.value = 'auto';
+        this.edgeDistance.value = '128';
+        this.edgeDistanceValue.value = '128';
+        this.edgeSoftness.value = '50';
+        this.edgeSoftnessValue.value = '50';
+        this.edgeAuxShow.checked = false;
+        this.edgeAuxBlend.value = 'multiply';
+        this.edgeAuxBrightness.value = '0';
+        this.edgeAuxBrightnessValue.value = '0';
+        this.edgeAuxContrast.value = '0';
+        this.edgeAuxContrastValue.value = '0';
+        void this.loadDefaultEdgeAux(false);
+        this.renderEdgePreview();
+        break;
+      case 'gradient':
+        this.resetGradient();
+        break;
+      case 'path':
+        this.resetPathGradient();
+        break;
+      case 'sequence':
+        this.resetAiSequenceParameters();
+        break;
+      default:
+        break;
     }
-    this.sectionUndoSnapshots.set(key, JSON.stringify(snapshot));
-    this.refreshSectionPreview(key);
-    this.updateSectionUndoButton(key, section);
-  }
-
-  private clearSectionUndoHistory(): void {
-    this.sectionUndoHistory.clear();
-    this.sectionUndoSnapshots.clear();
-    this.element.querySelectorAll<HTMLElement>('.ai-section[data-ai-section]').forEach((section) => {
-      const key = section.dataset.aiSection;
-      if (key) this.updateSectionUndoButton(key, section);
-    });
+    this.clearAllLivePreviews();
+    this.callbacks.toast('已回到未调参数', 'info');
   }
 
   private bindLivePreviewSections(): void {
@@ -6851,7 +6842,6 @@ export class TextureView {
     this.element.classList.remove('has-image');
     this.textureCanvas = null;
     this.textureContext = null;
-    this.clearSectionUndoHistory();
   }
 
   private fit(): void {
