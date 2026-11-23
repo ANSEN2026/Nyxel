@@ -1760,6 +1760,35 @@ label {
   margin-left: auto;
 }
 
+.ai-section-undo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.ai-section-undo:not(:disabled):hover {
+  border-color: var(--border);
+  background: var(--panel-3);
+  color: #dce8f5;
+}
+
+.ai-section-undo:disabled {
+  opacity: 0.22;
+  cursor: default;
+}
+
+.ai-section-undo svg {
+  width: 13px;
+  height: 13px;
+}
+
 .ai-section-head::after {
   content: '▾';
   flex: none;

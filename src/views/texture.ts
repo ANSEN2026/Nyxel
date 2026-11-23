@@ -375,6 +375,8 @@ export class TextureView {
   private edgeAuxOptions: Array<{ name: string; path: string }> = [];
   private edgeAuxLoadToken = 0;
   private edgePreviewTimer = 0;
+  private sectionUndoHistory = new Map<string, Array<Array<{ value: string; checked: boolean }>>>();
+  private sectionUndoSnapshots = new Map<string, string>();
 
   private dispersionPreview: HTMLCanvasElement;
   private dispersionCtx: CanvasRenderingContext2D;
@@ -928,8 +930,8 @@ export class TextureView {
               </div>
               <div class="tile-slider-row">
                 <span>向内距离</span>
-                <input id="edge-distance" type="range" min="1" max="1024" step="1" value="128">
-                <input id="edge-distance-value" class="tile-number" type="number" min="1" max="1024" step="1" value="128">
+                <input id="edge-distance" type="range" min="0" max="1024" step="1" value="128">
+                <input id="edge-distance-value" class="tile-number" type="number" min="0" max="1024" step="1" value="128">
               </div>
               <div class="tile-slider-row">
                 <span title="0 = 柔边，100 = 硬边">柔硬边强度</span>
@@ -1693,7 +1695,8 @@ export class TextureView {
       scheduleEdgePreview();
     });
     this.edgeDistanceValue.addEventListener('change', () => {
-      const value = Math.max(1, Math.min(1024, Math.round(Number(this.edgeDistanceValue.value) || 128)));
+      const parsed = Number(this.edgeDistanceValue.value);
+      const value = Math.max(0, Math.min(1024, Math.round(Number.isFinite(parsed) ? parsed : 128)));
       this.edgeDistance.value = String(value);
       this.edgeDistanceValue.value = String(value);
       scheduleEdgePreview();
@@ -1703,7 +1706,8 @@ export class TextureView {
       scheduleEdgePreview();
     });
     this.edgeSoftnessValue.addEventListener('change', () => {
-      const value = Math.max(0, Math.min(100, Math.round(Number(this.edgeSoftnessValue.value) || 50)));
+      const parsed = Number(this.edgeSoftnessValue.value);
+      const value = Math.max(0, Math.min(100, Math.round(Number.isFinite(parsed) ? parsed : 50)));
       this.edgeSoftness.value = String(value);
       this.edgeSoftnessValue.value = String(value);
       scheduleEdgePreview();
@@ -3079,8 +3083,31 @@ export class TextureView {
       body.className = 'ai-section-body';
       while (head.nextSibling) body.append(head.nextSibling);
       section.append(body);
+      const undoButton = document.createElement('button');
+      undoButton.type = 'button';
+      undoButton.className = 'ai-section-undo';
+      undoButton.title = '暂无可撤回的参数';
+      undoButton.disabled = true;
+      undoButton.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6 4 10l4 4"/><path d="M4 10h8a4 4 0 0 1 0 8h-1"/></svg>';
+      undoButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.restoreSectionUndo(key, section);
+      });
+      undoButton.addEventListener('keydown', (event) => event.stopPropagation());
+      head.append(undoButton);
       head.setAttribute('role', 'button');
       head.setAttribute('tabindex', '0');
+      section.addEventListener('pointerdown', (event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('.ai-section-head')) return;
+        this.recordSectionUndo(key, section);
+      }, true);
+      section.addEventListener('focusin', (event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('.ai-section-head')) return;
+        this.recordSectionUndo(key, section);
+      }, true);
       const apply = (collapsed: boolean): void => {
         section.classList.toggle('collapsed', collapsed);
         head.setAttribute('aria-expanded', String(!collapsed));
@@ -4324,8 +4351,10 @@ export class TextureView {
   private edgeSettings(): { mode: 'auto' | 'darken' | 'alpha'; distance: number; softness: number } {
     const raw = this.edgeMode.value;
     const mode = raw === 'darken' || raw === 'alpha' ? raw : 'auto';
-    const distance = Math.max(1, Math.min(1024, Math.round(Number(this.edgeDistance.value) || 128)));
-    const softness = Math.max(0, Math.min(100, Math.round(Number(this.edgeSoftness.value) || 50)));
+    const distanceValue = Number(this.edgeDistance.value);
+    const softnessValue = Number(this.edgeSoftness.value);
+    const distance = Math.max(0, Math.min(1024, Math.round(Number.isFinite(distanceValue) ? distanceValue : 128)));
+    const softness = Math.max(0, Math.min(100, Math.round(Number.isFinite(softnessValue) ? softnessValue : 50)));
     return { mode, distance, softness };
   }
 
@@ -4343,6 +4372,7 @@ export class TextureView {
     const sourceContext = source.getContext('2d', { willReadFrequently: true });
     if (!sourceContext) return null;
     sourceContext.drawImage(this.bitmap as CanvasImageSource, 0, 0, width, height);
+    if (distance <= 0) return source;
     const image = sourceContext.getImageData(0, 0, width, height);
     const data = image.data;
     let hasAlpha = false;
@@ -4440,6 +4470,10 @@ export class TextureView {
       }
     }
     const { mode, distance, softness } = this.edgeSettings();
+    if (distance <= 0) {
+      this.clearLivePreview('edge');
+      return;
+    }
     const maxSize = 512;
     const scale = Math.min(1, maxSize / Math.max(this.imageWidth, this.imageHeight, 1));
     const width = Math.max(1, Math.round(this.imageWidth * scale));
@@ -4455,6 +4489,11 @@ export class TextureView {
       return;
     }
     const { mode, distance, softness } = this.edgeSettings();
+    if (distance <= 0) {
+      this.clearLivePreview('edge');
+      this.callbacks.toast('向内距离为 0，当前就是原图', 'info');
+      return;
+    }
     const output = this.buildEdgeOutput(this.imageWidth, this.imageHeight, mode, distance, softness);
     if (!output) return;
     this.clearLivePreview('edge');
@@ -6204,6 +6243,84 @@ export class TextureView {
     this.aiSeqStatus.textContent = `帧 ${displayIndex + 1} / ${frames.length} · 单元格 ${index + 1} · 旋转 ${frame.rotation}°`;
   }
 
+  private sectionUndoControls(section: HTMLElement): Array<HTMLInputElement | HTMLSelectElement> {
+    return [...section.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')]
+      .filter((control) => !(control instanceof HTMLInputElement && control.type === 'file'));
+  }
+
+  private updateSectionUndoButton(key: string, section: HTMLElement): void {
+    const button = section.querySelector('.ai-section-undo') as HTMLButtonElement | null;
+    if (!button) return;
+    const available = (this.sectionUndoHistory.get(key)?.length ?? 0) > 0;
+    button.disabled = !available;
+    button.title = available ? '撤回本节参数' : '暂无可撤回的参数';
+  }
+
+  private recordSectionUndo(key: string, section: HTMLElement): void {
+    if (this.restoringUndo) return;
+    const snapshot = this.sectionUndoControls(section).map((control) => ({
+      value: control.value,
+      checked: control instanceof HTMLInputElement ? control.checked : false
+    }));
+    const signature = JSON.stringify(snapshot);
+    if (this.sectionUndoSnapshots.get(key) === signature) return;
+    const history = this.sectionUndoHistory.get(key) ?? [];
+    history.push(snapshot);
+    if (history.length > 20) history.shift();
+    this.sectionUndoHistory.set(key, history);
+    this.sectionUndoSnapshots.set(key, signature);
+    this.updateSectionUndoButton(key, section);
+  }
+
+  private refreshSectionPreview(key: string): void {
+    if (key === 'edge') this.renderEdgePreview();
+    else if (key === 'tile') this.renderTilePreview();
+    else if (key === 'dispersion') this.renderDispersionPreview();
+    else if (key === 'gradient') this.renderGradientEditor();
+    else if (key === 'path') this.renderPathGradient();
+    else if (key === 'cutout') this.updateAiCutoutPreview();
+    else if (key === 'normal') this.updateAiNormalPreview();
+    else if (key === 'sequence') this.renderAiSequenceGrid();
+  }
+
+  private restoreSectionUndo(key: string, section: HTMLElement): void {
+    const history = this.sectionUndoHistory.get(key);
+    if (!history?.length) return;
+    const snapshot = history.pop();
+    if (!snapshot) return;
+    const controls = this.sectionUndoControls(section);
+    this.restoringUndo = true;
+    try {
+      controls.forEach((control, index) => {
+        const state = snapshot[index];
+        if (!state) return;
+        if (control instanceof HTMLInputElement && (control.type === 'checkbox' || control.type === 'radio')) {
+          control.checked = state.checked;
+        } else {
+          control.value = state.value;
+        }
+      });
+      for (const control of controls) {
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    } finally {
+      this.restoringUndo = false;
+    }
+    this.sectionUndoSnapshots.set(key, JSON.stringify(snapshot));
+    this.refreshSectionPreview(key);
+    this.updateSectionUndoButton(key, section);
+  }
+
+  private clearSectionUndoHistory(): void {
+    this.sectionUndoHistory.clear();
+    this.sectionUndoSnapshots.clear();
+    this.element.querySelectorAll<HTMLElement>('.ai-section[data-ai-section]').forEach((section) => {
+      const key = section.dataset.aiSection;
+      if (key) this.updateSectionUndoButton(key, section);
+    });
+  }
+
   private bindLivePreviewSections(): void {
     const keys = ['cutout', 'normal', 'tile', 'dispersion', 'edge', 'gradient', 'sequence', 'path'];
     for (const key of keys) {
@@ -6734,6 +6851,7 @@ export class TextureView {
     this.element.classList.remove('has-image');
     this.textureCanvas = null;
     this.textureContext = null;
+    this.clearSectionUndoHistory();
   }
 
   private fit(): void {
