@@ -2250,11 +2250,12 @@ function resolveCapture(result: CaptureResult): void {
 
 function createSelectorWindow(session: SelectorSession): void {
   const { display, image } = session;
+  const work = display.workArea;
   const win = new BrowserWindow({
-    x: display.bounds.x,
-    y: display.bounds.y,
-    width: display.bounds.width,
-    height: display.bounds.height,
+    x: work.x,
+    y: work.y,
+    width: work.width,
+    height: work.height,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -2276,17 +2277,16 @@ function createSelectorWindow(session: SelectorSession): void {
 
   selectorWindows.push(win);
   selectorSessions.set(win.id, session);
-  // Windows clamps a new window to the work area (taskbar excluded), which would
-  // squeeze the capture and cut off the bottom/right edge. Re-apply the full
-  // display bounds after construction so the overlay maps 1:1 to the screenshot.
-  win.setBounds(display.bounds);
+  // Use the work area so the Windows taskbar is not part of the capture or the
+  // selection overlay. The screenshot image is cropped to the same rectangle.
+  win.setBounds(work);
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setIgnoreMouseEvents(false);
 
   win.webContents.on('did-finish-load', () => {
     win.webContents.send('selector:image', image.toDataURL());
-    win.setBounds(display.bounds);
+    win.setBounds(work);
     win.show();
     win.focus();
   });
@@ -2429,7 +2429,16 @@ async function captureRegion(): Promise<CaptureResult> {
       const source = sources.find((item) => item.display_id === String(display.id))
         ?? (displays.length === 1 ? sources[0] : undefined);
       if (!source || source.thumbnail.isEmpty()) continue;
-      sessions.push({ display, image: source.thumbnail });
+      const imageSize = source.thumbnail.getSize();
+      const ratioX = imageSize.width / Math.max(1, display.bounds.width);
+      const ratioY = imageSize.height / Math.max(1, display.bounds.height);
+      const work = display.workArea;
+      const cropX = Math.max(0, Math.round((work.x - display.bounds.x) * ratioX));
+      const cropY = Math.max(0, Math.round((work.y - display.bounds.y) * ratioY));
+      const cropWidth = Math.max(1, Math.min(imageSize.width - cropX, Math.round(work.width * ratioX)));
+      const cropHeight = Math.max(1, Math.min(imageSize.height - cropY, Math.round(work.height * ratioY)));
+      const image = source.thumbnail.crop({ x: cropX, y: cropY, width: cropWidth, height: cropHeight });
+      sessions.push({ display, image });
     } catch (error) {
       console.error('capture display failed', display.id, error);
     }
@@ -4295,19 +4304,48 @@ function registerIpc(): void {
     height: number;
     viewportWidth?: number;
     viewportHeight?: number;
+    dataUrl?: string;
   }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || !selectorResolver || captureInEditor) return;
     const session = selectorSessions.get(win.id);
     if (!session) return;
+    if (rect?.dataUrl) {
+      void (async () => {
+        try {
+          const buffer = dataUrlToPngBuffer(rect.dataUrl as string);
+          const settings = loadSettings();
+          const dir = settings.screenshotDir || path.join(settings.exportDir, 'Screenshots');
+          await fs.promises.mkdir(dir, { recursive: true });
+          const filePath = path.join(dir, `Nyxel_${timestamp()}.png`);
+          await fs.promises.writeFile(filePath, buffer);
+          await clipboard.write([
+            new ClipboardItem({
+              'image/png': new Blob([new Uint8Array(buffer)], { type: 'image/png' })
+            })
+          ]);
+          try {
+            await recordScreenshot(buffer);
+          } catch (error) {
+            console.error('record screenshot failed', error);
+          }
+          resolveCapture({ ok: true, path: filePath, copied: true });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          resolveCapture({ ok: false, error: message });
+        }
+      })();
+      return;
+    }
     try {
       if (!rect || rect.width < 1 || rect.height < 1) {
         resolveCapture({ ok: false, cancelled: true });
         return;
       }
       const size = session.image.getSize();
-      const viewportWidth = Number(rect.viewportWidth) > 0 ? Number(rect.viewportWidth) : session.display.bounds.width;
-      const viewportHeight = Number(rect.viewportHeight) > 0 ? Number(rect.viewportHeight) : session.display.bounds.height;
+      const work = session.display.workArea;
+      const viewportWidth = Number(rect.viewportWidth) > 0 ? Number(rect.viewportWidth) : work.width;
+      const viewportHeight = Number(rect.viewportHeight) > 0 ? Number(rect.viewportHeight) : work.height;
       const scaleX = size.width / Math.max(1, viewportWidth);
       const scaleY = size.height / Math.max(1, viewportHeight);
       const x = Math.max(0, Math.min(size.width - 1, Math.round(rect.x * scaleX)));

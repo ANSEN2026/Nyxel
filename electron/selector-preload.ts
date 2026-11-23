@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('selector', {
     height: number;
     viewportWidth: number;
     viewportHeight: number;
+    dataUrl?: string;
   }) => {
     ipcRenderer.send('selector:confirm', rect);
   },

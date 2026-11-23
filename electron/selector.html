@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Nyxel 截图</title>
+    <title>Texture map 截图</title>
     <style>
       * { box-sizing: border-box; }
       html, body {
@@ -19,14 +19,15 @@
       #screen {
         position: fixed;
         inset: 0;
-        background-color: #000;
+        background-color: #111;
         background-repeat: no-repeat;
         background-size: 100% 100%;
       }
       .shade {
         position: fixed;
-        background: rgba(0, 0, 0, 0.46);
+        background: rgba(118, 118, 118, 0.52);
         pointer-events: none;
+        z-index: 1;
       }
       #shade-full { inset: 0; }
       #shade-top, #shade-bottom, #shade-left, #shade-right { display: none; }
@@ -34,9 +35,23 @@
         position: fixed;
         display: none;
         border: 1px solid #00e676;
-        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65), inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
         pointer-events: none;
-        z-index: 2;
+        z-index: 4;
+      }
+      #selection::before {
+        content: '';
+        position: absolute;
+        inset: -1px;
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        pointer-events: none;
+      }
+      #annotation {
+        position: fixed;
+        display: none;
+        z-index: 3;
+        touch-action: none;
+        cursor: crosshair;
       }
       #hint {
         position: fixed;
@@ -45,53 +60,113 @@
         transform: translateX(-50%);
         padding: 7px 13px;
         border-radius: 999px;
-        background: rgba(20, 20, 20, 0.8);
+        background: rgba(20, 20, 20, 0.82);
         color: #ececec;
         font-size: 12px;
         letter-spacing: 0.2px;
         white-space: nowrap;
         pointer-events: none;
-        z-index: 4;
+        z-index: 6;
       }
       #toolbar {
         position: fixed;
-        left: 50%;
-        bottom: 26px;
-        transform: translateX(-50%);
         display: none;
         align-items: center;
-        gap: 10px;
-        padding: 8px 10px;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 10px;
-        background: rgba(20, 20, 20, 0.92);
+        gap: 5px;
+        padding: 5px 7px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+        background: rgba(26, 26, 26, 0.96);
         color: #ececec;
-        font-size: 12px;
-        box-shadow: 0 10px 36px rgba(0, 0, 0, 0.36);
-        z-index: 5;
-      }
-      #size {
-        min-width: 84px;
-        color: #b0b0b0;
-        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        z-index: 7;
+        cursor: default;
+        white-space: nowrap;
       }
       #toolbar button {
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        border-radius: 7px;
-        padding: 6px 12px;
-        background: rgba(255, 255, 255, 0.08);
-        color: #ececec;
+        display: grid;
+        place-items: center;
+        width: 27px;
+        height: 26px;
+        padding: 0;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        background: transparent;
+        color: #d6d6d6;
         font: inherit;
+        font-size: 11px;
         cursor: pointer;
       }
-      #toolbar button:hover { background: rgba(255, 255, 255, 0.16); }
-      #toolbar button.primary {
-        background: #a6d0b5;
-        border-color: #a6d0b5;
-        color: #0c3626;
+      #toolbar button:hover {
+        border-color: rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
       }
-      #toolbar button.primary:hover { background: #8fc3a2; }
-      #toolbar button.cancel { color: #fca5a5; }
+      #toolbar button.active {
+        border-color: rgba(0, 200, 255, 0.55);
+        background: rgba(0, 150, 220, 0.24);
+        color: #7fe3ff;
+      }
+      #toolbar button svg {
+        width: 15px;
+        height: 15px;
+      }
+      #toolbar .divider {
+        width: 1px;
+        height: 18px;
+        margin: 0 3px;
+        background: rgba(255, 255, 255, 0.12);
+      }
+      #toolbar .swatches {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      #toolbar .swatch {
+        width: 14px;
+        height: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        border-radius: 50%;
+        background: var(--swatch);
+      }
+      #toolbar .swatch.active {
+        box-shadow: 0 0 0 2px #0a84ff, 0 0 0 3px rgba(255, 255, 255, 0.85);
+      }
+      #toolbar .brush {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 0 3px;
+        color: #a9a9a9;
+      }
+      #toolbar .brush input {
+        width: 58px;
+        accent-color: #0a84ff;
+      }
+      #size {
+        min-width: 54px;
+        color: #b9b9b9;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      #toolbar #confirm {
+        width: auto;
+        min-width: 56px;
+        padding: 0 10px;
+        border-color: #2f9cff;
+        background: #2f9cff;
+        color: #fff;
+        font-weight: 600;
+      }
+      #toolbar #confirm:hover {
+        background: #4aa9ff;
+        border-color: #4aa9ff;
+      }
+      #toolbar #cancel {
+        width: 26px;
+        color: #ff9a9a;
+      }
     </style>
   </head>
   <body>
@@ -101,12 +176,43 @@
     <div id="shade-bottom" class="shade"></div>
     <div id="shade-left" class="shade"></div>
     <div id="shade-right" class="shade"></div>
+    <canvas id="annotation"></canvas>
     <div id="selection"></div>
-    <div id="hint">拖动选择区域 · 双击 / Enter 下一步 · Esc 取消</div>
+    <div id="hint">拖动框选区域 · 框选后可直接标记 · Enter 确定 · Esc 取消</div>
     <div id="toolbar">
+      <button type="button" data-tool="pen" class="active" title="画笔">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4 16 1-3 9-9 2 2-9 9z"/><path d="m13 4 3 3"/></svg>
+      </button>
+      <button type="button" data-tool="highlighter" title="荧光笔">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 14 7-7 3 3-7 7H5z"/><path d="M4 17h12"/></svg>
+      </button>
+      <button type="button" data-tool="rect" title="矩形">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="5" width="12" height="10" rx="1"/></svg>
+      </button>
+      <button type="button" data-tool="arrow" title="箭头">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16 16 4"/><path d="M9 4h7v7"/></svg>
+      </button>
+      <span class="divider"></span>
+      <div class="swatches">
+        <button type="button" class="swatch active" data-color="#ff3b30" style="--swatch:#ff3b30" title="红色"></button>
+        <button type="button" class="swatch" data-color="#ffd60a" style="--swatch:#ffd60a" title="黄色"></button>
+        <button type="button" class="swatch" data-color="#34c759" style="--swatch:#34c759" title="绿色"></button>
+        <button type="button" class="swatch" data-color="#0a84ff" style="--swatch:#0a84ff" title="蓝色"></button>
+        <button type="button" class="swatch" data-color="#ffffff" style="--swatch:#ffffff" title="白色"></button>
+        <button type="button" class="swatch" data-color="#111111" style="--swatch:#111111" title="黑色"></button>
+      </div>
+      <label class="brush" title="笔刷粗细">粗细<input id="brush-size" type="range" min="1" max="18" step="1" value="4"></label>
+      <span class="divider"></span>
+      <button type="button" id="undo" title="撤销标记">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6 4 10l4 4"/><path d="M4 10h8a4 4 0 0 1 0 8h-1"/></svg>
+      </button>
+      <button type="button" id="clear" title="清空标记">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12M7 6V4h6v2M6 6l1 10h6l1-10"/></svg>
+      </button>
+      <span class="divider"></span>
       <span id="size">0 × 0</span>
-      <button id="save" class="primary">下一步</button>
-      <button id="cancel" class="cancel">取消</button>
+      <button type="button" id="confirm" title="确定并保存/复制">✓ 确定</button>
+      <button type="button" id="cancel" title="取消">✕</button>
     </div>
 
     <script>
@@ -118,19 +224,38 @@
         const shadeLeft = document.getElementById('shade-left');
         const shadeRight = document.getElementById('shade-right');
         const selection = document.getElementById('selection');
+        const annotation = document.getElementById('annotation');
+        const annotationCtx = annotation.getContext('2d');
         const toolbar = document.getElementById('toolbar');
         const sizeEl = document.getElementById('size');
         const hint = document.getElementById('hint');
-        const saveButton = document.getElementById('save');
+        const confirmButton = document.getElementById('confirm');
         const cancelButton = document.getElementById('cancel');
+        const brushSize = document.getElementById('brush-size');
+        const undoButton = document.getElementById('undo');
+        const clearButton = document.getElementById('clear');
+        const toolButtons = [...toolbar.querySelectorAll('[data-tool]')];
+        const swatches = [...toolbar.querySelectorAll('[data-color]')];
 
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        let screenImage = null;
         let dragging = false;
+        let drawing = false;
         let startX = 0;
         let startY = 0;
         let rect = null;
+        let activeTool = 'pen';
+        let activeColor = '#ff3b30';
+        let brushWidth = 4;
+        let operations = [];
+        let currentOperation = null;
+        let drawPointerId = null;
 
         window.selector.onImage((dataUrl) => {
           screenEl.style.backgroundImage = `url("${dataUrl}")`;
+          const image = new Image();
+          image.onload = () => { screenImage = image; };
+          image.src = dataUrl;
         });
 
         function clampRect(x, y, width, height) {
@@ -139,6 +264,29 @@
           const right = Math.max(left, Math.min(window.innerWidth, x + width));
           const bottom = Math.max(top, Math.min(window.innerHeight, y + height));
           return { x: left, y: top, width: right - left, height: bottom - top };
+        }
+
+        function clearAnnotations() {
+          operations = [];
+          currentOperation = null;
+          annotationCtx.clearRect(0, 0, annotation.width, annotation.height);
+        }
+
+        function positionToolbar() {
+          if (!rect) return;
+          toolbar.style.display = 'flex';
+          const width = toolbar.offsetWidth || 430;
+          const height = toolbar.offsetHeight || 40;
+          let left = rect.x;
+          let top = rect.y + rect.height + 8;
+          if (top + height > window.innerHeight - 6) {
+            top = Math.max(6, rect.y + rect.height - height - 8);
+          }
+          if (left + width > window.innerWidth - 6) {
+            left = Math.max(6, window.innerWidth - width - 6);
+          }
+          toolbar.style.left = `${Math.round(left)}px`;
+          toolbar.style.top = `${Math.round(top)}px`;
         }
 
         function updateSelection(x, y, width, height) {
@@ -159,13 +307,24 @@
           selection.style.width = `${w}px`;
           selection.style.height = `${h}px`;
           sizeEl.textContent = `${Math.round(w)} × ${Math.round(h)}`;
-          toolbar.style.display = 'flex';
+          annotation.style.display = 'block';
+          annotation.style.left = `${left}px`;
+          annotation.style.top = `${top}px`;
+          annotation.style.width = `${w}px`;
+          annotation.style.height = `${h}px`;
+          annotation.width = Math.max(1, Math.round(w * dpr));
+          annotation.height = Math.max(1, Math.round(h * dpr));
+          annotationCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          clearAnnotations();
           hint.style.opacity = '0.45';
         }
 
         function resetSelection() {
           rect = null;
+          dragging = false;
+          drawing = false;
           selection.style.display = 'none';
+          annotation.style.display = 'none';
           toolbar.style.display = 'none';
           shadeFull.style.display = 'block';
           shadeTop.style.display = 'none';
@@ -175,21 +334,152 @@
           hint.style.opacity = '1';
         }
 
-        function contains(x, y) {
-          return rect && x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+        function finalizeSelection() {
+          if (!rect || rect.width < 3 || rect.height < 3) {
+            resetSelection();
+            return;
+          }
+          positionToolbar();
+        }
+
+        function drawArrow(ctx, fromX, fromY, toX, toY, color, width) {
+          const angle = Math.atan2(toY - fromY, toX - fromX);
+          const head = Math.max(8, width * 3.2);
+          ctx.strokeStyle = color;
+          ctx.fillStyle = color;
+          ctx.lineWidth = width;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(fromX, fromY);
+          ctx.lineTo(toX, toY);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(toX, toY);
+          ctx.lineTo(toX - head * Math.cos(angle - Math.PI / 6), toY - head * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(toX - head * Math.cos(angle + Math.PI / 6), toY - head * Math.sin(angle + Math.PI / 6));
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        function drawOperation(operation) {
+          const ctx = annotationCtx;
+          ctx.save();
+          if (operation.tool === 'pen' || operation.tool === 'highlighter') {
+            const points = operation.points || [];
+            if (points.length) {
+              ctx.strokeStyle = operation.color;
+              ctx.lineWidth = operation.tool === 'highlighter' ? operation.size * 3.2 : operation.size;
+              ctx.globalAlpha = operation.tool === 'highlighter' ? 0.34 : 1;
+              ctx.lineCap = 'round';
+              ctx.lineJoin = 'round';
+              ctx.beginPath();
+              ctx.moveTo(points[0].x, points[0].y);
+              for (let index = 1; index < points.length; index += 1) {
+                ctx.lineTo(points[index].x, points[index].y);
+              }
+              ctx.stroke();
+            }
+          } else if (operation.tool === 'rect') {
+            const { start, end } = operation;
+            if (start && end) {
+              ctx.strokeStyle = operation.color;
+              ctx.lineWidth = operation.size;
+              ctx.strokeRect(
+                Math.min(start.x, end.x),
+                Math.min(start.y, end.y),
+                Math.abs(end.x - start.x),
+                Math.abs(end.y - start.y)
+              );
+            }
+          } else if (operation.tool === 'arrow') {
+            const { start, end } = operation;
+            if (start && end) drawArrow(ctx, start.x, start.y, end.x, end.y, operation.color, operation.size);
+          }
+          ctx.restore();
+        }
+
+        function redrawAnnotations() {
+          annotationCtx.clearRect(0, 0, annotation.width, annotation.height);
+          for (const operation of operations) drawOperation(operation);
+          if (currentOperation) drawOperation(currentOperation);
+        }
+
+        function setTool(tool) {
+          activeTool = tool;
+          toolButtons.forEach((button) => button.classList.toggle('active', button.dataset.tool === tool));
+        }
+
+        function setColor(color) {
+          activeColor = color;
+          swatches.forEach((button) => button.classList.toggle('active', button.dataset.color === color));
+        }
+
+        function annotationPoint(event) {
+          return {
+            x: Math.max(0, Math.min(rect.width, event.clientX - rect.x)),
+            y: Math.max(0, Math.min(rect.height, event.clientY - rect.y))
+          };
         }
 
         function confirm() {
           if (!rect || rect.width < 3 || rect.height < 3) return;
+          let dataUrl = '';
+          if (screenImage) {
+            const scaleX = screenImage.naturalWidth / Math.max(1, window.innerWidth);
+            const scaleY = screenImage.naturalHeight / Math.max(1, window.innerHeight);
+            const output = document.createElement('canvas');
+            output.width = Math.max(1, Math.round(rect.width * scaleX));
+            output.height = Math.max(1, Math.round(rect.height * scaleY));
+            const context = output.getContext('2d');
+            if (context) {
+              context.drawImage(
+                screenImage,
+                rect.x * scaleX,
+                rect.y * scaleY,
+                rect.width * scaleX,
+                rect.height * scaleY,
+                0,
+                0,
+                output.width,
+                output.height
+              );
+              if (annotation.width > 0 && annotation.height > 0) {
+                context.drawImage(annotation, 0, 0, output.width, output.height);
+              }
+              dataUrl = output.toDataURL('image/png');
+            }
+          }
           window.selector.confirm({
             x: Math.round(rect.x),
             y: Math.round(rect.y),
             width: Math.round(rect.width),
             height: Math.round(rect.height),
             viewportWidth: window.innerWidth,
-            viewportHeight: window.innerHeight
+            viewportHeight: window.innerHeight,
+            dataUrl
           });
         }
+
+        toolButtons.forEach((button) => {
+          button.addEventListener('click', () => setTool(button.dataset.tool));
+        });
+        swatches.forEach((button) => {
+          button.addEventListener('click', () => setColor(button.dataset.color));
+        });
+        brushSize.addEventListener('input', () => {
+          brushWidth = Math.max(1, Math.min(18, Number(brushSize.value) || 4));
+        });
+        undoButton.addEventListener('click', () => {
+          operations.pop();
+          currentOperation = null;
+          redrawAnnotations();
+        });
+        clearButton.addEventListener('click', () => {
+          clearAnnotations();
+        });
+        confirmButton.addEventListener('click', confirm);
+        cancelButton.addEventListener('click', () => window.selector.cancel());
+        toolbar.addEventListener('pointerdown', (event) => event.stopPropagation());
 
         document.addEventListener('pointerdown', (event) => {
           if (event.target instanceof Element && event.target.closest('#toolbar')) return;
@@ -197,11 +487,15 @@
             window.selector.cancel();
             return;
           }
+          if (event.target === annotation && rect) return;
           if (event.button !== 0) return;
-          dragging = true;
           startX = event.clientX;
           startY = event.clientY;
+          annotation.style.display = 'none';
+          toolbar.style.display = 'none';
           resetSelection();
+          dragging = true;
+          drawing = false;
         });
 
         document.addEventListener('pointermove', (event) => {
@@ -216,11 +510,52 @@
         document.addEventListener('pointerup', () => {
           if (!dragging) return;
           dragging = false;
-          if (!rect || rect.width < 3 || rect.height < 3) resetSelection();
+          finalizeSelection();
         });
 
+        annotation.addEventListener('pointerdown', (event) => {
+          if (!rect || event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          drawing = true;
+          drawPointerId = event.pointerId;
+          try { annotation.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
+          const point = annotationPoint(event);
+          if (activeTool === 'pen' || activeTool === 'highlighter') {
+            currentOperation = { tool: activeTool, color: activeColor, size: brushWidth, points: [point] };
+          } else {
+            currentOperation = { tool: activeTool, color: activeColor, size: Math.max(2, brushWidth), start: point, end: point };
+          }
+          redrawAnnotations();
+        });
+
+        annotation.addEventListener('pointermove', (event) => {
+          if (!drawing || !currentOperation || event.pointerId !== drawPointerId) return;
+          const point = annotationPoint(event);
+          if (currentOperation.points) currentOperation.points.push(point);
+          else currentOperation.end = point;
+          redrawAnnotations();
+        });
+
+        function finishDrawing(event) {
+          if (!drawing) return;
+          if (event && event.pointerId !== drawPointerId) return;
+          drawing = false;
+          if (currentOperation) {
+            operations.push(currentOperation);
+            currentOperation = null;
+          }
+          redrawAnnotations();
+          drawPointerId = null;
+        }
+
+        annotation.addEventListener('pointerup', finishDrawing);
+        annotation.addEventListener('pointercancel', finishDrawing);
+
         document.addEventListener('dblclick', (event) => {
-          if (contains(event.clientX, event.clientY)) confirm();
+          if (rect && event.clientX >= rect.x && event.clientX <= rect.x + rect.width && event.clientY >= rect.y && event.clientY <= rect.y + rect.height) {
+            confirm();
+          }
         });
 
         document.addEventListener('keydown', (event) => {
@@ -230,14 +565,22 @@
           } else if (event.key === 'Enter') {
             event.preventDefault();
             confirm();
+          } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+            if (rect) {
+              event.preventDefault();
+              operations.pop();
+              currentOperation = null;
+              redrawAnnotations();
+            }
           }
         });
 
         document.addEventListener('contextmenu', (event) => event.preventDefault());
-        saveButton.addEventListener('click', confirm);
-        cancelButton.addEventListener('click', () => window.selector.cancel());
         window.addEventListener('resize', () => {
-          if (rect) updateSelection(rect.x, rect.y, rect.width, rect.height);
+          if (rect) {
+            updateSelection(rect.x, rect.y, rect.width, rect.height);
+            if (!dragging) positionToolbar();
+          }
         });
       })();
     </script>
