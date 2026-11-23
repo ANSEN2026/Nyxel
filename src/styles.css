@@ -1886,6 +1886,174 @@ label {
   grid-column: 2 / 4;
 }
 
+.edge-aux-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0 9px;
+}
+
+.edge-aux-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  max-width: 58px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.25;
+  cursor: pointer;
+  user-select: none;
+}
+
+.edge-aux-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.edge-aux-check {
+  position: relative;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 1px solid #4f8fe8;
+  border-radius: 2px;
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.edge-aux-toggle input:checked + .edge-aux-check {
+  border-color: #5aa9ff;
+  background: #2f7fe0;
+}
+
+.edge-aux-toggle input:checked + .edge-aux-check::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  width: 4px;
+  height: 7px;
+  border: solid #fff;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+.edge-aux-thumb {
+  position: relative;
+  flex: none;
+  width: 62px;
+  height: 62px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background-color: #1a1d21;
+  background-image:
+    linear-gradient(45deg, #24282e 25%, transparent 25%),
+    linear-gradient(-45deg, #24282e 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #24282e 75%),
+    linear-gradient(-45deg, transparent 75%, #24282e 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+  cursor: pointer;
+}
+
+.edge-aux-thumb.drag-over {
+  border-color: #5aa9ff;
+  box-shadow: inset 0 0 0 1px rgba(90, 169, 255, 0.5);
+}
+
+.edge-aux-thumb img {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.edge-aux-thumb.has-image img {
+  display: block;
+}
+
+.edge-aux-thumb.has-image::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: #4ade80;
+}
+
+.edge-aux-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.edge-aux-thumb.has-image .edge-aux-empty {
+  display: none;
+}
+
+.edge-aux-controls {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.edge-aux-controls select {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.edge-aux-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.edge-aux-actions button,
+.edge-aux-undo {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.edge-aux-actions button:hover,
+.edge-aux-undo:hover {
+  color: #dce8f5;
+  background: var(--panel-3);
+}
+
+.edge-aux-actions svg,
+.edge-aux-undo svg {
+  width: 16px;
+  height: 16px;
+}
+
+.edge-aux-undo {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
 .ai-grid-inputs {
   display: flex;
   gap: 10px;

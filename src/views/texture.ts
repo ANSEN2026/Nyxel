@@ -360,6 +360,20 @@ export class TextureView {
   private edgeDistanceValue: HTMLInputElement;
   private edgeSoftness: HTMLInputElement;
   private edgeSoftnessValue: HTMLInputElement;
+  private edgeAuxShow: HTMLInputElement;
+  private edgeAuxThumb: HTMLButtonElement;
+  private edgeAuxThumbImg: HTMLImageElement;
+  private edgeAuxSelect: HTMLSelectElement;
+  private edgeAuxFile: HTMLInputElement;
+  private edgeAuxBlend: HTMLSelectElement;
+  private edgeAuxBrightness: HTMLInputElement;
+  private edgeAuxBrightnessValue: HTMLInputElement;
+  private edgeAuxContrast: HTMLInputElement;
+  private edgeAuxContrastValue: HTMLInputElement;
+  private edgeAuxCanvas: HTMLCanvasElement | null = null;
+  private edgeAuxName = '';
+  private edgeAuxOptions: Array<{ name: string; path: string }> = [];
+  private edgeAuxLoadToken = 0;
   private edgePreviewTimer = 0;
 
   private dispersionPreview: HTMLCanvasElement;
@@ -856,7 +870,54 @@ export class TextureView {
             </div>
             <section class="ai-section" data-ai-section="edge">
               <div class="ai-section-head"><span>压黑边</span><span class="ai-pill">向内渐变</span></div>
-              <p class="ai-copy">从四周向内生成黑到白的渐变压边，中间保持原图。透明图片会把压边区域变为透明，而不是涂上黑色。</p>
+              <p class="ai-copy">从四周向内生成黑到白的渐变压边，中间保持原图。透明图片会把压边区域变为透明，而不是涂上黑色。辅助图会以亮度参与压边，让边缘更柔和。</p>
+              <div class="edge-aux-row">
+                <label class="edge-aux-toggle" title="在主预览中显示辅助图">
+                  <input type="checkbox" id="edge-aux-show">
+                  <span class="edge-aux-check" aria-hidden="true"></span>
+                  <span>显示辅助</span>
+                </label>
+                <button type="button" class="edge-aux-thumb" id="edge-aux-thumb" title="拖入图片或点击选择">
+                  <img id="edge-aux-thumb-img" alt="">
+                  <span class="edge-aux-empty">拖入</span>
+                </button>
+                <div class="edge-aux-controls">
+                  <select id="edge-aux-select" title="选择辅助图">
+                    <option value="">载入中…</option>
+                  </select>
+                  <div class="edge-aux-actions">
+                    <button type="button" data-edge-aux-default title="恢复默认 GL_06">
+                      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10a6 6 0 1 1 1.8 4.3"/><path d="M4 5v5h5"/></svg>
+                    </button>
+                    <button type="button" data-edge-aux-pick title="选择图片">
+                      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5h5l1.6 2H17v7.5H3z"/><path d="M12.5 13a2.2 2.2 0 1 0 2.2-2.2"/><path d="M14.7 9.3v1.5h-1.5"/></svg>
+                    </button>
+                  </div>
+                </div>
+                <button type="button" class="edge-aux-undo" data-edge-aux-reset title="重置辅助图亮度/对比度">
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6 4 10l4 4"/><path d="M4 10h8a4 4 0 0 1 0 8h-1"/></svg>
+                </button>
+              </div>
+              <input id="edge-aux-file" type="file" accept="image/*" hidden>
+              <div class="ai-row">
+                <span>混合</span>
+                <select id="edge-aux-blend">
+                  <option value="multiply" selected>正片叠底</option>
+                  <option value="screen">滤色</option>
+                  <option value="overlay">叠加</option>
+                  <option value="normal">正常</option>
+                </select>
+              </div>
+              <div class="tile-slider-row">
+                <span>亮度</span>
+                <input id="edge-aux-brightness" type="range" min="-100" max="100" step="1" value="0">
+                <input id="edge-aux-brightness-value" class="tile-number" type="number" min="-100" max="100" step="1" value="0">
+              </div>
+              <div class="tile-slider-row">
+                <span>对比度</span>
+                <input id="edge-aux-contrast" type="range" min="-100" max="100" step="1" value="0">
+                <input id="edge-aux-contrast-value" class="tile-number" type="number" min="-100" max="100" step="1" value="0">
+              </div>
               <div class="ai-row">
                 <span>模式</span>
                 <select id="edge-mode">
@@ -1305,6 +1366,16 @@ export class TextureView {
     this.edgeDistanceValue = this.element.querySelector('#edge-distance-value') as HTMLInputElement;
     this.edgeSoftness = this.element.querySelector('#edge-softness') as HTMLInputElement;
     this.edgeSoftnessValue = this.element.querySelector('#edge-softness-value') as HTMLInputElement;
+    this.edgeAuxShow = this.element.querySelector('#edge-aux-show') as HTMLInputElement;
+    this.edgeAuxThumb = this.element.querySelector('#edge-aux-thumb') as HTMLButtonElement;
+    this.edgeAuxThumbImg = this.element.querySelector('#edge-aux-thumb-img') as HTMLImageElement;
+    this.edgeAuxSelect = this.element.querySelector('#edge-aux-select') as HTMLSelectElement;
+    this.edgeAuxFile = this.element.querySelector('#edge-aux-file') as HTMLInputElement;
+    this.edgeAuxBlend = this.element.querySelector('#edge-aux-blend') as HTMLSelectElement;
+    this.edgeAuxBrightness = this.element.querySelector('#edge-aux-brightness') as HTMLInputElement;
+    this.edgeAuxBrightnessValue = this.element.querySelector('#edge-aux-brightness-value') as HTMLInputElement;
+    this.edgeAuxContrast = this.element.querySelector('#edge-aux-contrast') as HTMLInputElement;
+    this.edgeAuxContrastValue = this.element.querySelector('#edge-aux-contrast-value') as HTMLInputElement;
     this.tilePreview = this.element.querySelector('#tile-preview') as HTMLCanvasElement;
     this.tilePreviewCtx = this.tilePreview.getContext('2d') as CanvasRenderingContext2D;
     this.tileRepeatX = this.element.querySelector('#tile-repeat-x') as HTMLInputElement;
@@ -1480,6 +1551,7 @@ export class TextureView {
     this.setupAiSections(this.toolsPanelBody);
     this.bindEvents();
     this.bindLivePreviewSections();
+    void this.loadDefaultEdgeAux(false);
     this.bindUndoHistory();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.body);
@@ -1634,6 +1706,55 @@ export class TextureView {
       const value = Math.max(0, Math.min(100, Math.round(Number(this.edgeSoftnessValue.value) || 50)));
       this.edgeSoftness.value = String(value);
       this.edgeSoftnessValue.value = String(value);
+      scheduleEdgePreview();
+    });
+    this.edgeAuxShow.addEventListener('change', scheduleEdgePreview);
+    this.edgeAuxSelect.addEventListener('change', () => {
+      const option = this.edgeAuxOptions.find((entry) => entry.path === this.edgeAuxSelect.value);
+      if (option) void this.loadEdgeAuxFromPath(option.path, option.name);
+    });
+    this.element.querySelector('[data-edge-aux-default]')?.addEventListener('click', () => void this.loadDefaultEdgeAux(true));
+    const pickAux = (): void => this.edgeAuxFile.click();
+    this.element.querySelector('[data-edge-aux-pick]')?.addEventListener('click', pickAux);
+    this.edgeAuxThumb.addEventListener('click', pickAux);
+    this.edgeAuxFile.addEventListener('change', () => {
+      const file = this.edgeAuxFile.files?.[0];
+      this.edgeAuxFile.value = '';
+      if (file) void this.loadEdgeAuxFile(file);
+    });
+    this.edgeAuxThumb.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      this.edgeAuxThumb.classList.add('drag-over');
+    });
+    this.edgeAuxThumb.addEventListener('dragleave', () => this.edgeAuxThumb.classList.remove('drag-over'));
+    this.edgeAuxThumb.addEventListener('drop', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.edgeAuxThumb.classList.remove('drag-over');
+      const file = Array.from(event.dataTransfer?.files ?? []).find((entry) => entry.type.startsWith('image/'));
+      if (file) void this.loadEdgeAuxFile(file);
+    });
+    this.edgeAuxBlend.addEventListener('change', scheduleEdgePreview);
+    const syncEdgeAuxNumber = (range: HTMLInputElement, number: HTMLInputElement): void => {
+      range.addEventListener('input', () => {
+        number.value = range.value;
+        scheduleEdgePreview();
+      });
+      number.addEventListener('change', () => {
+        const value = Math.max(-100, Math.min(100, Math.round(Number(number.value) || 0)));
+        range.value = String(value);
+        number.value = String(value);
+        scheduleEdgePreview();
+      });
+    };
+    syncEdgeAuxNumber(this.edgeAuxBrightness, this.edgeAuxBrightnessValue);
+    syncEdgeAuxNumber(this.edgeAuxContrast, this.edgeAuxContrastValue);
+    this.element.querySelector('[data-edge-aux-reset]')?.addEventListener('click', () => {
+      this.edgeAuxBlend.value = 'multiply';
+      this.edgeAuxBrightness.value = '0';
+      this.edgeAuxBrightnessValue.value = '0';
+      this.edgeAuxContrast.value = '0';
+      this.edgeAuxContrastValue.value = '0';
       scheduleEdgePreview();
     });
     this.element.querySelector('[data-edge-apply]')?.addEventListener('click', () => this.applyEdgeOutput());
@@ -4052,6 +4173,154 @@ export class TextureView {
     this.renderTilePreview();
   }
 
+  private edgeAuxImageType(name: string): string {
+    const lower = name.toLowerCase();
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.bmp')) return 'image/bmp';
+    return 'image/png';
+  }
+
+  private populateEdgeAuxSelect(selectedPath?: string): void {
+    this.edgeAuxSelect.innerHTML = '';
+    if (!this.edgeAuxOptions.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = '未找到官方辅助图';
+      this.edgeAuxSelect.append(option);
+      return;
+    }
+    for (const entry of this.edgeAuxOptions) {
+      const option = document.createElement('option');
+      option.value = entry.path;
+      option.textContent = entry.name;
+      this.edgeAuxSelect.append(option);
+    }
+    if (selectedPath) this.edgeAuxSelect.value = selectedPath;
+  }
+
+  private async loadDefaultEdgeAux(notify: boolean): Promise<void> {
+    const token = ++this.edgeAuxLoadToken;
+    try {
+      const info = await window.nyxel.library.info();
+      const folder = `${info.texturesDir}\\官方贴图\\遮罩`;
+      let files: Array<{ name: string; path: string }> = [];
+      try {
+        const listing = await window.nyxel.library.textures(folder);
+        files = listing.files
+          .filter((file) => /\.(png|jpe?g|webp|bmp)$/i.test(file.name))
+          .map((file) => ({ name: file.name, path: file.path }));
+      } catch {
+        // Fall back to the known official file below.
+      }
+      if (!files.length) {
+        files = [{ name: 'GL_06.png', path: `${folder}\\GL_06.png` }];
+      }
+      if (token !== this.edgeAuxLoadToken) return;
+      this.edgeAuxOptions = files;
+      const preferred = files.find((file) => file.name.toLowerCase() === 'gl_06.png') ?? files[0];
+      this.populateEdgeAuxSelect(preferred?.path);
+      if (!preferred) return;
+      await this.loadEdgeAuxFromPath(preferred.path, preferred.name, false);
+    } catch (error) {
+      if (notify) this.callbacks.toast(`载入官方辅助图失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private async loadEdgeAuxFromPath(path: string, name: string, notify = true): Promise<void> {
+    const token = ++this.edgeAuxLoadToken;
+    try {
+      const bytes = await window.nyxel.file.read(path);
+      const blob = new Blob([new Uint8Array(bytes)], { type: this.edgeAuxImageType(name) });
+      const bitmap = await createImageBitmap(blob);
+      if (token !== this.edgeAuxLoadToken) {
+        bitmap.close();
+        return;
+      }
+      this.setEdgeAuxBitmap(bitmap, name);
+      this.edgeAuxSelect.value = path;
+    } catch (error) {
+      if (notify) this.callbacks.toast(`载入辅助图失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private async loadEdgeAuxFile(file: File): Promise<void> {
+    const token = ++this.edgeAuxLoadToken;
+    try {
+      const bitmap = await createImageBitmap(file);
+      if (token !== this.edgeAuxLoadToken) {
+        bitmap.close();
+        return;
+      }
+      this.setEdgeAuxBitmap(bitmap, file.name);
+      this.edgeAuxOptions = [{ name: file.name, path: 'custom' }, ...this.edgeAuxOptions.filter((entry) => entry.path !== 'custom')];
+      this.populateEdgeAuxSelect('custom');
+    } catch (error) {
+      this.callbacks.toast(`载入辅助图失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  private setEdgeAuxBitmap(bitmap: ImageBitmap, name: string): void {
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      bitmap.close();
+      return;
+    }
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    this.edgeAuxCanvas = canvas;
+    this.edgeAuxName = name;
+    this.edgeAuxThumb.classList.add('has-image');
+    const thumb = document.createElement('canvas');
+    thumb.width = 64;
+    thumb.height = 64;
+    const thumbContext = thumb.getContext('2d');
+    if (thumbContext) {
+      const scale = Math.max(64 / canvas.width, 64 / canvas.height);
+      const drawWidth = canvas.width * scale;
+      const drawHeight = canvas.height * scale;
+      thumbContext.drawImage(canvas, (64 - drawWidth) / 2, (64 - drawHeight) / 2, drawWidth, drawHeight);
+      this.edgeAuxThumbImg.src = thumb.toDataURL('image/png');
+    }
+    window.clearTimeout(this.edgePreviewTimer);
+    this.edgePreviewTimer = window.setTimeout(() => this.renderEdgePreview(), 0);
+  }
+
+  private edgeAuxAdjustment(): { brightness: number; contrast: number } {
+    return {
+      brightness: Math.max(-100, Math.min(100, Number(this.edgeAuxBrightness.value) || 0)) / 100 * 0.5,
+      contrast: 1 + Math.max(-100, Math.min(100, Number(this.edgeAuxContrast.value) || 0)) / 100
+    };
+  }
+
+  private buildEdgeAuxDisplay(maxSize: number): HTMLCanvasElement | null {
+    const source = this.edgeAuxCanvas;
+    if (!source) return null;
+    const scale = Math.min(1, maxSize / Math.max(source.width, source.height));
+    const width = Math.max(1, Math.round(source.width * scale));
+    const height = Math.max(1, Math.round(source.height * scale));
+    const output = document.createElement('canvas');
+    output.width = width;
+    output.height = height;
+    const context = output.getContext('2d', { willReadFrequently: true });
+    if (!context) return null;
+    context.drawImage(source, 0, 0, width, height);
+    const image = context.getImageData(0, 0, width, height);
+    const data = image.data;
+    const { brightness, contrast } = this.edgeAuxAdjustment();
+    for (let offset = 0; offset < data.length; offset += 4) {
+      for (let channel = 0; channel < 3; channel += 1) {
+        const value = data[offset + channel] / 255;
+        data[offset + channel] = Math.round(Math.max(0, Math.min(1, (value - 0.5) * contrast + 0.5 + brightness)) * 255);
+      }
+    }
+    context.putImageData(image, 0, 0);
+    return output;
+  }
+
   private edgeSettings(): { mode: 'auto' | 'darken' | 'alpha'; distance: number; softness: number } {
     const raw = this.edgeMode.value;
     const mode = raw === 'darken' || raw === 'alpha' ? raw : 'auto';
@@ -4084,24 +4353,68 @@ export class TextureView {
       }
     }
     const resolved = mode === 'auto' ? (hasAlpha ? 'alpha' : 'darken') : mode;
-    const reach = Math.max(1, Math.min(Math.round(distance), Math.min(width, height) / 2));
+    const minDimension = Math.max(1, Math.min(width, height));
+    const reach = Math.max(1, Math.min(Math.round(distance), minDimension / 2));
     // 0 keeps the soft smoothstep falloff, 100 becomes a hard black band with a 2 px transition.
     const hardness = Math.max(0, Math.min(1, softness / 100));
     const antialias = Math.min(0.5, 2 / reach);
+    // With an auxiliary mask, distance strengthens its contrast so the black area reaches inward.
+    const auxPull = 1 + (Math.min(distance, minDimension / 2) / (minDimension / 2)) * 2;
+    const auxAntialias = Math.min(0.5, 2 / (minDimension / 2));
+    const auxSource = this.edgeAuxCanvas;
+    let auxData: Uint8ClampedArray | null = null;
+    let auxBrightness = 0;
+    let auxContrast = 1;
+    const auxBlend = this.edgeAuxBlend.value;
+    if (auxSource) {
+      const auxCanvas = document.createElement('canvas');
+      auxCanvas.width = width;
+      auxCanvas.height = height;
+      const auxContext = auxCanvas.getContext('2d', { willReadFrequently: true });
+      if (auxContext) {
+        auxContext.drawImage(auxSource, 0, 0, width, height);
+        auxData = auxContext.getImageData(0, 0, width, height).data;
+        const adjustment = this.edgeAuxAdjustment();
+        auxBrightness = adjustment.brightness;
+        auxContrast = adjustment.contrast;
+      }
+    }
     for (let y = 0; y < height; y += 1) {
       const edgeY = Math.min(y, height - 1 - y);
       for (let x = 0; x < width; x += 1) {
-        const edgeX = Math.min(x, width - 1 - x);
-        const t = Math.min(1, Math.min(edgeX, edgeY) / reach);
-        // Smooth black-to-white falloff: 0 at the border, 1 at the center.
-        const soft = t * t * (3 - 2 * t);
-        const hardT = Math.min(1, Math.max(0, (t - (1 - antialias)) / antialias));
-        const hard = hardT * hardT * (3 - 2 * hardT);
-        const factor = soft * (1 - hardness) + hard * hardness;
+        let factor: number;
+        if (auxData) {
+          const auxOffset = (y * width + x) * 4;
+          const alpha = auxData[auxOffset + 3] / 255;
+          let auxLum = (auxData[auxOffset] * 0.2126 + auxData[auxOffset + 1] * 0.7152 + auxData[auxOffset + 2] * 0.0722) / 255 * alpha;
+          auxLum = Math.max(0, Math.min(1, (auxLum - 0.5) * auxContrast + 0.5 + auxBrightness));
+          const shaped = Math.max(0, Math.min(1, (auxLum - 0.5) * auxPull + 0.5));
+          const soft = shaped * shaped * (3 - 2 * shaped);
+          const hardT = Math.min(1, Math.max(0, (shaped - (1 - auxAntialias)) / auxAntialias));
+          const hard = hardT * hardT * (3 - 2 * hardT);
+          factor = soft * (1 - hardness) + hard * hardness;
+        } else {
+          const edgeX = Math.min(x, width - 1 - x);
+          const t = Math.min(1, Math.min(edgeX, edgeY) / reach);
+          // Smooth black-to-white falloff: 0 at the border, 1 at the center.
+          const soft = t * t * (3 - 2 * t);
+          const hardT = Math.min(1, Math.max(0, (t - (1 - antialias)) / antialias));
+          const hard = hardT * hardT * (3 - 2 * hardT);
+          factor = soft * (1 - hardness) + hard * hardness;
+        }
         if (factor >= 1) continue;
         const offset = (y * width + x) * 4;
         if (resolved === 'alpha') {
           data[offset + 3] = Math.round(data[offset + 3] * factor);
+        } else if (auxData && auxBlend !== 'multiply') {
+          for (let channel = 0; channel < 3; channel += 1) {
+            const base = data[offset + channel] / 255;
+            let blended: number;
+            if (auxBlend === 'screen') blended = 1 - (1 - base) * (1 - factor);
+            else if (auxBlend === 'overlay') blended = base < 0.5 ? 2 * base * factor : 1 - 2 * (1 - base) * (1 - factor);
+            else blended = factor;
+            data[offset + channel] = Math.round(Math.max(0, Math.min(1, blended)) * 255);
+          }
         } else {
           data[offset] = Math.round(data[offset] * factor);
           data[offset + 1] = Math.round(data[offset + 1] * factor);
@@ -4118,6 +4431,13 @@ export class TextureView {
     if (!this.bitmap || this.panelMode !== 'tools' || !section || section.classList.contains('collapsed')) {
       this.clearLivePreview('edge');
       return;
+    }
+    if (this.edgeAuxShow.checked) {
+      const auxView = this.buildEdgeAuxDisplay(512);
+      if (auxView) {
+        this.showLivePreview('edge', auxView);
+        return;
+      }
     }
     const { mode, distance, softness } = this.edgeSettings();
     const maxSize = 512;
