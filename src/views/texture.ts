@@ -358,6 +358,8 @@ export class TextureView {
   private edgeMode: HTMLSelectElement;
   private edgeDistance: HTMLInputElement;
   private edgeDistanceValue: HTMLInputElement;
+  private edgeSoftness: HTMLInputElement;
+  private edgeSoftnessValue: HTMLInputElement;
   private edgePreviewTimer = 0;
 
   private dispersionPreview: HTMLCanvasElement;
@@ -868,6 +870,11 @@ export class TextureView {
                 <input id="edge-distance" type="range" min="1" max="1024" step="1" value="128">
                 <input id="edge-distance-value" class="tile-number" type="number" min="1" max="1024" step="1" value="128">
               </div>
+              <div class="tile-slider-row">
+                <span title="0 = 柔边，100 = 硬边">柔硬边强度</span>
+                <input id="edge-softness" type="range" min="0" max="100" step="1" value="50">
+                <input id="edge-softness-value" class="tile-number" type="number" min="0" max="100" step="1" value="50">
+              </div>
               <div class="ai-button-row">
                 <button type="button" class="primary" data-edge-apply>一键压黑边</button>
               </div>
@@ -1296,6 +1303,8 @@ export class TextureView {
     this.edgeMode = this.element.querySelector('#edge-mode') as HTMLSelectElement;
     this.edgeDistance = this.element.querySelector('#edge-distance') as HTMLInputElement;
     this.edgeDistanceValue = this.element.querySelector('#edge-distance-value') as HTMLInputElement;
+    this.edgeSoftness = this.element.querySelector('#edge-softness') as HTMLInputElement;
+    this.edgeSoftnessValue = this.element.querySelector('#edge-softness-value') as HTMLInputElement;
     this.tilePreview = this.element.querySelector('#tile-preview') as HTMLCanvasElement;
     this.tilePreviewCtx = this.tilePreview.getContext('2d') as CanvasRenderingContext2D;
     this.tileRepeatX = this.element.querySelector('#tile-repeat-x') as HTMLInputElement;
@@ -1615,6 +1624,16 @@ export class TextureView {
       const value = Math.max(1, Math.min(1024, Math.round(Number(this.edgeDistanceValue.value) || 128)));
       this.edgeDistance.value = String(value);
       this.edgeDistanceValue.value = String(value);
+      scheduleEdgePreview();
+    });
+    this.edgeSoftness.addEventListener('input', () => {
+      this.edgeSoftnessValue.value = this.edgeSoftness.value;
+      scheduleEdgePreview();
+    });
+    this.edgeSoftnessValue.addEventListener('change', () => {
+      const value = Math.max(0, Math.min(100, Math.round(Number(this.edgeSoftnessValue.value) || 50)));
+      this.edgeSoftness.value = String(value);
+      this.edgeSoftnessValue.value = String(value);
       scheduleEdgePreview();
     });
     this.element.querySelector('[data-edge-apply]')?.addEventListener('click', () => this.applyEdgeOutput());
@@ -4033,18 +4052,20 @@ export class TextureView {
     this.renderTilePreview();
   }
 
-  private edgeSettings(): { mode: 'auto' | 'darken' | 'alpha'; distance: number } {
+  private edgeSettings(): { mode: 'auto' | 'darken' | 'alpha'; distance: number; softness: number } {
     const raw = this.edgeMode.value;
     const mode = raw === 'darken' || raw === 'alpha' ? raw : 'auto';
     const distance = Math.max(1, Math.min(1024, Math.round(Number(this.edgeDistance.value) || 128)));
-    return { mode, distance };
+    const softness = Math.max(0, Math.min(100, Math.round(Number(this.edgeSoftness.value) || 50)));
+    return { mode, distance, softness };
   }
 
   private buildEdgeOutput(
     width: number,
     height: number,
     mode: 'auto' | 'darken' | 'alpha',
-    distance: number
+    distance: number,
+    softness: number
   ): HTMLCanvasElement | null {
     if (!this.bitmap || width < 1 || height < 1) return null;
     const source = document.createElement('canvas');
@@ -4064,13 +4085,19 @@ export class TextureView {
     }
     const resolved = mode === 'auto' ? (hasAlpha ? 'alpha' : 'darken') : mode;
     const reach = Math.max(1, Math.min(Math.round(distance), Math.min(width, height) / 2));
+    // 0 keeps the soft smoothstep falloff, 100 becomes a hard black band with a 2 px transition.
+    const hardness = Math.max(0, Math.min(1, softness / 100));
+    const antialias = Math.min(0.5, 2 / reach);
     for (let y = 0; y < height; y += 1) {
       const edgeY = Math.min(y, height - 1 - y);
       for (let x = 0; x < width; x += 1) {
         const edgeX = Math.min(x, width - 1 - x);
         const t = Math.min(1, Math.min(edgeX, edgeY) / reach);
         // Smooth black-to-white falloff: 0 at the border, 1 at the center.
-        const factor = t * t * (3 - 2 * t);
+        const soft = t * t * (3 - 2 * t);
+        const hardT = Math.min(1, Math.max(0, (t - (1 - antialias)) / antialias));
+        const hard = hardT * hardT * (3 - 2 * hardT);
+        const factor = soft * (1 - hardness) + hard * hardness;
         if (factor >= 1) continue;
         const offset = (y * width + x) * 4;
         if (resolved === 'alpha') {
@@ -4092,12 +4119,12 @@ export class TextureView {
       this.clearLivePreview('edge');
       return;
     }
-    const { mode, distance } = this.edgeSettings();
+    const { mode, distance, softness } = this.edgeSettings();
     const maxSize = 512;
     const scale = Math.min(1, maxSize / Math.max(this.imageWidth, this.imageHeight, 1));
     const width = Math.max(1, Math.round(this.imageWidth * scale));
     const height = Math.max(1, Math.round(this.imageHeight * scale));
-    const output = this.buildEdgeOutput(width, height, mode, Math.max(1, Math.round(distance * scale)));
+    const output = this.buildEdgeOutput(width, height, mode, Math.max(1, Math.round(distance * scale)), softness);
     if (output) this.showLivePreview('edge', output);
     else this.clearLivePreview('edge');
   }
@@ -4107,8 +4134,8 @@ export class TextureView {
       this.callbacks.toast('请先打开一张贴图', 'info');
       return;
     }
-    const { mode, distance } = this.edgeSettings();
-    const output = this.buildEdgeOutput(this.imageWidth, this.imageHeight, mode, distance);
+    const { mode, distance, softness } = this.edgeSettings();
+    const output = this.buildEdgeOutput(this.imageWidth, this.imageHeight, mode, distance, softness);
     if (!output) return;
     this.clearLivePreview('edge');
     this.applyAiGeneratedImage(
@@ -4119,7 +4146,7 @@ export class TextureView {
       output.width * output.height * 4
     );
     this.setPanelMode('tools');
-    this.callbacks.toast(`已压黑边：${mode === 'auto' ? '自动判断' : mode === 'darken' ? '压暗边缘' : '透明边缘'} · ${distance}px`, 'success');
+    this.callbacks.toast(`已压黑边：${mode === 'auto' ? '自动判断' : mode === 'darken' ? '压暗边缘' : '透明边缘'} · ${distance}px · 柔硬 ${softness}`, 'success');
   }
 
   private buildDispersionOutput(): HTMLCanvasElement | null {
